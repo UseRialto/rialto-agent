@@ -1,0 +1,53 @@
+Rialto Agent grill-with-docs session state
+Date: 2026-05-09
+
+Context:
+- We are stress-testing Rialto Agent v1 product/domain behavior and updating CONTEXT.md inline.
+- The current thread was using the grill-with-docs skill.
+- Latest resolved topic was around vendor partial quote responses and comparison totals.
+
+Important v1 boundary:
+- Rialto v1 sends quote requests, captures vendor responses, extracts response data, and automates the Excel-like quote comparison workflow.
+- Rialto v1 stops at comparison.
+- No awards, selected-vendor notifications, decline emails, purchase orders, or purchasing handoff workflows in v1.
+- Vendor Selection can exist as comparison sheet state only.
+
+Recent resolved decisions:
+- Vendor means supplier company.
+- Vendor Contact means person, role inbox, or email at a vendor.
+- Vendor Directory is a shared contractor-organization-level reusable list.
+- Vendor Invitation is a vendor company's invitation to respond to a specific Quote Request, delivered to one or more contacts.
+- Magic Link is scoped to the Vendor Invitation, is no-login, hard-to-guess, revocable, and usable by anyone who has it in v1.
+- Quote Request includes project information and a request expiration date.
+- Magic Link expires on the Quote Request expiration date unless the estimator extends/regenerates access.
+- Vendor Quote Form is editable until expiration and supports structured line items, alternates, substitutions, exclusions, notes, uploads, and ordinary email replies.
+- Vendor Quote Responses include form submissions and email replies/attachments.
+- Quote Response Extraction means Rialto reads response sources and extracts quote details into structured procurement data.
+- Vendor Response Source is preserved as the audit trail.
+- Comparison Sheet has history, workbook versions, provenance, review highlights, and clean exports.
+- Normal Comparison Export never includes Rialto UI flags/highlights. Rialto warns but does not block export when unresolved review highlights remain.
+- Review highlights:
+  - Orange = user-guided material agent edit.
+  - Blue = newer vendor response updated the comparison.
+  - Red = extracted value needs estimator review before trust.
+  - Highlights are layered; latest unacknowledged layer controls visible color.
+  - Layers can be acknowledged independently, including hidden layers.
+  - Acknowledgments are recorded in the Comparison Timeline.
+- Incoming vendor response extraction and merge can happen automatically once a Quote Request is configured.
+- Initial Comparison Sheet is created from the Bill of Materials before vendor responses arrive.
+- Red-highlighted shared BOM scope issues block sending quote request emails until reviewed; vendor-specific unresolved fields block only that vendor draft.
+- Vendor Alternates remain linked to a requested line item but separate until the estimator decides how to compare them.
+- Latest correction:
+  - Blank, no response, and no-bid are the same practical state for Rialto comparison math.
+  - No-Bid Line Item now means a requested line item with no usable vendor quote value, whether explicit decline, blank, no response, or cannot supply.
+  - Rialto must account for no-bid line items when calculating quote totals so partial quote responses do not create misleading totals.
+
+Resume point:
+- We had just corrected Question 92. Do not ask whether blank differs from no-bid; it does not for comparison math.
+- Next question should continue from partial quote responses and totals.
+
+Suggested next question:
+Question 93: How should Rialto calculate and display vendor totals when a vendor has no-bid/blank/no-response line items?
+
+Recommended answer:
+Rialto should not show a simple grand total as if the quote is complete. It should distinguish complete comparable totals from partial totals, show which line items are missing/no-bid, and warn when comparing a partial vendor quote against complete quotes. A partial total can be useful, but it must be labeled as partial so estimators do not accidentally pick the lowest incomplete quote.
