@@ -44,7 +44,7 @@ const comparisonPatchRequestSchema = z.object({
     columns: z.array(z.object({
       key: z.string(),
       label: z.string(),
-      kind: z.enum(['rfq-core', 'rfq-attribute', 'rfq-standard', 'vendor', 'derived']),
+      kind: z.enum(['rfq-core', 'rfq-attribute', 'rfq-standard', 'vendor', 'derived', 'manual']),
       vendorId: z.string().optional(),
       vendorName: z.string().optional(),
       metric: z.enum(['unit_price', 'total', 'lead', 'alternate', 'response_attr']).optional(),

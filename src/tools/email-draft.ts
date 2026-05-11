@@ -24,6 +24,7 @@ export interface EmailDraftOutput {
 
 export const emailDraftTool: ToolDefinition<EmailDraftInput, EmailDraftOutput> = {
   id: 'email.draft_vendor_outreach',
+  productModule: 'requesting-quotes',
   surface: 'email-draft',
   description: 'Compose recipients, subject, body, and attachments in a visible email draft. Rialto never sends it automatically.',
   visibleToUser: true,
@@ -35,4 +36,3 @@ export const emailDraftTool: ToolDefinition<EmailDraftInput, EmailDraftOutput> =
     return { action: 'show-email-draft', draft, sendPolicy: 'user-must-send' }
   },
 }
-

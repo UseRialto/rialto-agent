@@ -14,6 +14,7 @@ export class ToolRegistry {
   list() {
     return [...this.tools.values()].map((tool) => ({
       id: tool.id,
+      productModule: tool.productModule,
       surface: tool.surface,
       description: tool.description,
       visibleToUser: tool.visibleToUser,

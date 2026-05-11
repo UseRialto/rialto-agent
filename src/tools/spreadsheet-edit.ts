@@ -23,11 +23,31 @@ export const spreadsheetPatchSchema = z.object({
       columnId: z.string(),
     }),
     z.object({
+      kind: z.literal('delete-column'),
+      columnId: z.string(),
+    }),
+    z.object({
+      kind: z.literal('show-column'),
+      columnId: z.string(),
+    }),
+    z.object({
       kind: z.literal('insert-column'),
       columnId: z.string(),
       label: z.string(),
       afterColumnId: z.string().optional(),
       beforeColumnId: z.string().optional(),
+    }),
+    z.object({
+      kind: z.literal('hide-row'),
+      rowId: z.string(),
+    }),
+    z.object({
+      kind: z.literal('delete-row'),
+      rowId: z.string(),
+    }),
+    z.object({
+      kind: z.literal('show-row'),
+      rowId: z.string(),
     }),
     z.object({
       kind: z.literal('insert-row'),
@@ -60,6 +80,15 @@ export const spreadsheetPatchSchema = z.object({
       columnId: z.string(),
       label: z.string(),
       formula: z.string(),
+      afterColumnId: z.string().optional(),
+      beforeColumnId: z.string().optional(),
+    }),
+    z.object({
+      kind: z.literal('bulk-adjust-number-column'),
+      columnId: z.string(),
+      amount: z.number(),
+      dependentColumnId: z.string().optional(),
+      dependentFormula: z.enum(['multiply-by-quantity']).optional(),
     }),
   ])).default([]),
 })
@@ -74,8 +103,9 @@ export interface SpreadsheetPatchOutput {
 
 export const spreadsheetEditTool: ToolDefinition<SpreadsheetPatchInput, SpreadsheetPatchOutput> = {
   id: 'sheet.preview_comparison_patch',
+  productModule: 'quote-comparison',
   surface: 'spreadsheet-edit',
-  description: 'Preview visible spreadsheet changes before applying them to a comparison sheet.',
+  description: 'Preview visible quote-comparison spreadsheet changes before applying them. Supports set/clear cell, highlight range, delete/hide/show row, delete/hide/show column, insert row/column, rename sheet/column, sort rows, filter rows, bulk numeric column adjustment with dependent total recomputation, and add derived columns.',
   visibleToUser: true,
   mutatesPersistentData: false,
   requiresUserApproval: true,

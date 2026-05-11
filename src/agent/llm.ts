@@ -5,6 +5,7 @@ export interface LlmPlanRequest {
   messages: AgentMessage[]
   tools: Array<{
     id: string
+    productModule?: string
     surface: string
     description: string
     visibleToUser: boolean
@@ -34,6 +35,11 @@ export function parseJson<T>(text: string): T {
 }
 
 function buildPrompt(request: LlmPlanRequest) {
+  const toolsByModule = request.tools.reduce<Record<string, typeof request.tools>>((groups, tool) => {
+    const key = tool.productModule ?? 'unassigned'
+    groups[key] = [...(groups[key] ?? []), tool]
+    return groups
+  }, {})
   return [
     'You are Rialto Agent, the single intelligence core for construction procurement.',
     'Choose only from the provided tools. All actions must be visible to the user.',
@@ -42,7 +48,7 @@ function buildPrompt(request: LlmPlanRequest) {
     'Spreadsheet tools preview changes for review unless a future product policy explicitly allows direct tiny edits.',
     'Return JSON only with shape: {"reply":"...","plan":["..."],"toolCalls":[{"id":"call-1","toolId":"...","input":{}}]}.',
     '',
-    `Tools: ${JSON.stringify(request.tools)}`,
+    `Tools by Product Module: ${JSON.stringify(toolsByModule)}`,
     '',
     `User Context: ${JSON.stringify(request.userContext)}`,
     '',
@@ -83,6 +89,184 @@ export class OpenAIPlanner implements LlmPlanner {
     if (!text) throw new Error('OpenAI returned an empty response.')
     return parseJson<LlmPlanResponse>(text)
   }
+}
+
+type SpreadsheetOperation =
+  | { kind: 'set-cell'; rowId: string; columnId: string; value: string | number | boolean | null; provenanceNote?: string }
+  | { kind: 'highlight-range'; range: string; color: 'red' | 'orange' | 'blue' | 'green' | 'yellow'; note: string }
+  | { kind: 'hide-column'; columnId: string }
+  | { kind: 'delete-column'; columnId: string }
+  | { kind: 'show-column'; columnId: string }
+  | { kind: 'hide-row'; rowId: string }
+  | { kind: 'delete-row'; rowId: string }
+  | { kind: 'show-row'; rowId: string }
+  | { kind: 'insert-column'; columnId: string; label: string; afterColumnId?: string; beforeColumnId?: string }
+  | { kind: 'insert-row'; rowId: string; afterRowId?: string; beforeRowId?: string; initialValues?: Record<string, string | number | boolean | null> }
+  | { kind: 'rename-sheet'; title: string }
+  | { kind: 'rename-column'; columnId: string; label: string }
+  | { kind: 'sort-rows'; columnId: string; direction: 'asc' | 'desc' }
+  | { kind: 'filter-rows'; columnId: string; predicate: 'non-empty' | 'empty' }
+  | { kind: 'add-derived-column'; columnId: string; label: string; formula: string }
+  | { kind: 'bulk-adjust-number-column'; columnId: string; amount: number; dependentColumnId?: string; dependentFormula?: 'multiply-by-quantity' }
+
+function cleanTarget(value: string) {
+  return value.trim().replace(/\s+(column|columns|row|rows|cell)$/i, '').trim()
+}
+
+function editDistanceAtMostOne(a: string, b: string) {
+  if (a === b) return true
+  if (Math.abs(a.length - b.length) > 1) return false
+  let edits = 0
+  let i = 0
+  let j = 0
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i += 1
+      j += 1
+      continue
+    }
+    edits += 1
+    if (edits > 1) return false
+    if (a[i + 1] === b[j] && a[i] === b[j + 1]) {
+      i += 2
+      j += 2
+    } else if (a.length > b.length) i += 1
+    else if (b.length > a.length) j += 1
+    else {
+      i += 1
+      j += 1
+    }
+  }
+  if (i < a.length || j < b.length) edits += 1
+  return edits <= 1
+}
+
+function normalizeCommandWords(message: string) {
+  const commandWords = [
+    'delete', 'remove', 'hide', 'drop', 'show', 'unhide', 'restore', 'reveal',
+    'column', 'columns', 'row', 'rows', 'cell', 'insert', 'add', 'create',
+    'rename', 'sort', 'filter', 'blank', 'blanks', 'clear', 'set',
+  ]
+  return message.replace(/\b[a-z]{3,}\b/gi, (word) => {
+    const lower = word.toLowerCase()
+    if (lower === 'and' || lower === 'then') return word
+    const replacement = commandWords.find((candidate) => editDistanceAtMostOne(lower, candidate))
+    return replacement ?? word
+  })
+}
+
+function operationId(prefix: string) {
+  return `${prefix}-${Date.now()}`
+}
+
+function spreadsheetOperationsFromInstruction(message: string): SpreadsheetOperation[] {
+  const trimmed = normalizeCommandWords(message).trim()
+  const lower = trimmed.toLowerCase()
+
+  if (/\b(lowest|complete|quote)\b/.test(lower)) {
+    return [{
+      kind: 'highlight-range',
+      range: 'lowest-complete-comparable-quote',
+      color: 'green',
+      note: 'Highlight the lowest complete comparable quote; lower partial totals remain separate caveated context.',
+    }]
+  }
+
+  const clearCellMatch = trimmed.match(/\b(clear|blank|empty)\s+(?:the\s+)?(.+?)\s+cell\s+(?:for|in|on)\s+(.+)$/i)
+  if (clearCellMatch) {
+    return [{ kind: 'set-cell', columnId: cleanTarget(clearCellMatch[2]), rowId: cleanTarget(clearCellMatch[3]), value: '' }]
+  }
+
+  const setCellMatch = trimmed.match(/\b(?:set|change|update)\s+(?:the\s+)?(.+?)\s+(?:cell\s+)?(?:for|in|on)\s+(.+?)\s+(?:to|as)\s+(.+)$/i)
+  if (setCellMatch) {
+    return [{ kind: 'set-cell', columnId: cleanTarget(setCellMatch[1]), rowId: cleanTarget(setCellMatch[2]), value: setCellMatch[3].trim() }]
+  }
+
+  const renameColumnMatch = trimmed.match(/\brename\s+(?:the\s+)?(.+?)\s+column\s+(?:to|as)\s+(.+)$/i)
+    ?? trimmed.match(/\brename\s+column\s+(.+?)\s+(?:to|as)\s+(.+)$/i)
+  if (renameColumnMatch) {
+    return [{ kind: 'rename-column', columnId: cleanTarget(renameColumnMatch[1]), label: renameColumnMatch[2].trim() }]
+  }
+
+  const sortMatch = trimmed.match(/\bsort\b\s+(?:by\s+)?(.+?)\s+(ascending|asc|a\s*to\s*z|descending|desc|z\s*to\s*a)\s*$/i)
+    ?? trimmed.match(/\bsort\s+(ascending|asc|a\s*to\s*z|descending|desc|z\s*to\s*a)\s+(?:by\s+)?(.+?)\s*$/i)
+  if (sortMatch) {
+    const firstIsDirection = /^(ascending|asc|a\s*to\s*z|descending|desc|z\s*to\s*a)$/i.test(sortMatch[1])
+    const directionText = firstIsDirection ? sortMatch[1] : sortMatch[2]
+    const target = firstIsDirection ? sortMatch[2] : sortMatch[1]
+    return [{ kind: 'sort-rows', columnId: cleanTarget(target), direction: /\b(desc|descending|z\s*to\s*a)\b/i.test(directionText) ? 'desc' : 'asc' }]
+  }
+
+  const filterBlankMatch = trimmed.match(/\b(?:filter|hide)\b[^.]*\bblank(?:s)?\b[^.]*\b(?:in|for|from)\s+(.+?)(?:\s+column)?\s*$/i)
+  if (filterBlankMatch) {
+    return [{ kind: 'filter-rows', columnId: cleanTarget(filterBlankMatch[1]), predicate: 'empty' }]
+  }
+
+  const bulkAddMatch = trimmed.match(/\badd\s+(-?\d+(?:\.\d+)?)\s+(?:to|onto)\s+(?:all\s+)?(?:entries\s+)?(?:in\s+)?(.+?)(?:\s+and\s+(?:then\s+)?update\s+(.+?)(?:\s+according(?:ly)?)?)?\s*$/i)
+  if (bulkAddMatch) {
+    return [{
+      kind: 'bulk-adjust-number-column',
+      amount: Number(bulkAddMatch[1]),
+      columnId: cleanTarget(bulkAddMatch[2]),
+      dependentColumnId: bulkAddMatch[3] ? cleanTarget(bulkAddMatch[3]) : undefined,
+      dependentFormula: bulkAddMatch[3] ? 'multiply-by-quantity' : undefined,
+    }]
+  }
+
+  const insertRowMatch = trimmed.match(/\b(?:add|insert|create)\b[^.]*\brow\b[^.]*\b(above|before|below|after)\s+(.+?)\s*$/i)
+    ?? trimmed.match(/\b(?:add|insert|create)\s+(?:a\s+)?row\b/i)
+  if (insertRowMatch) {
+    const side = insertRowMatch[1]?.toLowerCase()
+    const target = insertRowMatch[2] ? cleanTarget(insertRowMatch[2]) : undefined
+    return [{
+      kind: 'insert-row',
+      rowId: operationId('manual-row'),
+      ...(target && (side === 'above' || side === 'before') ? { beforeRowId: target } : {}),
+      ...(target && side !== 'above' && side !== 'before' ? { afterRowId: target } : {}),
+    }]
+  }
+
+  const derivedKlfMatch = trimmed.match(/\b(?:add|insert|create)\b[^.]*\bcolumn\b[^.]*\b(?:to\s+)?(right\s+of|after|left\s+of|before)\s+(.+?)(?:,|$)/i)
+  if (derivedKlfMatch && /\b(thousand|1000|kilo|k\s*lf|klf)\b/i.test(trimmed) && /\b(linear\s+feet|lf|feet|ft)\b/i.test(trimmed)) {
+    const anchor = cleanTarget(derivedKlfMatch[2])
+    return [{ kind: 'add-derived-column', columnId: operationId('derived-col'), label: `${anchor} (kLF)`, formula: `divide(column.${anchor},1000)` }]
+  }
+
+  const insertColumnMatch = trimmed.match(/\b(?:add|insert|create)\b[^.]*\bcolumn\b[^.]*\b(left\s+of|before|right\s+of|after)\s+(.+?)\s*(?:column)?\s*$/i)
+    ?? trimmed.match(/\b(?:add|insert|create)\s+(?:a\s+)?column\b/i)
+  if (insertColumnMatch) {
+    const side = insertColumnMatch[1]?.toLowerCase()
+    const target = insertColumnMatch[2] ? cleanTarget(insertColumnMatch[2]) : undefined
+    return [{
+      kind: 'insert-column',
+      columnId: operationId('manual-col'),
+      label: 'New Column',
+      ...(target && (side?.includes('left') || side === 'before') ? { beforeColumnId: target } : {}),
+      ...(target && !(side?.includes('left') || side === 'before') ? { afterColumnId: target } : {}),
+    }]
+  }
+
+  const showRowMatch = trimmed.match(/\b(show|unhide|restore|reveal|bring back|put back)\s+(?:the\s+)?(?:row|item|line item)\s+(.+)$/i)
+    ?? trimmed.match(/\b(show|unhide|restore|reveal|bring back|put back)\s+(?:the\s+)?(.+?)\s+row\s*$/i)
+  if (showRowMatch) return [{ kind: 'show-row', rowId: cleanTarget(showRowMatch[2]) }]
+
+  const hideRowMatch = trimmed.match(/\b(hide|remove|delete|drop)\s+(?:the\s+)?(?:row|item|line item)\s+(.+)$/i)
+    ?? trimmed.match(/\b(hide|remove|delete|drop)\s+(?:the\s+)?(.+?)\s+row\s*$/i)
+  if (hideRowMatch) {
+    const verb = hideRowMatch[1].toLowerCase()
+    return [{ kind: verb === 'delete' || verb === 'remove' || verb === 'drop' ? 'delete-row' : 'hide-row', rowId: cleanTarget(hideRowMatch[2]) }]
+  }
+
+  const showColumnMatch = trimmed.match(/\b(show|unhide|restore|reveal|bring back|put back)\s+(?:the\s+)?(.+?)\s*(?:column|columns)\s*$/i)
+  if (showColumnMatch) return [{ kind: 'show-column', columnId: cleanTarget(showColumnMatch[2]) }]
+
+  const hideColumnMatch = trimmed.match(/\b(hide|remove|delete|drop)\s+(?:the\s+)?(.+?)\s*(?:column|columns)\s*$/i)
+  if (hideColumnMatch) {
+    const verb = hideColumnMatch[1].toLowerCase()
+    return [{ kind: verb === 'delete' || verb === 'remove' || verb === 'drop' ? 'delete-column' : 'hide-column', columnId: cleanTarget(hideColumnMatch[2]) }]
+  }
+
+  return []
 }
 
 export class DeterministicPlanner implements LlmPlanner {
@@ -127,16 +311,9 @@ export class DeterministicPlanner implements LlmPlanner {
         }],
       }
     }
-    if (/\b(excel|spreadsheet|comparison|sheet|highlight|column|row)\b/.test(last)) {
+    const spreadsheetOperations = spreadsheetOperationsFromInstruction(request.messages.at(-1)?.content ?? '')
+    if (spreadsheetOperations.length > 0 || /\b(excel|spreadsheet|comparison|sheet|highlight|column|row)\b/.test(last)) {
       const firstSheet = request.userContext.data.comparisonSheets[0]
-      const operations = /\b(lowest|complete|quote)\b/.test(last)
-        ? [{
-            kind: 'highlight-range',
-            range: 'lowest-complete-comparable-quote',
-            color: 'green',
-            note: 'Highlight the lowest complete comparable quote; lower partial totals remain separate caveated context.',
-          }]
-        : []
       return {
         reply: 'I prepared a spreadsheet edit preview.',
         plan: ['Preview the requested comparison-sheet change before applying it.'],
@@ -146,7 +323,7 @@ export class DeterministicPlanner implements LlmPlanner {
           input: {
             comparisonSheetId: firstSheet?.id ?? 'unknown',
             summary: request.messages.at(-1)?.content ?? 'Spreadsheet edit',
-            operations,
+            operations: spreadsheetOperations,
           },
         }],
       }

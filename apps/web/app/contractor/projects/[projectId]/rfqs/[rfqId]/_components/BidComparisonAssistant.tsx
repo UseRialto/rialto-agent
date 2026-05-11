@@ -19,7 +19,7 @@ export interface BidComparisonAssistantProps {
   currentView: ComparisonSheetView
   sheetSchema: {
     columns: SheetSchemaColumn[]
-    lineItems: Array<{ id: string; description: string }>
+    lineItems: Array<{ id: string; description: string; values?: Record<string, string> }>
     vendors: Array<{ id: string; name: string }>
   }
   onApply: (patch: ComparisonViewPatch) => void
@@ -41,6 +41,15 @@ function describePatch(patch: ComparisonViewPatch | null, schema: BidComparisonA
   if (!patch) return []
   const chips: PatchChip[] = []
 
+  patch.deleteColumnKeys?.forEach((key) => {
+    const col = schema.columns.find((c) => c.key === key)
+    chips.push({
+      id: `delete-${key}`,
+      label: `Delete: ${col?.label ?? key}`,
+      tone: 'remove',
+      onDismiss: () => {},
+    })
+  })
   patch.hideColumnKeys?.forEach((key) => {
     const col = schema.columns.find((c) => c.key === key)
     chips.push({
@@ -53,6 +62,10 @@ function describePatch(patch: ComparisonViewPatch | null, schema: BidComparisonA
   patch.showColumnKeys?.forEach((key) => {
     const col = schema.columns.find((c) => c.key === key)
     chips.push({ id: `show-${key}`, label: `Show: ${col?.label ?? key}`, tone: 'add', onDismiss: () => {} })
+  })
+  patch.deleteLineItemIds?.forEach((id) => {
+    const item = schema.lineItems.find((i) => i.id === id)
+    chips.push({ id: `delete-row-${id}`, label: `Delete row: ${item?.description ?? id}`, tone: 'remove', onDismiss: () => {} })
   })
   patch.hideLineItemIds?.forEach((id) => {
     const item = schema.lineItems.find((i) => i.id === id)
@@ -173,7 +186,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
               <p className="mb-2 text-xs" style={{ color: '#4a6358' }}>{summary}</p>
             )}
             {chips.length === 0 ? (
-              <p className="text-xs" style={{ color: '#8a9e96' }}>No structural changes proposed.</p>
+              <p className="text-xs" style={{ color: '#8a9e96' }}>AI is unsure.</p>
             ) : (
               <div className="flex flex-wrap gap-2">
                 {chips.map((chip) => (

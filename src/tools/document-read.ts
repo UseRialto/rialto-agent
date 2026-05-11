@@ -91,6 +91,7 @@ async function extractText(input: DocumentReadInput): Promise<Omit<DocumentReadO
 
 export const documentReadTool: ToolDefinition<DocumentReadInput, DocumentReadOutput> = {
   id: 'document.extract_line_items',
+  productModule: 'vendor-response-intake',
   surface: 'document-read',
   description: 'Read PDF, XLSX, CSV, DOCX, or text bytes and return extracted text for line-item extraction/review.',
   visibleToUser: true,

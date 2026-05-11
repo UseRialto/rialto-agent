@@ -219,8 +219,10 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
 // AI patch shape returned by /api/bid-comparison/ai-propose
 export interface ComparisonViewPatch {
   summary: string
+  deleteColumnKeys?: string[]
   hideColumnKeys?: string[]
   showColumnKeys?: string[]
+  deleteLineItemIds?: string[]
   hideLineItemIds?: string[]
   showLineItemIds?: string[]
   addHighlights?: ComparisonHighlight[]
@@ -233,16 +235,24 @@ export interface ComparisonViewPatch {
   setCells?: Array<{ rowKey: string; colKey: string; value: string }>
   setColumnLabels?: Array<{ colKey: string; label: string }>
   setLineItemOrder?: string[]
+  sortRowsByColumn?: { colKey: string; direction: 'asc' | 'desc' }
+  filterBlankRowsByColumnKey?: string
   setCharts?: ChartConfig[]
 }
 
 export function applyPatch(view: ComparisonSheetView, patch: ComparisonViewPatch): ComparisonSheetView {
   let next = { ...view }
+  if (patch.deleteColumnKeys?.length) {
+    next = { ...next, hiddenColumnKeys: Array.from(new Set([...next.hiddenColumnKeys, ...patch.deleteColumnKeys])) }
+  }
   if (patch.hideColumnKeys?.length) {
     next = { ...next, hiddenColumnKeys: Array.from(new Set([...next.hiddenColumnKeys, ...patch.hideColumnKeys])) }
   }
   if (patch.showColumnKeys?.length) {
     next = { ...next, hiddenColumnKeys: next.hiddenColumnKeys.filter((k) => !patch.showColumnKeys!.includes(k)) }
+  }
+  if (patch.deleteLineItemIds?.length) {
+    next = { ...next, hiddenLineItemIds: Array.from(new Set([...next.hiddenLineItemIds, ...patch.deleteLineItemIds])) }
   }
   if (patch.hideLineItemIds?.length) {
     next = { ...next, hiddenLineItemIds: Array.from(new Set([...next.hiddenLineItemIds, ...patch.hideLineItemIds])) }

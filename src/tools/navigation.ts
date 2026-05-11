@@ -16,6 +16,7 @@ export interface NavigateOutput {
 
 export const navigateTool: ToolDefinition<NavigateInput, NavigateOutput> = {
   id: 'site.navigate',
+  productModule: 'app-shell',
   surface: 'navigation',
   description: 'Navigate the visible app to an app route while the user is watching.',
   visibleToUser: true,
@@ -27,4 +28,3 @@ export const navigateTool: ToolDefinition<NavigateInput, NavigateOutput> = {
     return { action: 'navigate', path: parsed.path, reason: parsed.reason }
   },
 }
-

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth/session'
 import { proposeComparisonCommandFallback } from '@/lib/procurement/comparison-command-fallback'
+import { comparisonViewPatchFromAgentToolPatch, type ComparisonAgentToolPatch } from '@/lib/procurement/comparison-agent-tools'
 
 const RIALTO_AGENT_API_URL = process.env.RIALTO_AGENT_API_URL ?? 'http://localhost:8787'
 
@@ -17,6 +18,7 @@ interface SchemaColumn {
 interface SchemaItem {
   id: string
   description: string
+  values?: Record<string, string>
 }
 
 interface SchemaVendor {
@@ -67,8 +69,10 @@ interface PatchManualLineItem {
 
 interface ComparisonViewPatch {
   summary: string
+  deleteColumnKeys?: string[]
   hideColumnKeys?: string[]
   showColumnKeys?: string[]
+  deleteLineItemIds?: string[]
   hideLineItemIds?: string[]
   showLineItemIds?: string[]
   addHighlights?: PatchHighlight[]
@@ -81,12 +85,16 @@ interface ComparisonViewPatch {
   setCells?: Array<{ rowKey: string; colKey: string; value: string }>
   setColumnLabels?: Array<{ colKey: string; label: string }>
   setLineItemOrder?: string[]
+  sortRowsByColumn?: { colKey: string; direction: 'asc' | 'desc' }
+  filterBlankRowsByColumnKey?: string
 }
 
 interface RawAIResponse {
   summary?: string
+  deleteColumnKeys?: string[]
   hideColumnKeys?: string[]
   showColumnKeys?: string[]
+  deleteLineItemIds?: string[]
   hideLineItemIds?: string[]
   showLineItemIds?: string[]
   addHighlights?: Array<{
@@ -104,6 +112,8 @@ interface RawAIResponse {
   setCells?: Array<{ rowKey?: unknown; colKey?: unknown; value?: unknown }>
   setColumnLabels?: Array<{ colKey?: unknown; label?: unknown }>
   setLineItemOrder?: unknown[]
+  sortRowsByColumn?: { colKey?: unknown; direction?: unknown }
+  filterBlankRowsByColumnKey?: unknown
 }
 
 function isCorePinned(key: string) {
@@ -171,7 +181,7 @@ function fallbackPatch(message: string, schema: RequestBody['sheetSchema']): Raw
   const cols = schema?.columns ?? []
   const items = schema?.lineItems ?? []
   const color = pickColor(message)
-  const commandPatch = proposeComparisonCommandFallback(message, { columns: cols })
+  const commandPatch = proposeComparisonCommandFallback(message, { columns: cols, lineItems: items })
   if (commandPatch) return commandPatch
 
   // 1) Clear/reset highlights
@@ -297,7 +307,7 @@ function fallbackPatch(message: string, schema: RequestBody['sheetSchema']): Raw
   }
 
   return {
-    summary: 'I didn’t catch that. Try: "highlight the ready-mix concrete row", "highlight the unit price column", "hide all empty columns", "highlight the lowest price", or "hide a vendor column".',
+    summary: 'AI is unsure.',
   }
 }
 
@@ -305,8 +315,10 @@ function normalizePatch(raw: RawAIResponse): ComparisonViewPatch {
   const patch: ComparisonViewPatch = {
     summary: typeof raw.summary === 'string' && raw.summary.trim() ? raw.summary.trim() : 'Applied change.',
   }
+  if (Array.isArray(raw.deleteColumnKeys) && raw.deleteColumnKeys.length) patch.deleteColumnKeys = raw.deleteColumnKeys.filter((k) => typeof k === 'string')
   if (Array.isArray(raw.hideColumnKeys) && raw.hideColumnKeys.length) patch.hideColumnKeys = raw.hideColumnKeys.filter((k) => typeof k === 'string')
   if (Array.isArray(raw.showColumnKeys) && raw.showColumnKeys.length) patch.showColumnKeys = raw.showColumnKeys.filter((k) => typeof k === 'string')
+  if (Array.isArray(raw.deleteLineItemIds) && raw.deleteLineItemIds.length) patch.deleteLineItemIds = raw.deleteLineItemIds.filter((k) => typeof k === 'string')
   if (Array.isArray(raw.hideLineItemIds) && raw.hideLineItemIds.length) patch.hideLineItemIds = raw.hideLineItemIds.filter((k) => typeof k === 'string')
   if (Array.isArray(raw.showLineItemIds) && raw.showLineItemIds.length) patch.showLineItemIds = raw.showLineItemIds.filter((k) => typeof k === 'string')
   if (raw.clearHighlights) patch.clearHighlights = true
@@ -368,6 +380,13 @@ function normalizePatch(raw: RawAIResponse): ComparisonViewPatch {
   if (Array.isArray(raw.setLineItemOrder) && raw.setLineItemOrder.length) {
     patch.setLineItemOrder = raw.setLineItemOrder.filter((id): id is string => typeof id === 'string')
   }
+  if (raw.sortRowsByColumn && typeof raw.sortRowsByColumn.colKey === 'string') {
+    patch.sortRowsByColumn = {
+      colKey: raw.sortRowsByColumn.colKey,
+      direction: raw.sortRowsByColumn.direction === 'desc' ? 'desc' : 'asc',
+    }
+  }
+  if (typeof raw.filterBlankRowsByColumnKey === 'string') patch.filterBlankRowsByColumnKey = raw.filterBlankRowsByColumnKey
   return patch
 }
 
@@ -385,18 +404,31 @@ export async function POST(request: NextRequest) {
   if (!message) return NextResponse.json({ error: 'message is required.' }, { status: 400 })
 
   try {
-    const response = await fetch(`${RIALTO_AGENT_API_URL}/comparison/propose-patch`, {
+    const response = await fetch(`${RIALTO_AGENT_API_URL}/agent/turn`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        message,
-        currentView: body.currentView,
-        sheetSchema: body.sheetSchema,
+        user: {
+          id: session.userId,
+          contractorOrganizationId: session.userId,
+          role: session.role === 'vendor' ? 'vendor' : 'estimator',
+          name: session.name || 'Estimator',
+          email: session.email || 'estimator@example.com',
+        },
+        messages: [{ role: 'user', content: message }],
+        currentPage: {
+          path: '/contractor/quote-comparison',
+          title: 'Quote Comparison',
+        },
       }),
     })
-    const data = await response.json() as { patch?: ComparisonViewPatch; error?: string; usedFallback?: boolean }
-    if (!response.ok || !data.patch) throw new Error(data.error ?? 'Comparison patch backend failed.')
-    return NextResponse.json({ patch: data.patch, usedFallback: Boolean(data.usedFallback) })
+    const data = await response.json() as {
+      error?: string
+      toolResults?: Array<{ data?: { action?: string; patch?: ComparisonAgentToolPatch } }>
+    }
+    const toolPatch = data.toolResults?.find((result) => result.data?.action === 'preview-spreadsheet-patch')?.data?.patch
+    if (!response.ok || !toolPatch) throw new Error(data.error ?? 'Rialto Agent did not return a Quote Comparison tool patch.')
+    return NextResponse.json({ patch: comparisonViewPatchFromAgentToolPatch(toolPatch, body.sheetSchema ?? {}), usedFallback: false })
   } catch (error) {
     console.error('bid-comparison ai-propose failed:', error instanceof Error ? error.message : error)
     const patch = normalizePatch(fallbackPatch(message, body.sheetSchema))

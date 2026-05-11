@@ -81,8 +81,11 @@ export interface AgentMessage {
 
 export type ToolSurface = 'navigation' | 'email-draft' | 'spreadsheet-edit' | 'document-read'
 
+export type ProductModule = 'requesting-quotes' | 'vendor-response-intake' | 'quote-comparison' | 'app-shell'
+
 export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   id: string
+  productModule: ProductModule
   surface: ToolSurface
   description: string
   visibleToUser: boolean
@@ -128,4 +131,3 @@ export interface ToolResult {
   summary: string
   data?: unknown
 }
-

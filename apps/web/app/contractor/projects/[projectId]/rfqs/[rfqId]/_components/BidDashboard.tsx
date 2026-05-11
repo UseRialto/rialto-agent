@@ -1914,8 +1914,10 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
   }
 
   function applyPatchToView(patch: ComparisonViewPatch) {
+    if (patch.deleteColumnKeys?.length) hideColumns(patch.deleteColumnKeys)
     if (patch.hideColumnKeys?.length) hideColumns(patch.hideColumnKeys)
     if (patch.showColumnKeys?.length) showColumns(patch.showColumnKeys)
+    if (patch.deleteLineItemIds?.length) hideLineItems(patch.deleteLineItemIds)
     if (patch.hideLineItemIds?.length) hideLineItems(patch.hideLineItemIds)
     if (patch.showLineItemIds?.length) showLineItems(patch.showLineItemIds)
     if (patch.clearHighlights) clearHighlights()
@@ -1932,6 +1934,8 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
       for (const col of patch.setColumnLabels) setColumnLabel(col.colKey, col.label)
     }
     if (patch.setLineItemOrder?.length) setLineItemOrder(patch.setLineItemOrder)
+    if (patch.sortRowsByColumn) sortRowsByColumn(patch.sortRowsByColumn.colKey, patch.sortRowsByColumn.direction)
+    if (patch.filterBlankRowsByColumnKey) hideBlankRowsForColumn(patch.filterBlankRowsByColumnKey)
     dispatchAssistant(false)
   }
 
@@ -1956,7 +1960,11 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
       metric: c.vendorMetric,
       isEmpty: emptyColumnKeys.has(c.key),
     })),
-    lineItems: items.map((i) => ({ id: i.id, description: i.description })),
+    lineItems: items.map((i) => ({
+      id: i.id,
+      description: i.description,
+      values: Object.fromEntries(allCols.map((col) => [col.key, getCellText(i, col)])),
+    })),
     vendors: bids.map((b) => ({ id: b.id, name: b.vendor_name })),
   }), [allCols, items, bids, emptyColumnKeys])
 
