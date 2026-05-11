@@ -57,7 +57,7 @@ export async function getVendorProjectsSummary(vendorEmail?: string, vendorId?: 
     .from(rfqsTable)
     .where(
       and(
-        inArray(rfqsTable.status, ['active', 'po_offered']),
+        eq(rfqsTable.status, 'active'),
         ne(rfqsTable.visibility, 'invited_only'),
       ),
     )
@@ -75,7 +75,7 @@ export async function getVendorProjectsSummary(vendorEmail?: string, vendorId?: 
       .innerJoin(rfqsTable, eq(rfqInvitesTable.rfq_id, rfqsTable.id))
       .where(
         and(
-          inArray(rfqsTable.status, ['active', 'po_offered']),
+          eq(rfqsTable.status, 'active'),
           vendorId
             ? or(eq(rfqInvitesTable.vendor_email, vendorEmail), eq(rfqInvitesTable.vendor_id, vendorId))
             : eq(rfqInvitesTable.vendor_email, vendorEmail),

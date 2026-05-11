@@ -23,6 +23,39 @@ export const spreadsheetPatchSchema = z.object({
       columnId: z.string(),
     }),
     z.object({
+      kind: z.literal('insert-column'),
+      columnId: z.string(),
+      label: z.string(),
+      afterColumnId: z.string().optional(),
+      beforeColumnId: z.string().optional(),
+    }),
+    z.object({
+      kind: z.literal('insert-row'),
+      rowId: z.string(),
+      afterRowId: z.string().optional(),
+      beforeRowId: z.string().optional(),
+      initialValues: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
+    }),
+    z.object({
+      kind: z.literal('rename-sheet'),
+      title: z.string(),
+    }),
+    z.object({
+      kind: z.literal('rename-column'),
+      columnId: z.string(),
+      label: z.string(),
+    }),
+    z.object({
+      kind: z.literal('sort-rows'),
+      columnId: z.string(),
+      direction: z.enum(['asc', 'desc']),
+    }),
+    z.object({
+      kind: z.literal('filter-rows'),
+      columnId: z.string(),
+      predicate: z.enum(['non-empty', 'empty']),
+    }),
+    z.object({
       kind: z.literal('add-derived-column'),
       columnId: z.string(),
       label: z.string(),
@@ -52,4 +85,3 @@ export const spreadsheetEditTool: ToolDefinition<SpreadsheetPatchInput, Spreadsh
     return { action: 'preview-spreadsheet-patch', patch, applyPolicy: 'preview-before-apply' }
   },
 }
-

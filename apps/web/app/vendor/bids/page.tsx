@@ -1,9 +1,7 @@
 import { AppShell } from '@/components/layout/AppShell'
 import { getSession } from '@/lib/auth/session'
 import { getSubmittedBids } from '@/lib/api/vendor'
-import { getPendingPOsForVendor } from '@/lib/store/contractor-store'
 import { BidsByProject } from './_components/BidsByProject'
-import { PendingPOAlerts } from './_components/PendingPOAlerts'
 
 export const metadata = {
   title: 'My Quotes - Rialto Vendor',
@@ -11,19 +9,12 @@ export const metadata = {
 
 export default async function VendorBidsPage() {
   const session = await getSession()
-  const vendorEmail = session?.email ?? ''
   const vendorId = session?.userId ?? ''
 
-  const [bids, pendingPOs] = await Promise.all([
-    getSubmittedBids(vendorId),
-    Promise.resolve(getPendingPOsForVendor(vendorEmail, vendorId)),
-  ])
+  const bids = await getSubmittedBids(vendorId)
 
-  const awarded = bids.filter((b) => b.status === 'awarded').length
+  const shortlisted = bids.filter((b) => b.status === 'shortlisted').length
   const pending = bids.filter((b) => b.status === 'pending' || b.status === 'under_review').length
-  const totalValue = bids
-    .filter((b) => b.status === 'awarded')
-    .reduce((sum, b) => sum + b.total_price, 0)
 
   return (
     <AppShell>
@@ -40,11 +31,6 @@ export default async function VendorBidsPage() {
             Track the status of your submitted quotes across all projects.
           </p>
         </div>
-
-        {/* Pending PO alerts */}
-        {pendingPOs.length > 0 && (
-          <PendingPOAlerts pendingPOs={pendingPOs} />
-        )}
 
         {/* Stats */}
         <div className="mb-5 grid grid-cols-3 gap-4">
@@ -66,13 +52,8 @@ export default async function VendorBidsPage() {
             className="rounded-xl p-4 shadow-sm"
             style={{ background: '#e8f4ee', border: '1px solid #a8d5ba' }}
           >
-            <p className="text-xs font-medium" style={{ color: '#2d6a4f' }}>Awarded</p>
-            <p className="mt-1 text-2xl font-bold" style={{ color: '#2d6a4f' }}>{awarded}</p>
-            {awarded > 0 && (
-              <p className="text-xs" style={{ color: '#2d6a4f' }}>
-                ${(totalValue / 1000).toFixed(0)}k won
-              </p>
-            )}
+            <p className="text-xs font-medium" style={{ color: '#2d6a4f' }}>Shortlisted</p>
+            <p className="mt-1 text-2xl font-bold" style={{ color: '#2d6a4f' }}>{shortlisted}</p>
           </div>
         </div>
 

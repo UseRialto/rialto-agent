@@ -14,14 +14,14 @@ interface Props {
 const STATUS_STYLES: Record<SubmittedBidStatus, React.CSSProperties> = {
   pending: { background: '#ede8e2', color: '#4a6358' },
   under_review: { background: '#fff3eb', color: '#fa6b04' },
-  awarded: { background: '#e8f4ee', color: '#2d6a4f' },
+  shortlisted: { background: '#e8f4ee', color: '#2d6a4f' },
   rejected: { background: '#fdeaea', color: '#c0392b' },
 }
 
 const STATUS_LABELS: Record<SubmittedBidStatus, string> = {
   pending: 'Pending',
   under_review: 'Under Review',
-  awarded: 'Awarded',
+  shortlisted: 'Shortlisted',
   rejected: 'Rejected',
 }
 
@@ -92,37 +92,7 @@ export default async function BidDetailPage({ params }: Props) {
               <p className="text-xs font-medium" style={{ color: '#8a9e96' }}>Line Items</p>
               <p className="mt-0.5 text-sm" style={{ color: '#4a6358' }}>{bid.line_item_count} SKU{bid.line_item_count !== 1 ? 's' : ''}</p>
             </div>
-            {bid.po_number && (
-              <div>
-                <p className="text-xs font-medium" style={{ color: '#8a9e96' }}>PO Number</p>
-                <p
-                  className="mt-0.5 text-sm font-semibold"
-                  style={{ fontFamily: 'var(--font-dm-mono, monospace)', color: '#2d6a4f' }}
-                >
-                  {bid.po_number}
-                </p>
-              </div>
-            )}
           </div>
-
-          {bid.status === 'awarded' && (
-            <div
-              className="mt-3 rounded-md px-3 py-2"
-              style={{ background: '#e8f4ee', border: '1px solid #a8d5ba' }}
-            >
-              <p className="text-xs font-medium" style={{ color: '#2d6a4f' }}>
-                This quote was awarded. View your fulfillment progress in{' '}
-                <Link
-                  href="/vendor/orders"
-                  className="underline"
-                  style={{ color: '#2d6a4f' }}
-                >
-                  My Orders
-                </Link>
-                .
-              </p>
-            </div>
-          )}
         </div>
 
         {/* Line item responses */}

@@ -25,7 +25,7 @@ export default async function VendorRFQPage({
   ])
 
   if (!contractorRFQ) notFound()
-  if (contractorRFQ.status !== 'active' && contractorRFQ.status !== 'po_offered') notFound()
+  if (contractorRFQ.status !== 'active') notFound()
 
   const [project, existingDraft, existingBidList] = await Promise.all([
     getContractorProject(contractorRFQ.project_id),

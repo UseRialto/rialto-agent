@@ -4,17 +4,17 @@ import {
   getContractorProject,
   getContractorRFQ,
   getContractorRFQBids,
-  getContractorOrderByRFQId,
 } from '@/lib/api/contractor'
 import { getSession } from '@/lib/auth/session'
 import { CONTRACTOR_RFQ_STATUS_LABELS, CONTRACTOR_RFQ_STATUS_STYLES } from '@/lib/contractor-display'
 import { getMailboxSummary } from '@/lib/mail/service'
+import { buildLiveQuoteComparisonSummary } from '@/lib/procurement/quote-comparison'
 import { getNegotiationMessagesForVendor } from '@/lib/store/contractor-store'
 import { formatDate } from '@/lib/utils'
 import { BidDashboard } from './_components/BidDashboard'
+import { EditableRFQTitle } from './_components/EditableRFQTitle'
 import { MessageCenter } from './_components/MessageCenter'
 import { RFQActions } from './_components/RFQActions'
-import { ContractorOrderProgressStepper } from '@/app/contractor/orders/_components/ContractorOrderProgressStepper'
 
 function fmt(n: number): string {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`
@@ -42,9 +42,7 @@ export default async function RFQDetailPage({
   const { projectId, rfqId } = await params
   const { section } = (await searchParams) ?? {}
   const activeSection =
-    section === 'purchase-order' || section === 'decision-support'
-      ? 'purchase-order'
-      : section === 'message-center'
+    section === 'message-center'
         ? 'message-center'
       : 'bid-comparison'
   const [project, rfq] = await Promise.all([
@@ -54,11 +52,10 @@ export default async function RFQDetailPage({
 
   if (!project || !rfq) notFound()
 
-  const [bids, order, session] = await Promise.all([
-    rfq.status === 'active' || rfq.status === 'po_offered'
+  const [bids, session] = await Promise.all([
+    rfq.status === 'active'
       ? getContractorRFQBids(rfq)
       : Promise.resolve([]),
-    rfq.status === 'awarded' ? getContractorOrderByRFQId(rfqId) : Promise.resolve(null),
     getSession(),
   ])
   const mailbox = session ? await getMailboxSummary(session.userId) : null
@@ -75,11 +72,11 @@ export default async function RFQDetailPage({
       messages: await getNegotiationMessagesForVendor(rfq.id, vendor.vendorEmail, vendor.vendorId),
     })),
   )
-  const fullBids = bids.filter((bid) => !bid.fulfillment_summary?.partial && (bid.fulfillment_summary?.coverage_ratio ?? 1) >= 1)
-  const lowestBid = fullBids.slice().sort((a, b) => a.total_price - b.total_price)[0]
-  const fastestBid = bids.slice().sort((a, b) => a.lead_time_days - b.lead_time_days)[0]
+  const comparisonSummary = buildLiveQuoteComparisonSummary(rfq, bids)
+  const lowestBid = comparisonSummary.lowestCompleteBid
+  const fastestBid = comparisonSummary.fastestBid
   const quoteStats = [
-    { label: 'Quotes received', value: bids.length.toString(), sub: `${fullBids.length} full quotes` },
+    { label: 'Quotes received', value: bids.length.toString(), sub: `${comparisonSummary.fullQuoteCount} full quotes` },
     { label: 'Lowest complete', value: lowestBid ? fmt(lowestBid.total_price) : '-', sub: lowestBid?.vendor_name ?? 'No full quote' },
     { label: 'Fastest lead', value: fastestBid ? `${fastestBid.lead_time_days}d` : '-', sub: fastestBid?.vendor_name ?? 'No quotes' },
   ]
@@ -92,19 +89,13 @@ export default async function RFQDetailPage({
   for (const email of rfq.invited_vendor_emails ?? []) requestedVendorKeys.add(`email:${email.toLowerCase()}`)
   const requestedVendorCount = requestedVendorKeys.size
 
-  const shippedStage = order?.stage_history.find((s) => s.stage === 'shipped')
-  const isFullScreenComparison = activeSection === 'bid-comparison' && (rfq.status === 'active' || rfq.status === 'po_offered')
+  const isFullScreenComparison = activeSection === 'bid-comparison' && rfq.status === 'active'
   const sectionBaseHref = `/contractor/projects/${projectId}/rfqs/${rfqId}`
   const sectionLinks = [
     {
       key: 'bid-comparison',
       label: 'Quote Comparison',
       href: sectionBaseHref,
-    },
-    {
-      key: 'purchase-order',
-      label: 'Purchase Order',
-      href: `${sectionBaseHref}?section=purchase-order`,
     },
     {
       key: 'message-center',
@@ -125,7 +116,12 @@ export default async function RFQDetailPage({
             <span className="font-medium" style={{ color: '#4a6358' }}>{rfq.title}</span>
           </nav>
           <div className="mb-3 flex flex-wrap items-center gap-3">
-            <h1 className="text-xl font-semibold tracking-tight" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>{rfq.title}</h1>
+            <EditableRFQTitle
+              rfqId={rfq.id}
+              initialTitle={rfq.title}
+              className="text-xl font-semibold tracking-tight"
+              style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}
+            />
             <span className={`rounded border px-2 py-0.5 text-xs font-medium ${CONTRACTOR_RFQ_STATUS_STYLES[rfq.status]}`}>
               {CONTRACTOR_RFQ_STATUS_LABELS[rfq.status]}
             </span>
@@ -209,7 +205,12 @@ export default async function RFQDetailPage({
               </span>
             )}
           </div>
-          <h1 className="text-3xl font-semibold tracking-tight" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>{rfq.title}</h1>
+          <EditableRFQTitle
+            rfqId={rfq.id}
+            initialTitle={rfq.title}
+            className="text-3xl font-semibold tracking-tight"
+            style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}
+          />
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <span className={`rounded border px-2 py-0.5 text-xs font-medium ${CONTRACTOR_RFQ_STATUS_STYLES[rfq.status]}`}>
               {CONTRACTOR_RFQ_STATUS_LABELS[rfq.status]}
@@ -323,15 +324,9 @@ export default async function RFQDetailPage({
         </div>
       )}
 
-      {activeSection === 'bid-comparison' && (rfq.status === 'active' || rfq.status === 'po_offered') && (
+      {activeSection === 'bid-comparison' && rfq.status === 'active' && (
         <section>
           <BidDashboard projectId={projectId} projectName={project.name} rfq={rfq} bids={bids} section="comparison" />
-        </section>
-      )}
-
-      {activeSection === 'purchase-order' && (rfq.status === 'active' || rfq.status === 'po_offered') && bids.length > 0 && (
-        <section>
-          <BidDashboard projectId={projectId} projectName={project.name} rfq={rfq} bids={bids} section="purchase-order" />
         </section>
       )}
 
@@ -343,70 +338,6 @@ export default async function RFQDetailPage({
             vendorThreads={messageVendorThreads}
           />
         </section>
-      )}
-
-      {/* Fulfillment progress (only for awarded RFQs with a linked order) */}
-      {rfq.status === 'awarded' && order && (
-        <div className="mt-6">
-          <h2 className="mb-3 text-sm font-semibold" style={{ color: '#4a6358' }}>Fulfillment Progress</h2>
-
-          <div className="mb-4 grid grid-cols-4 gap-3">
-            <div className="rounded-lg border bg-white p-4 shadow-sm" style={{ borderColor: '#e2d9cf' }}>
-              <p className="text-xs font-medium" style={{ color: '#8a9e96' }}>Vendor</p>
-              <p className="mt-1 text-sm font-semibold" style={{ color: '#1e3a2f' }}>{order.vendor_name}</p>
-            </div>
-            <div className="rounded-lg border bg-white p-4 shadow-sm" style={{ borderColor: '#e2d9cf' }}>
-              <p className="text-xs font-medium" style={{ color: '#8a9e96' }}>PO Number</p>
-              <p className="mt-1 text-sm font-semibold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-dm-mono, monospace)' }}>{order.po_number}</p>
-            </div>
-            <div className="rounded-lg border bg-white p-4 shadow-sm" style={{ borderColor: '#e2d9cf' }}>
-              <p className="text-xs font-medium" style={{ color: '#8a9e96' }}>Agreed Value</p>
-              <p className="mt-1 text-sm font-bold" style={{ color: '#1e3a2f' }}>{fmt(order.agreed_price)}</p>
-            </div>
-            <div className="rounded-lg border bg-white p-4 shadow-sm" style={{ borderColor: '#e2d9cf' }}>
-              <p className="text-xs font-medium" style={{ color: '#8a9e96' }}>Delivery Date</p>
-              <p className="mt-1 text-sm font-semibold" style={{ color: '#1e3a2f' }}>{order.delivery_date}</p>
-            </div>
-          </div>
-
-          <ContractorOrderProgressStepper currentStage={order.current_stage} stageHistory={order.stage_history} />
-
-          {shippedStage && (
-            <div className="mt-4 rounded-lg border px-4 py-3" style={{ borderColor: '#e2d9cf', background: '#ede8e2' }}>
-              <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#8a9e96' }}>Shipping Info</p>
-              <div className="mt-2 grid grid-cols-3 gap-4 text-sm">
-                <div>
-                  <p className="text-xs" style={{ color: '#8a9e96' }}>Carrier</p>
-                  <p className="font-medium" style={{ color: '#1e3a2f' }}>{shippedStage.carrier ?? '-'}</p>
-                </div>
-                <div>
-                  <p className="text-xs" style={{ color: '#8a9e96' }}>Tracking #</p>
-                  <p className="font-medium" style={{ color: '#1e3a2f', fontFamily: 'var(--font-dm-mono, monospace)' }}>{shippedStage.tracking_number ?? '-'}</p>
-                </div>
-                <div>
-                  <p className="text-xs" style={{ color: '#8a9e96' }}>Ship Date</p>
-                  <p className="font-medium" style={{ color: '#1e3a2f' }}>{shippedStage.ship_date ?? '-'}</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="mt-3 text-right">
-            <Link
-              href={`/contractor/orders/${order.id}`}
-              className="text-xs font-medium"
-              style={{ color: '#fa6b04' }}
-            >
-              View full order detail
-            </Link>
-          </div>
-        </div>
-      )}
-
-      {rfq.status === 'awarded' && !order && (
-        <div className="mt-6 rounded-lg border border-dashed px-4 py-6 text-center" style={{ borderColor: '#e2d9cf', background: '#ede8e2' }}>
-          <p className="text-sm" style={{ color: '#8a9e96' }}>No order linked to this RFQ yet.</p>
-        </div>
       )}
     </div>
   )

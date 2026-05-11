@@ -12,8 +12,6 @@ import {
   rfqInvites as rfqInvitesTable,
   bids as bidsTable,
   bidLineItems as bidLineItemsTable,
-  orders as ordersTable,
-  orderStageProgress as stageTable,
   rfqVendorRequests as rfqVendorRequestsTable,
   rfqEmailMessages as rfqEmailMessagesTable,
   rfqReviewTasks as rfqReviewTasksTable,
@@ -27,9 +25,6 @@ import type {
   ContractorRFQLineItem,
   ContractorBid,
   ContractorBidLineItemResponse,
-  ContractorOrder,
-  ContractorOrderStage,
-  ContractorOrderStageProgress,
   ContractorVendorInvite,
 } from '@/lib/types/contractor'
 import type { NegotiationMessage, VendorReliabilityFlag } from '@/lib/types/procurement'
@@ -142,15 +137,7 @@ function assembleRFQ(
     visibility: row.visibility as ContractorRFQ['visibility'],
     bid_deadline: row.bid_deadline ?? undefined,
     created_at: row.created_at,
-    published_at: row.published_at ?? undefined,
-    pending_award: row.pending_bid_id
-      ? {
-          bid_id: row.pending_bid_id,
-          vendor_id: row.pending_vendor_id ?? undefined,
-          vendor_email: row.pending_vendor_email ?? undefined,
-          offered_at: row.pending_offered_at ?? '',
-        }
-      : undefined,
+    published_at: row.published_at ?? undefined
   }
 }
 
@@ -258,47 +245,6 @@ async function assembleBid(
   return bid
 }
 
-function assembleContractorOrder(
-  row: typeof ordersTable.$inferSelect,
-  stages: typeof stageTable.$inferSelect[],
-  rfqTitle: string,
-  projectName: string,
-): ContractorOrder {
-  const snapshot: ContractorRFQLineItem[] = row.line_items_snapshot
-    ? JSON.parse(row.line_items_snapshot)
-    : []
-  return {
-    id: row.id,
-    rfq_id: row.rfq_id,
-    bid_id: row.bid_id,
-    rfq_title: rfqTitle,
-    project_id: row.project_id,
-    project_name: projectName,
-    vendor_name: row.vendor_name,
-    vendor_email: row.vendor_email ?? undefined,
-    po_number: row.po_number,
-    agreed_price: row.agreed_price,
-    ordered_at: row.ordered_at ?? undefined,
-    expected_delivery_date: row.expected_delivery_date ?? undefined,
-    next_follow_up_date: row.next_follow_up_date ?? undefined,
-    follow_up_status: row.follow_up_status as ContractorOrder['follow_up_status'],
-    follow_up_notes: row.follow_up_notes ?? undefined,
-    delivery_date: row.delivery_date ?? '',
-    delivery_location: row.delivery_location ?? '',
-    awarded_at: row.awarded_at,
-    current_stage: row.current_stage as ContractorOrderStage,
-    stage_history: stages.map((s) => ({
-      stage: s.stage as ContractorOrderStage,
-      completed_at: s.completed_at ?? undefined,
-      notes: s.notes ?? undefined,
-      carrier: s.carrier ?? undefined,
-      tracking_number: s.tracking_number ?? undefined,
-      ship_date: s.ship_date ?? undefined,
-    } satisfies ContractorOrderStageProgress)),
-    line_items_snapshot: snapshot,
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Projects
 // ---------------------------------------------------------------------------
@@ -357,7 +303,7 @@ export async function saveProject(project: ContractorProject): Promise<void> {
 
 export async function deleteProject(projectId: string): Promise<void> {
   await db.delete(projectsTable).where(eq(projectsTable.id, projectId))
-  // Cascades: rfqs → rfq_line_items, rfq_invites, bids → bid_line_items, orders → order_stage_progress
+  // Cascades: rfqs → rfq_line_items, rfq_invites, bids → bid_line_items
 }
 
 // ---------------------------------------------------------------------------
@@ -421,10 +367,6 @@ export async function saveRFQ(rfq: ContractorRFQ): Promise<void> {
       bid_deadline: rfq.bid_deadline ?? null,
       created_at: rfq.created_at,
       published_at: rfq.published_at ?? null,
-      pending_bid_id: rfq.pending_award?.bid_id ?? null,
-      pending_vendor_id: rfq.pending_award?.vendor_id ?? null,
-      pending_vendor_email: rfq.pending_award?.vendor_email ?? null,
-      pending_offered_at: rfq.pending_award?.offered_at ?? null,
     })
     .onConflictDoUpdate({
       target: rfqsTable.id,
@@ -464,10 +406,6 @@ export async function saveRFQ(rfq: ContractorRFQ): Promise<void> {
         source_rfq_id: rfq.source_rfq_id ?? null,
         bid_deadline: rfq.bid_deadline ?? null,
         published_at: rfq.published_at ?? null,
-        pending_bid_id: rfq.pending_award?.bid_id ?? null,
-        pending_vendor_id: rfq.pending_award?.vendor_id ?? null,
-        pending_vendor_email: rfq.pending_award?.vendor_email ?? null,
-        pending_offered_at: rfq.pending_award?.offered_at ?? null,
       },
     })
 
@@ -534,7 +472,7 @@ export async function saveRFQ(rfq: ContractorRFQ): Promise<void> {
 
 export async function deleteRFQ(rfqId: string): Promise<void> {
   await db.delete(rfqsTable).where(eq(rfqsTable.id, rfqId))
-  // Cascades: rfq_line_items, rfq_invites, bids → bid_line_items, orders → stages
+  // Cascades: rfq_line_items, rfq_invites, bids → bid_line_items
 }
 
 export async function getProjectRFQs(projectId: string, status?: string): Promise<ContractorRFQ[]> {
@@ -546,7 +484,7 @@ export async function getProjectRFQs(projectId: string, status?: string): Promis
   if (status && status !== 'all') {
     if (status === 'pending') rows = rows.filter((r) => r.status === 'draft')
     else if (status === 'active') rows = rows.filter((r) => r.status === 'active')
-    else if (status === 'closed') rows = rows.filter((r) => r.status === 'awarded' || r.status === 'closed')
+    else if (status === 'closed') rows = rows.filter((r) => r.status === 'closed')
     else rows = rows.filter((r) => r.status === status)
   }
 
@@ -563,7 +501,7 @@ export async function getProjectRFQCounts(projectId: string): Promise<{ total: n
     total: rows.length,
     pending: rows.filter((r) => r.status === 'draft').length,
     active: rows.filter((r) => r.status === 'active').length,
-    awarded: rows.filter((r) => r.status === 'awarded').length,
+    awarded: rows.filter((r) => r.status === 'closed').length,
   }
 }
 
@@ -582,7 +520,7 @@ export async function getProjectRFQCountsByProjectIds(projectIds: string[]): Pro
       total: sql<number>`count(*)::int`,
       pending: sql<number>`sum(case when ${rfqsTable.status} = 'draft' then 1 else 0 end)::int`,
       active: sql<number>`sum(case when ${rfqsTable.status} = 'active' then 1 else 0 end)::int`,
-      awarded: sql<number>`sum(case when ${rfqsTable.status} = 'awarded' then 1 else 0 end)::int`,
+      awarded: sql<number>`sum(case when ${rfqsTable.status} = 'closed' then 1 else 0 end)::int`,
     })
     .from(rfqsTable)
     .where(inArray(rfqsTable.project_id, projectIds))
@@ -606,7 +544,7 @@ export async function getAllActiveRFQs(): Promise<ContractorRFQ[]> {
     .from(rfqsTable)
     .where(
       and(
-        inArray(rfqsTable.status, ['active', 'po_offered']),
+        eq(rfqsTable.status, 'active'),
         ne(rfqsTable.visibility, 'invited_only'),
       ),
     )
@@ -635,7 +573,7 @@ export async function getInvitedRFQsForVendor(vendorEmail: string, vendorId?: st
     .from(rfqsTable)
     .where(
       and(
-        inArray(rfqsTable.status, ['active', 'po_offered']),
+        eq(rfqsTable.status, 'active'),
         inArray(rfqsTable.id, inviteMatches),
       ),
     )
@@ -790,119 +728,6 @@ export async function updateBid(
   if (Object.keys(patch).length > 0) {
     await db.update(bidsTable).set(patch).where(eq(bidsTable.id, bidId))
   }
-}
-
-// ---------------------------------------------------------------------------
-// Contractor Orders
-// ---------------------------------------------------------------------------
-
-async function fetchOrderWithMeta(row: typeof ordersTable.$inferSelect): Promise<ContractorOrder> {
-  const stages = await db.select().from(stageTable).where(eq(stageTable.order_id, row.id))
-  const rfq = (await db.select({ title: rfqsTable.title }).from(rfqsTable).where(eq(rfqsTable.id, row.rfq_id)))[0]
-  const project = (await db.select({ name: projectsTable.name }).from(projectsTable).where(eq(projectsTable.id, row.project_id)))[0]
-  return assembleContractorOrder(row, stages, rfq?.title ?? '', project?.name ?? '')
-}
-
-export async function getContractorOrders(_userId: string): Promise<ContractorOrder[]> {
-  // Return all orders (userId filtering can be added via project.owner_id join if needed)
-  void _userId
-  const rows = await db.select().from(ordersTable)
-  const orders = await Promise.all(rows.map(fetchOrderWithMeta))
-  return orders.sort((a, b) => new Date(b.awarded_at).getTime() - new Date(a.awarded_at).getTime())
-}
-
-export async function getProjectOrders(projectId: string): Promise<ContractorOrder[]> {
-  const rows = await db.select().from(ordersTable).where(eq(ordersTable.project_id, projectId))
-  const orders = await Promise.all(rows.map(fetchOrderWithMeta))
-  return orders.sort((a, b) => new Date(b.awarded_at).getTime() - new Date(a.awarded_at).getTime())
-}
-
-export async function getContractorOrder(orderId: string): Promise<ContractorOrder | null> {
-  const row = (await db.select().from(ordersTable).where(eq(ordersTable.id, orderId)))[0]
-  return row ? fetchOrderWithMeta(row) : null
-}
-
-export async function saveContractorOrder(order: ContractorOrder): Promise<void> {
-  await db.insert(ordersTable)
-    .values({
-      id: order.id,
-      rfq_id: order.rfq_id,
-      bid_id: order.bid_id ?? order.id,
-      project_id: order.project_id,
-      vendor_name: order.vendor_name,
-      vendor_email: order.vendor_email ?? null,
-      po_number: order.po_number,
-      agreed_price: order.agreed_price,
-      ordered_at: order.ordered_at ?? null,
-      expected_delivery_date: order.expected_delivery_date ?? null,
-      next_follow_up_date: order.next_follow_up_date ?? null,
-      follow_up_status: order.follow_up_status ?? null,
-      follow_up_notes: order.follow_up_notes ?? null,
-      delivery_date: order.delivery_date || null,
-      delivery_location: order.delivery_location || null,
-      awarded_at: order.awarded_at,
-      current_stage: order.current_stage,
-      line_items_snapshot: JSON.stringify(order.line_items_snapshot),
-    })
-    .onConflictDoUpdate({
-      target: ordersTable.id,
-      set: {
-        current_stage: order.current_stage,
-        vendor_name: order.vendor_name,
-        vendor_email: order.vendor_email ?? null,
-        po_number: order.po_number,
-        agreed_price: order.agreed_price,
-        ordered_at: order.ordered_at ?? null,
-        expected_delivery_date: order.expected_delivery_date ?? null,
-        next_follow_up_date: order.next_follow_up_date ?? null,
-        follow_up_status: order.follow_up_status ?? null,
-        follow_up_notes: order.follow_up_notes ?? null,
-      },
-    })
-
-  // Replace stage history
-  await db.delete(stageTable).where(eq(stageTable.order_id, order.id))
-  if (order.stage_history.length > 0) {
-    await db.insert(stageTable)
-      .values(
-        order.stage_history.map((s) => ({
-          order_id: order.id,
-          stage: s.stage,
-          completed_at: s.completed_at ?? null,
-          notes: s.notes ?? null,
-          carrier: s.carrier ?? null,
-          tracking_number: s.tracking_number ?? null,
-          ship_date: s.ship_date ?? null,
-        })),
-      )
-  }
-}
-
-export async function getOrderByRFQId(rfqId: string): Promise<ContractorOrder | undefined> {
-  const row = (await db.select().from(ordersTable).where(eq(ordersTable.rfq_id, rfqId)))[0]
-  return row ? fetchOrderWithMeta(row) : undefined
-}
-
-export async function hasActiveOrders(projectId: string): Promise<boolean> {
-  const projectRfqIdRows = await db
-    .select({ id: rfqsTable.id })
-    .from(rfqsTable)
-    .where(eq(rfqsTable.project_id, projectId))
-  const projectRfqIds = projectRfqIdRows.map((r) => r.id)
-
-  if (projectRfqIds.length === 0) return false
-
-  const activeOrder = (await db
-    .select({ id: ordersTable.id })
-    .from(ordersTable)
-    .where(
-      and(
-        inArray(ordersTable.rfq_id, projectRfqIds),
-        ne(ordersTable.current_stage, 'delivered'),
-      ),
-    ))[0]
-
-  return !!activeOrder
 }
 
 export async function getContractorActivity(
@@ -1074,71 +899,6 @@ export async function getContractorActivity(
     }
   }
 
-  const orderRows = await db
-    .select({
-      id: ordersTable.id,
-      rfq_id: ordersTable.rfq_id,
-      project_id: ordersTable.project_id,
-      vendor_name: ordersTable.vendor_name,
-      po_number: ordersTable.po_number,
-      awarded_at: ordersTable.awarded_at,
-      current_stage: ordersTable.current_stage,
-    })
-    .from(ordersTable)
-    .where(inArray(ordersTable.project_id, projectIds))
-
-  const orderIds = orderRows.map((order) => order.id)
-  const orderById = new Map(orderRows.map((order) => [order.id, order]))
-
-  for (const order of orderRows) {
-    const rfq = rfqById.get(order.rfq_id)
-    activity.push({
-      id: `order-awarded-${order.id}`,
-      type: 'order_awarded',
-      title: `PO awarded: ${rfq?.title ?? order.po_number}`,
-      body: `${order.po_number} awarded to ${order.vendor_name}.`,
-      rfq_id: order.rfq_id,
-      project_id: order.project_id,
-      order_id: order.id,
-      read: true,
-      created_at: order.awarded_at,
-    })
-  }
-
-  if (orderIds.length > 0) {
-    const stageRows = await db
-      .select({
-        order_id: stageTable.order_id,
-        stage: stageTable.stage,
-        completed_at: stageTable.completed_at,
-        notes: stageTable.notes,
-        carrier: stageTable.carrier,
-        tracking_number: stageTable.tracking_number,
-      })
-      .from(stageTable)
-      .where(inArray(stageTable.order_id, orderIds))
-
-    for (const stage of stageRows) {
-      if (!stage.completed_at) continue
-      const order = orderById.get(stage.order_id)
-      if (!order) continue
-      const rfq = rfqById.get(order.rfq_id)
-      activity.push({
-        id: `order-stage-${stage.order_id}-${stage.stage}-${stage.completed_at}`,
-        type: orderStageActivityType(stage.stage),
-        title: `Order ${stage.stage.replace(/_/g, ' ')}: ${rfq?.title ?? order.po_number}`,
-        body: stage.tracking_number
-          ? `${order.vendor_name}: ${stage.carrier ?? 'Carrier'} tracking ${stage.tracking_number}.`
-          : stage.notes || `${order.vendor_name} updated ${order.po_number}.`,
-        rfq_id: order.rfq_id,
-        project_id: order.project_id,
-        order_id: order.id,
-        read: stage.stage === 'delivered',
-        created_at: stage.completed_at,
-      })
-    }
-  }
-
   return activity
     .filter((item) => Number.isFinite(new Date(item.created_at).getTime()))
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -1147,14 +907,6 @@ export async function getContractorActivity(
 
 function fmtActivityCurrency(amount: number): string {
   return `$${Math.round(amount).toLocaleString()}`
-}
-
-function orderStageActivityType(stage: string): ContractorActivityNotification['type'] {
-  if (stage === 'packaged') return 'order_packaged'
-  if (stage === 'shipped') return 'order_shipped'
-  if (stage === 'out_for_delivery') return 'order_out_for_delivery'
-  if (stage === 'delivered') return 'order_delivered'
-  return 'order_confirmed'
 }
 
 export async function upsertVendorRelationship(params: {
@@ -1274,40 +1026,6 @@ export async function getNegotiationMessagesForVendor(
           : eq(negotiationMessagesTable.vendor_email, normalizedEmail),
       ),
     )
-    .orderBy(negotiationMessagesTable.created_at, negotiationMessagesTable.id)
+    .orderBy(desc(negotiationMessagesTable.created_at), desc(negotiationMessagesTable.id))
   return rows.map(rowToNegotiationMessage)
-}
-
-// ---------------------------------------------------------------------------
-// PO Award helpers
-// ---------------------------------------------------------------------------
-
-export async function getPendingPOsForVendor(
-  vendorEmail: string,
-  vendorId?: string,
-): Promise<Array<{ rfq: ContractorRFQ; bidId: string }>> {
-  const rows = await db
-    .select()
-    .from(rfqsTable)
-    .where(
-      and(
-        eq(rfqsTable.status, 'po_offered'),
-        vendorId
-          ? or(
-              eq(rfqsTable.pending_vendor_email, vendorEmail),
-              eq(rfqsTable.pending_vendor_id, vendorId),
-            )
-          : eq(rfqsTable.pending_vendor_email, vendorEmail),
-      ),
-    )
-
-  return Promise.all(
-    rows
-      .filter((r) => r.pending_bid_id)
-      .map(async (row) => {
-        const lineItems = await db.select().from(rfqLineItemsTable).where(eq(rfqLineItemsTable.rfq_id, row.id))
-        const invites = await db.select().from(rfqInvitesTable).where(eq(rfqInvitesTable.rfq_id, row.id))
-        return { rfq: assembleRFQ(row, lineItems, invites), bidId: row.pending_bid_id! }
-      })
-  )
 }

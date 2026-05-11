@@ -25,7 +25,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-3">
             <span className="hidden items-center gap-1.5 text-xs font-medium sm:flex" style={{ color: '#8a9e96' }}>
               <BadgeCheck className="h-3.5 w-3.5" style={{ color: '#fa6b04' }} />
-              Procurement intelligence powered by AI
+              Quote requests and comparisons powered by AI
             </span>
             <span className="h-4 w-px" style={{ background: '#e2d9cf' }} />
             {session && (

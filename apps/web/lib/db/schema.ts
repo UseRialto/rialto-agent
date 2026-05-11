@@ -123,7 +123,7 @@ export const rfqs = pgTable('rfqs', {
   email_subject: text('email_subject'),
   email_body: text('email_body'),
   category: text('category'),
-  status: text('status', { enum: ['draft', 'active', 'closed', 'awarded', 'po_offered'] }).notNull().default('draft'),
+  status: text('status', { enum: ['draft', 'active', 'closed'] }).notNull().default('draft'),
   visibility: text('visibility', { enum: ['public', 'invited_only'] }).notNull().default('public'),
   anonymous_public_listing: boolean('anonymous_public_listing').notNull().default(false),
   procurement_objective: text('procurement_objective'),
@@ -154,11 +154,6 @@ export const rfqs = pgTable('rfqs', {
   bid_deadline: text('bid_deadline'),
   created_at: text('created_at').notNull(),
   published_at: text('published_at'),
-  // pending_award inlined - all null when not in po_offered state
-  pending_bid_id: text('pending_bid_id'),
-  pending_vendor_id: text('pending_vendor_id'),
-  pending_vendor_email: text('pending_vendor_email'),
-  pending_offered_at: text('pending_offered_at'),
 })
 
 // ---------------------------------------------------------------------------
@@ -224,10 +219,9 @@ export const bids = pgTable('bids', {
   buyer_decision_status: text('buyer_decision_status', { enum: ['preferred', 'alternate', 'hold', 'do_not_use'] }),
   decision_rationale: text('decision_rationale'),
   vendor_reliability_flag: text('vendor_reliability_flag', { enum: ['trusted', 'neutral', 'unreliable'] }),
-  status: text('status', { enum: ['pending', 'under_review', 'shortlisted', 'awarded', 'rejected'] }).notNull().default('pending'),
+  status: text('status', { enum: ['pending', 'under_review', 'shortlisted', 'rejected'] }).notNull().default('pending'),
   is_draft: boolean('is_draft').notNull().default(false),
-  po_number: text('po_number'),
-  source: text('source', { enum: ['platform', 'email', 'magic_form'] }).notNull().default('platform'),
+  source: text('source', { enum: ['platform', 'email', 'magic_form', 'external_workbook'] }).notNull().default('platform'),
 })
 
 // ---------------------------------------------------------------------------
@@ -290,49 +284,6 @@ export const bidSpecComplianceItems = pgTable('bid_spec_compliance_items', {
   reportIdx: index('idx_bid_spec_compliance_items_report').on(table.report_id),
   bidItemIdx: index('idx_bid_spec_compliance_items_bid_item').on(table.bid_id, table.rfq_line_item_id),
 }))
-
-// ---------------------------------------------------------------------------
-// Orders - unified, replaces ContractorOrder + VendorOrder
-// ---------------------------------------------------------------------------
-export const orders = pgTable('orders', {
-  id: text('id').primaryKey(),
-  rfq_id: text('rfq_id').notNull().references(() => rfqs.id),
-  bid_id: text('bid_id').notNull().references(() => bids.id),
-  project_id: text('project_id').notNull().references(() => projects.id),
-  vendor_id: text('vendor_id'),
-  vendor_name: text('vendor_name').notNull(),
-  po_number: text('po_number').notNull(),
-  agreed_price: real('agreed_price').notNull(),
-  ordered_at: text('ordered_at'),
-  expected_delivery_date: text('expected_delivery_date'),
-  next_follow_up_date: text('next_follow_up_date'),
-  follow_up_status: text('follow_up_status', { enum: ['on_track', 'needs_follow_up', 'escalated', 'complete'] }),
-  follow_up_notes: text('follow_up_notes'),
-  delivery_date: text('delivery_date'),
-  delivery_location: text('delivery_location'),
-  awarded_at: text('awarded_at').notNull(),
-  vendor_email: text('vendor_email'),
-  current_stage: text('current_stage', {
-    enum: ['confirmed', 'packaged', 'shipped', 'out_for_delivery', 'delivered'],
-  }).notNull().default('confirmed'),
-  line_items_snapshot: text('line_items_snapshot'), // JSON - intentional denormalization
-})
-
-// ---------------------------------------------------------------------------
-// Order Stage Progress
-// ---------------------------------------------------------------------------
-export const orderStageProgress = pgTable('order_stage_progress', {
-  id: serial('id').primaryKey(),
-  order_id: text('order_id').notNull().references(() => orders.id, { onDelete: 'cascade' }),
-  stage: text('stage', {
-    enum: ['confirmed', 'packaged', 'shipped', 'out_for_delivery', 'delivered'],
-  }).notNull(),
-  completed_at: text('completed_at'),
-  notes: text('notes'),
-  carrier: text('carrier'),
-  tracking_number: text('tracking_number'),
-  ship_date: text('ship_date'),
-})
 
 // ---------------------------------------------------------------------------
 // RFQ Mail Sync / Quote Return Flow
@@ -509,25 +460,4 @@ export const negotiationMessages = pgTable('negotiation_messages', {
   created_at: text('created_at').notNull(),
 }, (table) => ({
   rfqBidIdx: index('idx_negotiation_messages_rfq_bid').on(table.rfq_id, table.bid_id),
-}))
-
-// ---------------------------------------------------------------------------
-// Order Magic Links (vendor reminder emails with status-update tokens)
-// ---------------------------------------------------------------------------
-export const orderMagicLinks = pgTable('order_magic_links', {
-  id: serial('id').primaryKey(),
-  order_id: text('order_id').notNull().references(() => orders.id, { onDelete: 'cascade' }),
-  vendor_email: text('vendor_email').notNull(),
-  token_hash: text('token_hash').notNull(),
-  reminder_index: integer('reminder_index').notNull(), // 1–4
-  send_at: text('send_at').notNull(),     // ISO date: when cron should dispatch
-  sent_at: text('sent_at'),              // set when email dispatched
-  opened_at: text('opened_at'),          // set on first page load
-  used_at: text('used_at'),             // set on first submission
-  expires_at: text('expires_at').notNull(),
-  created_at: text('created_at').notNull(),
-}, (table) => ({
-  tokenHashUnique: uniqueIndex('order_magic_links_token_hash_unique').on(table.token_hash),
-  orderReminderUnique: uniqueIndex('order_magic_links_order_reminder_unique').on(table.order_id, table.reminder_index),
-  orderDueIdx: index('idx_order_magic_links_order_send').on(table.order_id, table.send_at),
 }))

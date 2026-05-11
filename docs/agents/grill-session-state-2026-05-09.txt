@@ -9,7 +9,7 @@ Context:
 Important v1 boundary:
 - Rialto v1 sends quote requests, captures vendor responses, extracts response data, and automates the Excel-like quote comparison workflow.
 - Rialto v1 stops at comparison.
-- No awards, selected-vendor notifications, decline emails, purchase orders, or purchasing handoff workflows in v1.
+- No selected-vendor notifications, decline emails, or post-comparison fulfillment workflows in v1.
 - Vendor Selection can exist as comparison sheet state only.
 
 Recent resolved decisions:

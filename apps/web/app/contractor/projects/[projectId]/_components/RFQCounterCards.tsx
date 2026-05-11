@@ -1,4 +1,4 @@
-import { CheckCircle2, ClipboardList, FileClock, Radio } from 'lucide-react'
+import { ClipboardList, FileClock, Radio } from 'lucide-react'
 
 interface Props {
   counts: { total: number; pending: number; active: number; awarded: number }
@@ -33,15 +33,6 @@ export function RFQCounterCards({ counts }: Props) {
       border: '#a8d5ba',
       description: 'Published - accepting quotes',
       icon: Radio,
-    },
-    {
-      label: 'Awarded',
-      value: counts.awarded,
-      color: '#1e3a2f',
-      bg: '#e8f4ee',
-      border: '#a8d5ba',
-      description: 'PO issued',
-      icon: CheckCircle2,
     },
   ]
 

@@ -21,7 +21,7 @@ export default function LoginPage() {
             </div>
           </div>
           <h1 className="max-w-2xl text-5xl font-semibold tracking-tight text-white" style={{ fontFamily: 'var(--font-lora, Georgia, serif)' }}>
-            Turn RFQs, quotes, and purchase orders into one controlled workflow.
+            Turn RFQs and vendor quotes into one controlled comparison workflow.
           </h1>
           <p className="mt-5 max-w-xl text-base leading-7" style={{ color: 'rgba(255,255,255,0.6)' }}>
             Contractor and vendor teams share a focused workspace for project sourcing, quote comparison, mailbox replies, and order tracking.

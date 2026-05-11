@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth/session'
+import { proposeComparisonCommandFallback } from '@/lib/procurement/comparison-command-fallback'
 
 const RIALTO_AGENT_API_URL = process.env.RIALTO_AGENT_API_URL ?? 'http://localhost:8787'
 
 interface SchemaColumn {
   key: string
   label: string
-  kind: 'rfq-core' | 'rfq-attribute' | 'rfq-standard' | 'vendor' | 'derived'
+  kind: 'rfq-core' | 'rfq-attribute' | 'rfq-standard' | 'vendor' | 'derived' | 'manual'
   vendorId?: string
   vendorName?: string
   metric?: 'unit_price' | 'total' | 'lead'
@@ -49,6 +50,21 @@ interface PatchDerivedColumn {
   insertAfterColKey?: string
 }
 
+interface PatchManualColumn {
+  key: string
+  label: string
+  insertAfterColKey?: string
+}
+
+interface PatchManualLineItem {
+  id: string
+  sku: string
+  description: string
+  quantity: number
+  unit: string
+  insertAfterLineItemId?: string
+}
+
 interface ComparisonViewPatch {
   summary: string
   hideColumnKeys?: string[]
@@ -60,6 +76,11 @@ interface ComparisonViewPatch {
   clearHighlights?: boolean
   addDerivedColumns?: PatchDerivedColumn[]
   removeDerivedColumnKeys?: string[]
+  addManualColumns?: PatchManualColumn[]
+  addManualLineItems?: PatchManualLineItem[]
+  setCells?: Array<{ rowKey: string; colKey: string; value: string }>
+  setColumnLabels?: Array<{ colKey: string; label: string }>
+  setLineItemOrder?: string[]
 }
 
 interface RawAIResponse {
@@ -78,6 +99,11 @@ interface RawAIResponse {
   clearHighlights?: boolean
   addDerivedColumns?: Array<Partial<PatchDerivedColumn>>
   removeDerivedColumnKeys?: string[]
+  addManualColumns?: Array<Partial<PatchManualColumn>>
+  addManualLineItems?: Array<Partial<PatchManualLineItem>>
+  setCells?: Array<{ rowKey?: unknown; colKey?: unknown; value?: unknown }>
+  setColumnLabels?: Array<{ colKey?: unknown; label?: unknown }>
+  setLineItemOrder?: unknown[]
 }
 
 function isCorePinned(key: string) {
@@ -145,6 +171,8 @@ function fallbackPatch(message: string, schema: RequestBody['sheetSchema']): Raw
   const cols = schema?.columns ?? []
   const items = schema?.lineItems ?? []
   const color = pickColor(message)
+  const commandPatch = proposeComparisonCommandFallback(message, { columns: cols })
+  if (commandPatch) return commandPatch
 
   // 1) Clear/reset highlights
   if (/\b(clear|reset|remove all)\b.*(highlight|color|colour)/.test(lower)) {
@@ -305,6 +333,40 @@ function normalizePatch(raw: RawAIResponse): ComparisonViewPatch {
   }
   if (Array.isArray(raw.removeDerivedColumnKeys) && raw.removeDerivedColumnKeys.length) {
     patch.removeDerivedColumnKeys = raw.removeDerivedColumnKeys.filter((k) => typeof k === 'string')
+  }
+  if (Array.isArray(raw.addManualColumns) && raw.addManualColumns.length) {
+    patch.addManualColumns = raw.addManualColumns
+      .filter((c): c is Partial<PatchManualColumn> => Boolean(c?.key && c?.label))
+      .map((c) => ({
+        key: String(c.key),
+        label: String(c.label),
+        insertAfterColKey: typeof c.insertAfterColKey === 'string' ? c.insertAfterColKey : undefined,
+      }))
+  }
+  if (Array.isArray(raw.addManualLineItems) && raw.addManualLineItems.length) {
+    patch.addManualLineItems = raw.addManualLineItems
+      .filter((r): r is Partial<PatchManualLineItem> => Boolean(r?.id))
+      .map((r) => ({
+        id: String(r.id),
+        sku: typeof r.sku === 'string' ? r.sku : '',
+        description: typeof r.description === 'string' ? r.description : '',
+        quantity: typeof r.quantity === 'number' ? r.quantity : 0,
+        unit: typeof r.unit === 'string' ? r.unit : '',
+        insertAfterLineItemId: typeof r.insertAfterLineItemId === 'string' ? r.insertAfterLineItemId : undefined,
+      }))
+  }
+  if (Array.isArray(raw.setCells) && raw.setCells.length) {
+    patch.setCells = raw.setCells
+      .filter((cell): cell is { rowKey: string; colKey: string; value?: unknown } => typeof cell?.rowKey === 'string' && typeof cell?.colKey === 'string')
+      .map((cell) => ({ rowKey: cell.rowKey, colKey: cell.colKey, value: cell.value == null ? '' : String(cell.value) }))
+  }
+  if (Array.isArray(raw.setColumnLabels) && raw.setColumnLabels.length) {
+    patch.setColumnLabels = raw.setColumnLabels
+      .filter((col): col is { colKey: string; label: string } => typeof col?.colKey === 'string' && typeof col?.label === 'string')
+      .map((col) => ({ colKey: col.colKey, label: col.label }))
+  }
+  if (Array.isArray(raw.setLineItemOrder) && raw.setLineItemOrder.length) {
+    patch.setLineItemOrder = raw.setLineItemOrder.filter((id): id is string => typeof id === 'string')
   }
   return patch
 }

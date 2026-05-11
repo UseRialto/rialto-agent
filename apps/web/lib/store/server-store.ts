@@ -1,7 +1,6 @@
 /**
  * Vendor session store - backed by Neon Postgres via Drizzle.
  * Drafts and submitted bids both live in the bids table (is_draft flag).
- * Orders live in the unified orders table, scoped by vendor_id.
  * SERVER-SIDE ONLY - never import from client components.
  */
 
@@ -10,12 +9,10 @@ import { db } from '@/lib/db'
 import {
   bids as bidsTable,
   bidLineItems as bidLineItemsTable,
-  orders as ordersTable,
-  orderStageProgress as stageTable,
   rfqs as rfqsTable,
   projects as projectsTable,
 } from '@/lib/db/schema'
-import type { BidDraft, BidLineItemResponse, SubmittedBid, VendorOrder, OrderStage, OrderStageProgress } from '@/lib/types/vendor'
+import type { BidDraft, BidLineItemResponse, SubmittedBid } from '@/lib/types/vendor'
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback
@@ -46,49 +43,6 @@ function rowToBidLineItemResponse(row: typeof bidLineItemsTable.$inferSelect): B
     quoted_product_details: row.quoted_product_details ?? undefined,
     response_attributes: parseJson(row.response_attributes_json, []),
     is_alternate: row.is_alternate,
-  }
-}
-
-async function assembleVendorOrder(
-  row: typeof ordersTable.$inferSelect,
-  stages: typeof stageTable.$inferSelect[],
-): Promise<VendorOrder> {
-  const snapshot = row.line_items_snapshot ? JSON.parse(row.line_items_snapshot) : []
-  // Load line item responses for the winning bid
-  const responses = await db
-    .select()
-    .from(bidLineItemsTable)
-    .where(eq(bidLineItemsTable.bid_id, row.bid_id))
-
-  // Look up rfq_title and project/contractor name
-  const rfq = (await db.select({ title: rfqsTable.title }).from(rfqsTable).where(eq(rfqsTable.id, row.rfq_id)))[0]
-  const project = (await db.select({ name: projectsTable.name, owner_id: projectsTable.owner_id }).from(projectsTable).where(eq(projectsTable.id, row.project_id)))[0]
-
-  return {
-    id: row.id,
-    rfq_id: row.rfq_id,
-    bid_id: row.bid_id,
-    rfq_title: rfq?.title ?? '',
-    project_id: row.project_id,
-    project_name: project?.name ?? '',
-    contractor_name: row.vendor_name, // filled by acceptPOAction with contractorName
-    po_number: row.po_number,
-    agreed_price: row.agreed_price,
-    line_items_snapshot: snapshot,
-    line_item_responses: responses.map(rowToBidLineItemResponse),
-    delivery_date: row.delivery_date ?? '',
-    delivery_location: row.delivery_location ?? '',
-    awarded_at: row.awarded_at,
-    current_stage: row.current_stage as OrderStage,
-    stage_history: stages.map((s) => ({
-      stage: s.stage as OrderStage,
-      completed_at: s.completed_at ?? undefined,
-      notes: s.notes ?? undefined,
-      carrier: s.carrier ?? undefined,
-      tracking_number: s.tracking_number ?? undefined,
-      ship_date: s.ship_date ?? undefined,
-    } satisfies OrderStageProgress)),
-    vendor_id: row.vendor_id ?? undefined,
   }
 }
 
@@ -247,7 +201,6 @@ export async function getSubmittedBids(): Promise<SubmittedBid[]> {
       total_price: row.total_price,
       line_item_count: lineItems.length,
       status: row.status as SubmittedBid['status'],
-      po_number: row.po_number ?? undefined,
       line_item_responses: lineItems.map(rowToBidLineItemResponse),
       vendor_id: row.vendor_id ?? undefined,
       terms: {
@@ -289,7 +242,6 @@ export async function recordSingleBid(bid: SubmittedBid): Promise<void> {
       lead_time_days: 0,
       status: bid.status,
       is_draft: false,
-      po_number: bid.po_number ?? null,
     })
     .onConflictDoUpdate({
       target: bidsTable.id,
@@ -297,7 +249,6 @@ export async function recordSingleBid(bid: SubmittedBid): Promise<void> {
         status: bid.status,
         total_price: bid.total_price,
         designer_name: bid.designer_name ?? null,
-        po_number: bid.po_number ?? null,
       },
     })
 }
@@ -305,73 +256,8 @@ export async function recordSingleBid(bid: SubmittedBid): Promise<void> {
 export async function updateSubmittedBid(bidId: string, updates: Partial<SubmittedBid>): Promise<void> {
   const patch: Partial<typeof bidsTable.$inferInsert> = {}
   if (updates.status !== undefined) patch.status = updates.status
-  if (updates.po_number !== undefined) patch.po_number = updates.po_number ?? null
   if (updates.designer_name !== undefined) patch.designer_name = updates.designer_name ?? null
   if (Object.keys(patch).length > 0) {
     await db.update(bidsTable).set(patch).where(eq(bidsTable.id, bidId))
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Orders
-// ---------------------------------------------------------------------------
-
-export async function getOrders(): Promise<Record<string, VendorOrder>> {
-  const rows = await db.select().from(ordersTable)
-  const result: Record<string, VendorOrder> = {}
-  await Promise.all(rows.map(async (row) => {
-    const stages = await db.select().from(stageTable).where(eq(stageTable.order_id, row.id))
-    result[row.id] = await assembleVendorOrder(row, stages)
-  }))
-  return result
-}
-
-export async function getOrder(orderId: string): Promise<VendorOrder | null> {
-  const row = (await db.select().from(ordersTable).where(eq(ordersTable.id, orderId)))[0]
-  if (!row) return null
-  const stages = await db.select().from(stageTable).where(eq(stageTable.order_id, row.id))
-  return assembleVendorOrder(row, stages)
-}
-
-export async function saveOrder(order: VendorOrder): Promise<void> {
-  await db.insert(ordersTable)
-    .values({
-      id: order.id,
-      rfq_id: order.rfq_id,
-      bid_id: order.bid_id ?? order.id,
-      project_id: order.project_id,
-      vendor_id: order.vendor_id ?? null,
-      vendor_name: order.contractor_name, // contractor_name stored in vendor_name field
-      po_number: order.po_number,
-      agreed_price: order.agreed_price,
-      delivery_date: order.delivery_date || null,
-      delivery_location: order.delivery_location || null,
-      awarded_at: order.awarded_at,
-      current_stage: order.current_stage,
-      line_items_snapshot: JSON.stringify(order.line_items_snapshot),
-    })
-    .onConflictDoUpdate({
-      target: ordersTable.id,
-      set: {
-        current_stage: order.current_stage,
-        vendor_id: order.vendor_id ?? null,
-      },
-    })
-
-  // Replace stage history
-  await db.delete(stageTable).where(eq(stageTable.order_id, order.id))
-  if (order.stage_history.length > 0) {
-    await db.insert(stageTable)
-      .values(
-        order.stage_history.map((s) => ({
-          order_id: order.id,
-          stage: s.stage,
-          completed_at: s.completed_at ?? null,
-          notes: s.notes ?? null,
-          carrier: s.carrier ?? null,
-          tracking_number: s.tracking_number ?? null,
-          ship_date: s.ship_date ?? null,
-        })),
-      )
   }
 }

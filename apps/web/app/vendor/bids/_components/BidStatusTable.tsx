@@ -13,14 +13,14 @@ type FilterTab = 'all' | SubmittedBidStatus
 const STATUS_STYLES: Record<SubmittedBidStatus, React.CSSProperties> = {
   pending: { background: '#ede8e2', color: '#4a6358' },
   under_review: { background: '#fff3eb', color: '#fa6b04' },
-  awarded: { background: '#e8f4ee', color: '#2d6a4f' },
+  shortlisted: { background: '#e8f4ee', color: '#2d6a4f' },
   rejected: { background: '#fdeaea', color: '#c0392b' },
 }
 
 const STATUS_LABELS: Record<SubmittedBidStatus, string> = {
   pending: 'Pending',
   under_review: 'Under Review',
-  awarded: '✓ Awarded',
+  shortlisted: '✓ Shortlisted',
   rejected: 'Rejected',
 }
 
@@ -28,7 +28,7 @@ const TABS: { key: FilterTab; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'pending', label: 'Pending' },
   { key: 'under_review', label: 'Under Review' },
-  { key: 'awarded', label: 'Awarded' },
+  { key: 'shortlisted', label: 'Shortlisted' },
   { key: 'rejected', label: 'Rejected' },
 ]
 
@@ -100,10 +100,10 @@ export function BidStatusTable({ bids }: Props) {
                   key={bid.id}
                   style={{
                     borderBottom: '1px solid #ede8e2',
-                    background: bid.status === 'awarded' ? '#e8f4ee' : '#ffffff',
+                    background: bid.status === 'shortlisted' ? '#e8f4ee' : '#ffffff',
                   }}
                   onMouseEnter={(e) => (e.currentTarget.style.background = '#ede8e2')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = bid.status === 'awarded' ? '#e8f4ee' : '#ffffff')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = bid.status === 'shortlisted' ? '#e8f4ee' : '#ffffff')}
                 >
                   <td className="px-4 py-3">
                     <p className="text-sm font-medium" style={{ color: '#1e3a2f' }}>{bid.rfq_title}</p>
@@ -124,14 +124,6 @@ export function BidStatusTable({ bids }: Props) {
                       >
                         {STATUS_LABELS[bid.status]}
                       </span>
-                      {bid.po_number && (
-                        <span
-                          className="text-xs"
-                          style={{ fontFamily: 'var(--font-dm-mono, monospace)', color: '#2d6a4f' }}
-                        >
-                          {bid.po_number}
-                        </span>
-                      )}
                     </div>
                   </td>
                 </tr>

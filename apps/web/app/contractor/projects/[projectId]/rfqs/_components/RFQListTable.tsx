@@ -19,7 +19,7 @@ export function RFQListTable({ rfqs, projectId }: Props) {
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [error, setError] = useState('')
   const [isPending, startTransition] = useTransition()
-  const selectableRfqs = rfqs.filter((rfq) => rfq.status !== 'awarded' && rfq.status !== 'po_offered')
+  const selectableRfqs = rfqs
   const allSelected = selectableRfqs.length > 0 && selectableRfqs.every((rfq) => selectedIds.includes(rfq.id))
 
   function toggleSelected(rfqId: string) {
@@ -117,7 +117,7 @@ export function RFQListTable({ rfqs, projectId }: Props) {
                   type="checkbox"
                   checked={selectedIds.includes(rfq.id)}
                   onChange={() => toggleSelected(rfq.id)}
-                  disabled={rfq.status === 'awarded' || rfq.status === 'po_offered'}
+                  disabled={false}
                   aria-label={`Select ${rfq.title}`}
                   className="h-4 w-4 rounded disabled:opacity-30"
                   style={{ accentColor: '#1e3a2f' }}

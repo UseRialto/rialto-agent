@@ -220,7 +220,7 @@ export function fallbackComparisonPatch(request: ComparisonPatchRequest): Compar
 function buildComparisonPatchPrompt(request: ComparisonPatchRequest) {
   return [
     'You are Rialto Agent, controlling a visible construction quote comparison sheet.',
-    'Convert the user instruction into a safe preview patch. Do not claim to send emails, award work, create POs, notify vendors, or mutate hidden backend state.',
+    'Convert the user instruction into a safe preview patch. Do not claim to send emails, select vendors, notify vendors, or mutate hidden backend state.',
     'The comparison spec: partial quotes may be shown but must not be crowned as lowest complete; quantity mismatches, no-bids, alternates, and unresolved scope need visible caveats; agent edits are previewed and highlighted for review.',
     'Use only real column keys, line item ids, and rule names from the schema.',
     'Return JSON only with this shape: {"summary":"...","hideColumnKeys":[],"showColumnKeys":[],"hideLineItemIds":[],"showLineItemIds":[],"addHighlights":[{"id":"...","selector":{"kind":"rule","rule":"lowest-price-per-row"},"color":"#bbf7d0","note":"..."}],"removeHighlightIds":[],"clearHighlights":false,"addDerivedColumns":[],"removeDerivedColumnKeys":[]}.',

@@ -8,7 +8,6 @@ import type {
   ContractorActivityNotification,
   ContractorRFQ,
   ContractorBid,
-  ContractorOrder,
   OpenContractorRFQ,
 } from '@/lib/types/contractor'
 import {
@@ -23,10 +22,6 @@ import {
   getRFQById,
   getBidsForRFQ,
   appendBidToRFQ,
-  getOrderByRFQId,
-  getContractorOrders,
-  getContractorOrder as storeGetContractorOrder,
-  getProjectOrders,
   getContractorActivity as storeGetContractorActivity,
 } from '@/lib/store/contractor-store'
 import { findUserById } from '@/lib/auth/users'
@@ -72,14 +67,6 @@ export async function getContractorProjectRFQCountsByProjectIds(
   return getProjectRFQCountsByProjectIds(projectIds)
 }
 
-export async function getContractorProjectOrders(projectId: string): Promise<ContractorOrder[]> {
-  return getProjectOrders(projectId)
-}
-
-export async function getContractorOrderByRFQId(rfqId: string): Promise<ContractorOrder | null> {
-  return (await getOrderByRFQId(rfqId)) ?? null
-}
-
 async function enrichRFQ(rfq: ContractorRFQ): Promise<OpenContractorRFQ> {
   const project = await getProject(rfq.project_id)
   const owner = project && project.owner_id !== 'fixture' ? await findUserById(project.owner_id) : null
@@ -118,28 +105,4 @@ export async function getContractorRFQBids(rfq: ContractorRFQ): Promise<Contract
       risk_flags: deriveBidRiskFlags(rfq, { ...bid, fulfillment_summary: fulfillmentSummary }),
     }
   })
-}
-
-// --- Contractor Orders ---
-
-export async function getContractorOrdersGrouped(
-  userId: string,
-): Promise<Record<string, { project: ContractorProject; orders: ContractorOrder[] }>> {
-  const orders = await getContractorOrders(userId)
-  const result: Record<string, { project: ContractorProject; orders: ContractorOrder[] }> = {}
-
-  for (const order of orders) {
-    if (!result[order.project_id]) {
-      const project = await getProject(order.project_id)
-      if (!project) continue
-      result[order.project_id] = { project, orders: [] }
-    }
-    result[order.project_id].orders.push(order)
-  }
-
-  return result
-}
-
-export async function getContractorOrderDetail(orderId: string): Promise<ContractorOrder | null> {
-  return storeGetContractorOrder(orderId)
 }

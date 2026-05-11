@@ -12,19 +12,16 @@ import {
   getRFQ,
   deleteProject,
   deleteRFQ,
-  hasActiveOrders,
   getProjectRFQs,
   getBidsForRFQ,
   updateBid,
   addNegotiationMessage,
   getRFQById,
   getVendorRelationship,
-  getContractorOrder,
-  saveContractorOrder,
   upsertVendorRelationship,
 } from '@/lib/store/contractor-store'
 import { disconnectMailboxOAuth, getMailboxSummary, humanizeMailError, sendNegotiationThreadReply, sendRFQEmails, sendRFQInvites, syncRFQReplies } from '@/lib/mail/service'
-import type { ContractorBid, ContractorOrder, ContractorProject, ContractorRFQ, OffPlatformSendSummary } from '@/lib/types/contractor'
+import type { ContractorProject, ContractorRFQ, OffPlatformSendSummary } from '@/lib/types/contractor'
 import type { FormState } from '@/lib/actions/auth'
 import type {
   AISpecAssistantResult,
@@ -36,7 +33,6 @@ import type {
 } from '@/lib/types/procurement'
 import { computeFulfillmentSummary, deriveBidRiskFlags } from '@/lib/procurement-helpers'
 import { deriveCommodityWatch, deriveRequestRiskFlags } from '@/lib/procurement-config'
-import { scheduleOrderReminders } from '@/lib/order-reminders'
 import { findUserById, updateUser } from '@/lib/auth/users'
 import { createProjectSpecDocument } from '@/lib/spec-compliance/store'
 import { runBidSpecCompliance } from '@/lib/spec-compliance'
@@ -245,20 +241,10 @@ export async function deleteProjectAction(
   const session = await getSession()
   if (!session) return { success: false, error: 'Not authenticated' }
 
-  // Block if there are active (non-delivered) orders for this project
-  if (await hasActiveOrders(projectId)) {
-    return {
-      success: false,
-      error: 'Cannot delete project with active orders. Wait until all orders are delivered.',
-    }
-  }
-
-  // Cascade delete non-awarded RFQs
+  // Cascade delete RFQs before removing the project.
   const rfqs = await getProjectRFQs(projectId)
   for (const rfq of rfqs) {
-    if (rfq.status !== 'awarded') {
-      await deleteRFQ(rfq.id)
-    }
+    await deleteRFQ(rfq.id)
   }
 
   await deleteProject(projectId)
@@ -518,9 +504,6 @@ export async function bulkDeleteRFQsAction(
     const rfq = await getRFQ(rfqId)
     if (!rfq) continue
     if (rfq.project_id !== projectId) return { success: false, error: 'One selected RFQ does not belong to this project.' }
-    if (rfq.status === 'po_offered' || rfq.status === 'awarded') {
-      return { success: false, error: 'Cannot delete RFQs with a pending or awarded PO.' }
-    }
     await deleteRFQ(rfqId)
     deletedCount += 1
   }
@@ -541,9 +524,6 @@ export async function retractRFQAction(
 
   const rfq = await getRFQ(rfqId)
   if (!rfq) return { success: false, error: 'RFQ not found' }
-  if (rfq.status === 'po_offered' || rfq.status === 'awarded') {
-    return { success: false, error: 'Cannot retract an RFQ with a pending or awarded PO' }
-  }
   if (rfq.status !== 'active') {
     return { success: false, error: 'Only active RFQs can be retracted' }
   }
@@ -552,231 +532,6 @@ export async function retractRFQAction(
   revalidatePath(`/contractor/projects/${projectId}`)
 
   return { success: true }
-}
-
-// --- Award PO ---
-
-type SplitPOAllocationInput = {
-  bidId: string
-  lineItemId: string
-  quantity: number
-}
-
-function dateOnlyAfterDays(days: number) {
-  const date = new Date()
-  date.setDate(date.getDate() + Math.max(0, days))
-  return date.toISOString().slice(0, 10)
-}
-
-function makePoNumber(index = 0) {
-  const suffix = crypto.randomUUID().slice(0, 6).toUpperCase()
-  return `PO-${new Date().getFullYear()}-${suffix}${index > 0 ? `-${index + 1}` : ''}`
-}
-
-function getLineResponse(bid: ContractorBid, lineItemId: string) {
-  return bid.line_item_responses.find((entry) => entry.line_item_id === lineItemId)
-}
-
-async function createTrackingOrdersForAllocations(
-  rfq: ContractorRFQ,
-  allocations: SplitPOAllocationInput[],
-  handoffNotes?: string,
-): Promise<{ success: boolean; error?: string }> {
-  const project = await getProject(rfq.project_id)
-  if (!project) return { success: false, error: 'Project not found' }
-
-  const bids = await getBidsForRFQ(rfq.id)
-  const bidsById = new Map(bids.map((bid) => [bid.id, bid]))
-  const rfqItemsById = new Map(rfq.line_items.map((item) => [item.id, item]))
-  const normalized = allocations
-    .map((allocation) => ({
-      ...allocation,
-      quantity: Number(allocation.quantity),
-    }))
-    .filter((allocation) => allocation.quantity > 0)
-
-  if (normalized.length === 0) {
-    return { success: false, error: 'Add at least one PO quantity before creating orders.' }
-  }
-
-  const allocatedByLine = new Map<string, number>()
-  for (const allocation of normalized) {
-    const bid = bidsById.get(allocation.bidId)
-    const rfqItem = rfqItemsById.get(allocation.lineItemId)
-    if (!bid || !rfqItem) return { success: false, error: 'One or more PO allocations are no longer valid.' }
-    if (bid.source === 'email') {
-      return { success: false, error: `${bid.vendor_name} is an email-origin bid and cannot receive a PO yet.` }
-    }
-
-    const response = getLineResponse(bid, allocation.lineItemId)
-    if (!response || response.availability === 'unavailable') {
-      return { success: false, error: `${bid.vendor_name} cannot fulfill ${rfqItem.sku || rfqItem.description}.` }
-    }
-    const fulfillableQty = response.units_available ?? response.quoted_quantity ?? response.quantity ?? rfqItem.quantity
-    if (allocation.quantity > fulfillableQty) {
-      return {
-        success: false,
-        error: `${bid.vendor_name} can fulfill only ${fulfillableQty.toLocaleString()} ${rfqItem.unit} for ${rfqItem.sku || rfqItem.description}.`,
-      }
-    }
-
-    const nextLineTotal = (allocatedByLine.get(allocation.lineItemId) ?? 0) + allocation.quantity
-    if (nextLineTotal > rfqItem.quantity) {
-      return {
-        success: false,
-        error: `Allocated quantity for ${rfqItem.sku || rfqItem.description} is greater than the requested ${rfqItem.quantity.toLocaleString()} ${rfqItem.unit}.`,
-      }
-    }
-    allocatedByLine.set(allocation.lineItemId, nextLineTotal)
-  }
-
-  const allocationsByBid = normalized.reduce((map, allocation) => {
-    const entries = map.get(allocation.bidId) ?? []
-    entries.push(allocation)
-    map.set(allocation.bidId, entries)
-    return map
-  }, new Map<string, SplitPOAllocationInput[]>())
-
-  const awardedAt = new Date().toISOString()
-  const trimmedHandoffNotes = handoffNotes?.trim()
-  let index = 0
-  for (const [bidId, bidAllocations] of allocationsByBid) {
-    const bid = bidsById.get(bidId)
-    if (!bid) continue
-
-    let agreedPrice = 0
-    let maxLeadTime = 0
-    const lineItems = bidAllocations.map((allocation) => {
-      const rfqItem = rfqItemsById.get(allocation.lineItemId)!
-      const response = getLineResponse(bid, allocation.lineItemId)!
-      agreedPrice += response.unit_price * allocation.quantity
-      maxLeadTime = Math.max(maxLeadTime, response.lead_time_days)
-      return {
-        ...rfqItem,
-        quantity: allocation.quantity,
-        contractor_budget: response.unit_price,
-      }
-    })
-
-    // Resolve vendor email for reminder notifications
-    let vendorEmail: string | undefined = bid.vendor_email || undefined
-    if (!vendorEmail && bid.vendor_id) {
-      const vendorUser = await findUserById(bid.vendor_id)
-      vendorEmail = vendorUser?.email || undefined
-    }
-
-    const poNumber = makePoNumber(index)
-    const order: ContractorOrder = {
-      id: `order-${bid.id}-${crypto.randomUUID().slice(0, 8)}`,
-      rfq_id: rfq.id,
-      bid_id: bid.id,
-      rfq_title: rfq.title,
-      project_id: rfq.project_id,
-      project_name: project.name,
-      vendor_name: bid.vendor_name,
-      vendor_email: vendorEmail,
-      po_number: poNumber,
-      agreed_price: agreedPrice,
-      ordered_at: awardedAt.slice(0, 10),
-      expected_delivery_date: dateOnlyAfterDays(maxLeadTime || bid.lead_time_days),
-      next_follow_up_date: dateOnlyAfterDays(Math.max(1, Math.min(7, maxLeadTime || bid.lead_time_days))),
-      follow_up_status: 'on_track',
-      follow_up_notes: [
-        `Tracking order created directly from ${bid.vendor_name}'s RFQ bid.`,
-        trimmedHandoffNotes ? `Coordinator handoff notes: ${trimmedHandoffNotes}` : '',
-      ].filter(Boolean).join('\n\n'),
-      delivery_date: dateOnlyAfterDays(maxLeadTime || bid.lead_time_days),
-      delivery_location: project.location,
-      awarded_at: awardedAt,
-      current_stage: 'confirmed',
-      stage_history: [
-        {
-          stage: 'confirmed',
-          completed_at: awardedAt,
-          notes: `PO ${poNumber} created for allocated quantities.`,
-        },
-      ],
-      line_items_snapshot: lineItems,
-    }
-
-    await saveContractorOrder(order)
-    await updateBid(rfq.id, bid.id, { status: 'awarded' })
-
-    if (vendorEmail) {
-      await scheduleOrderReminders(order, vendorEmail).catch((err) => {
-        console.warn(`[order-reminders] Failed to schedule reminders for order ${order.id}:`, err)
-      })
-    }
-
-    index += 1
-  }
-
-  await saveRFQ({
-    ...rfq,
-    status: 'awarded',
-    pending_award: undefined,
-  })
-
-  revalidatePath(`/contractor/projects/${rfq.project_id}`)
-  revalidatePath(`/contractor/projects/${rfq.project_id}/rfqs/${rfq.id}`)
-  revalidatePath('/contractor/orders')
-  revalidatePath('/vendor/bids')
-
-  return { success: true }
-}
-
-export async function awardSplitPOAction(
-  rfqId: string,
-  allocations: SplitPOAllocationInput[],
-  handoffNotes?: string,
-): Promise<{ success: boolean; error?: string }> {
-  const session = await getSession()
-  if (!session) return { success: false, error: 'Not authenticated' }
-
-  const rfq = await getRFQ(rfqId)
-  if (!rfq) return { success: false, error: 'RFQ not found' }
-  if (rfq.status !== 'active') {
-    return { success: false, error: 'RFQ must be active to create tracking orders' }
-  }
-
-  return createTrackingOrdersForAllocations(rfq, allocations, handoffNotes)
-}
-
-export async function awardPOAction(
-  rfqId: string,
-  bidId?: string,
-): Promise<{ success: boolean; error?: string }> {
-  const session = await getSession()
-  if (!session) return { success: false, error: 'Not authenticated' }
-
-  const rfq = await getRFQ(rfqId)
-  if (!rfq) return { success: false, error: 'RFQ not found' }
-  if (rfq.status !== 'active') {
-    return { success: false, error: 'RFQ must be active to award a PO' }
-  }
-
-  const bids = await getBidsForRFQ(rfqId)
-  const preferredBids = bids.filter((entry) => entry.buyer_decision_status === 'preferred')
-  if (preferredBids.length !== 1) {
-    return { success: false, error: preferredBids.length === 0 ? 'Mark exactly one quote as preferred before awarding a PO.' : 'Multiple quotes are marked preferred. Leave only one preferred quote before awarding a PO.' }
-  }
-  const preferredBid = preferredBids[0]
-  if (bidId && preferredBid.id !== bidId) {
-    return { success: false, error: 'Only the preferred quote can be awarded.' }
-  }
-  const bid = preferredBid
-  if (!bid) return { success: false, error: 'Quote not found' }
-  if (bid.source === 'email') {
-    return { success: false, error: 'Email-origin quotes are compare-only in v1 and cannot receive a PO.' }
-  }
-  return createTrackingOrdersForAllocations(
-    rfq,
-    rfq.line_items.map((item) => ({
-      bidId: bid.id,
-      lineItemId: item.id,
-      quantity: item.quantity,
-    })),
-  )
 }
 
 // --- Mailbox / RFQ Mail Flow ---
@@ -1032,13 +787,12 @@ export async function createRemainderRFQAction(
   const remainderId = `rfq-c-${crypto.randomUUID().slice(0, 8)}`
   await saveRFQ({
     ...rfq,
-    id: remainderId,
-    title: `${rfq.title} - Remainder`,
-    status: 'draft',
-    published_at: undefined,
-    pending_award: undefined,
-    source_rfq_id: rfq.id,
-    line_items: remainderItems,
+      id: remainderId,
+      title: `${rfq.title} - Remainder`,
+      status: 'draft',
+      published_at: undefined,
+      source_rfq_id: rfq.id,
+      line_items: remainderItems,
     vendor_response_fields: rfq.vendor_response_fields,
     created_at: new Date().toISOString(),
   })
@@ -1048,34 +802,4 @@ export async function createRemainderRFQAction(
     success: true,
     redirectTo: `/contractor/projects/${projectId}/rfqs/new?rfqId=${remainderId}`,
   }
-}
-
-export async function updateOrderFollowUpAction(
-  orderId: string,
-  data: {
-    orderedAt?: string
-    expectedDeliveryDate?: string
-    nextFollowUpDate?: string
-    followUpStatus?: 'on_track' | 'needs_follow_up' | 'escalated' | 'complete'
-    followUpNotes?: string
-  },
-): Promise<{ success: boolean; error?: string }> {
-  const session = await getSession()
-  if (!session) return { success: false, error: 'Not authenticated' }
-
-  const order = await getContractorOrder(orderId)
-  if (!order) return { success: false, error: 'Order not found' }
-
-  await saveContractorOrder({
-    ...order,
-    ordered_at: data.orderedAt ?? order.ordered_at,
-    expected_delivery_date: data.expectedDeliveryDate ?? order.expected_delivery_date,
-    next_follow_up_date: data.nextFollowUpDate ?? order.next_follow_up_date,
-    follow_up_status: (data.followUpStatus as typeof order.follow_up_status) ?? order.follow_up_status,
-    follow_up_notes: data.followUpNotes ?? order.follow_up_notes,
-  })
-
-  revalidatePath('/contractor/orders')
-  revalidatePath(`/contractor/orders/${orderId}`)
-  return { success: true }
 }

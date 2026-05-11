@@ -64,13 +64,7 @@ export interface ContractorRFQ {
   request_type?: RequestType
   email_subject?: string
   email_body?: string
-  status: 'draft' | 'active' | 'closed' | 'awarded' | 'po_offered'
-  pending_award?: {
-    bid_id: string
-    vendor_id?: string
-    vendor_email?: string
-    offered_at: string
-  }
+  status: 'draft' | 'active' | 'closed'
   category?: string
   anonymous_public_listing?: boolean
   rfp_details?: RFPDetails
@@ -142,8 +136,8 @@ export interface ContractorBid {
   vendor_reliability_flag?: VendorReliabilityFlag
   line_item_responses: ContractorBidLineItemResponse[]
   notes?: string
-  status: 'pending' | 'under_review' | 'shortlisted' | 'awarded' | 'rejected'
-  source: 'platform' | 'email' | 'magic_form'
+  status: 'pending' | 'under_review' | 'shortlisted' | 'rejected'
+  source: 'platform' | 'email' | 'magic_form' | 'external_workbook'
   source_message_count?: number
   last_email_at?: string
   review_task_count?: number
@@ -170,17 +164,10 @@ export interface ContractorActivityNotification {
     | 'email_received'
     | 'message_received'
     | 'review_task'
-    | 'order_awarded'
-    | 'order_confirmed'
-    | 'order_packaged'
-    | 'order_shipped'
-    | 'order_out_for_delivery'
-    | 'order_delivered'
   title: string
   body: string
   rfq_id?: string
   project_id?: string
-  order_id?: string
   read: boolean
   created_at: string
 }
@@ -266,41 +253,4 @@ export interface OffPlatformSendSummary {
   sentCount: number
   failedCount: number
   results: OffPlatformSendResult[]
-}
-
-// --- Order types (contractor-side view of awarded orders) ---
-
-export type ContractorOrderStage = 'confirmed' | 'packaged' | 'shipped' | 'out_for_delivery' | 'delivered'
-
-export interface ContractorOrderStageProgress {
-  stage: ContractorOrderStage
-  completed_at?: string
-  notes?: string
-  carrier?: string
-  tracking_number?: string
-  ship_date?: string
-}
-
-export interface ContractorOrder {
-  id: string
-  rfq_id: string
-  bid_id?: string
-  rfq_title: string
-  project_id: string
-  project_name: string
-  vendor_name: string
-  vendor_email?: string
-  po_number: string
-  agreed_price: number
-  ordered_at?: string
-  expected_delivery_date?: string
-  next_follow_up_date?: string
-  follow_up_status?: 'on_track' | 'needs_follow_up' | 'escalated' | 'complete'
-  follow_up_notes?: string
-  delivery_date: string
-  delivery_location: string
-  awarded_at: string
-  current_stage: ContractorOrderStage
-  stage_history: ContractorOrderStageProgress[]
-  line_items_snapshot: ContractorRFQLineItem[]
 }

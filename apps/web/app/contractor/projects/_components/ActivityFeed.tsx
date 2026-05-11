@@ -1,13 +1,11 @@
 import Link from 'next/link'
 import {
   ArrowRight,
-  ClipboardCheck,
   FileSearch,
   FileText,
   Mail,
   PackageCheck,
   Send,
-  Truck,
 } from 'lucide-react'
 import type { ContractorActivityNotification } from '@/lib/types/contractor'
 
@@ -32,9 +30,6 @@ function getHref(n: ContractorActivityNotification): string {
   if ((n.type === 'email_received' || n.type === 'review_task' || n.type === 'rfq_published') && n.project_id && n.rfq_id) {
     return `/contractor/projects/${n.project_id}/rfqs/${n.rfq_id}`
   }
-  if (n.order_id) {
-    return `/contractor/orders/${n.order_id}`
-  }
   if (n.project_id) {
     return `/contractor/projects/${n.project_id}`
   }
@@ -53,14 +48,6 @@ function getActivityVisual(type: ContractorActivityNotification['type']): Activi
       return { Icon: Mail, label: 'Message received', bg: '#fff3eb', color: '#fa6b04' }
     case 'rfq_published':
       return { Icon: Send, label: 'RFQ sent', bg: '#e8f4ee', color: '#2d6a4f' }
-    case 'order_awarded':
-      return { Icon: ClipboardCheck, label: 'PO awarded', bg: '#fff3eb', color: '#fa6b04' }
-    case 'order_confirmed':
-    case 'order_packaged':
-    case 'order_shipped':
-    case 'order_out_for_delivery':
-    case 'order_delivered':
-      return { Icon: Truck, label: 'Order update', bg: '#ede8e2', color: '#4a6358' }
     case 'review_task':
       return { Icon: FileSearch, label: 'Review task', bg: '#fdf0e8', color: '#a85c2a' }
     default:
@@ -75,7 +62,6 @@ function getDarkActivityVisual(type: ContractorActivityNotification['type']): Ac
     case 'rfq_published':
       return { ...base, bg: '#e8f4ee', color: '#2d6a4f' }
     case 'message_received':
-    case 'order_awarded':
       return { ...base, bg: '#fff3eb', color: '#fa6b04' }
     case 'review_task':
       return { ...base, bg: '#fdf0e8', color: '#a85c2a' }

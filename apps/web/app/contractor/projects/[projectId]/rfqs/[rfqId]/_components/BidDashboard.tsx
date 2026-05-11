@@ -3,35 +3,23 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { Bot, Columns3, Eraser, FileSpreadsheet, RefreshCw, Rows3 } from 'lucide-react'
+import { Columns3, Eraser, FileSpreadsheet, RefreshCw, Rows3 } from 'lucide-react'
 import type { ContractorBid, ContractorRFQ } from '@/lib/types/contractor'
 import type { BidSpecComplianceItem } from '@/lib/types/procurement'
+import { buildLiveQuoteComparisonSummary } from '@/lib/procurement/quote-comparison'
 import {
   addNegotiationMessageAction,
-  awardPOAction,
-  awardSplitPOAction,
   createRemainderRFQAction,
   rerunBidSpecComplianceAction,
   updateBidDecisionAction,
 } from '@/lib/actions/contractor'
-import { useComparisonSheetView, type ComparisonViewPatch } from './comparison-sheet-view'
+import { useComparisonSheetView, type ComparisonViewPatch, type ManualColumn, type ManualLineItem } from './comparison-sheet-view'
 import { BidComparisonAssistant } from './BidComparisonAssistant'
 
 function fmt(n: number): string {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`
   if (n >= 1_000) return `$${(n / 1_000).toFixed(1).replace(/\.0$/, '')}k`
   return `$${n.toLocaleString()}`
-}
-
-function isFullCoverageBid(bid: ContractorBid) {
-  return !bid.fulfillment_summary?.partial && (bid.fulfillment_summary?.coverage_ratio ?? 1) >= 1
-}
-
-function compareAwardablePrice(a: ContractorBid, b: ContractorBid) {
-  const aFull = isFullCoverageBid(a)
-  const bFull = isFullCoverageBid(b)
-  if (aFull !== bFull) return aFull ? -1 : 1
-  return a.total_price - b.total_price
 }
 
 function coveragePct(bid: ContractorBid) {
@@ -82,19 +70,8 @@ function buildVendorColorMap(bids: ContractorBid[]) {
   return Object.fromEntries(bids.map((bid) => [bid.id, colorByKey.get(vendorColorKey(bid)) ?? VENDOR_CHART_COLORS[0]]))
 }
 
-function getFullCoverageLowestBid(bids: ContractorBid[]) {
-  const fullBids = bids.filter(isFullCoverageBid)
-  if (fullBids.length === 0) return undefined
-  return fullBids.reduce((best, bid) => (bid.total_price < best.total_price ? bid : best))
-}
-
-function getFastestBid(bids: ContractorBid[]) {
-  if (bids.length === 0) return undefined
-  return bids.reduce((best, bid) => (bid.lead_time_days < best.lead_time_days ? bid : best))
-}
-
 function CoverageBadge({ bid }: { bid: ContractorBid }) {
-  const full = isFullCoverageBid(bid)
+  const full = !bid.fulfillment_summary?.partial && (bid.fulfillment_summary?.coverage_ratio ?? 1) >= 1
   return (
     <span
       className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold"
@@ -378,6 +355,18 @@ function xmlEscape(value: string | number | undefined | null) {
 
 function csvSafeText(value: string | number | undefined | null) {
   return String(value ?? '').replace(/\r?\n/g, ' ').trim()
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000)
 }
 
 const CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
@@ -779,7 +768,7 @@ function DocumentPreviewTile({
           <div className="relative flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
             <div className="flex items-start justify-between gap-4 px-6 py-4" style={{ borderBottom: '1px solid #e2d9cf' }}>
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em]" style={{ color: '#8a9e96' }}>PO Packet Document</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em]" style={{ color: '#8a9e96' }}>Quote Comparison Document</p>
                 <h3 className="mt-1 text-xl font-bold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>{title}</h3>
                 <p className="mt-1 text-sm" style={{ color: '#4a6358' }}>{subtitle}</p>
               </div>
@@ -1008,686 +997,6 @@ function ExpandedLineItems({ rfq }: { rfq: ContractorRFQ }) {
   )
 }
 
-function AwardPOButton({
-  rfqId,
-  bid,
-  disabledReason,
-  demoMode = false,
-  fullWidth = false,
-  label,
-}: {
-  rfqId: string
-  bid?: ContractorBid
-  disabledReason?: string
-  demoMode?: boolean
-  fullWidth?: boolean
-  label?: string
-}) {
-  const router = useRouter()
-  const [showConfirm, setShowConfirm] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  if (!bid || disabledReason || demoMode) {
-    return (
-      <button
-        type="button"
-        disabled
-        className={`${fullWidth ? 'w-full rounded-xl py-3 text-sm' : 'rounded-xl px-3 py-1.5 text-xs'} font-semibold text-white opacity-50`}
-        style={{ background: '#8a9e96' }}
-        title={demoMode ? 'Demo mode is read only.' : disabledReason}
-      >
-        {demoMode ? 'Demo Only' : 'Create Tracking Order'}
-      </button>
-    )
-  }
-
-  async function handleAward() {
-    if (!bid) return
-    setLoading(true)
-    setError('')
-    try {
-      const result = await awardPOAction(rfqId, bid.id)
-      if (!result.success) {
-        setError(result.error ?? 'Failed to award PO.')
-        setLoading(false)
-        return
-      }
-      setShowConfirm(false)
-      router.refresh()
-    } catch {
-      setError('Failed to award PO. Please try again.')
-      setLoading(false)
-    }
-  }
-
-  if (bid.status === 'awarded') {
-    return <span className="rounded-full px-2.5 py-0.5 text-xs font-semibold" style={{ background: '#e8f4ee', color: '#2d6a4f' }}>Awarded</span>
-  }
-  if (bid.source === 'email') {
-    return <span className="rounded-full px-2.5 py-0.5 text-xs font-medium" style={{ background: '#ede8e2', color: '#8a9e96' }}>Compare Only</span>
-  }
-  if (bid.status === 'rejected') {
-    return <span className="rounded-full px-2.5 py-0.5 text-xs font-medium" style={{ background: '#fdeaea', color: '#c0392b' }}>Rejected</span>
-  }
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setShowConfirm(true)}
-        className={`${fullWidth ? 'w-full rounded-xl py-3 text-sm' : 'rounded-xl px-3 py-1.5 text-xs'} font-semibold text-white transition-colors`}
-        style={{ background: '#1e3a2f' }}
-      >
-        {label ?? 'Create full order'}
-      </button>
-
-      {showConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-sm rounded-2xl p-6 shadow-xl" style={{ background: '#ffffff', border: '1px solid #e2d9cf' }}>
-            <h3 className="mb-2 text-base font-semibold" style={{ fontFamily: 'var(--font-lora, Georgia, serif)', color: '#1e3a2f' }}>Create Tracking Order</h3>
-            <p className="mb-1 text-sm" style={{ color: '#1e3a2f' }}>
-              Award to <span className="font-semibold">{bid.vendor_name}</span>
-            </p>
-            <p className="mb-4 text-sm" style={{ color: '#4a6358' }}>
-              Total value: <span className="font-semibold">{fmt(bid.total_price)}</span>
-              {' '}· Lead time: {bid.lead_time_days} days
-            </p>
-            <p className="mb-4 text-xs" style={{ color: '#8a9e96' }}>
-              This creates the contractor tracking order immediately and marks the RFQ awarded.
-            </p>
-            {error && (
-              <div className="mb-3 rounded-xl px-3 py-2" style={{ background: '#fdf0e8', border: '1px solid #e8c4a0' }}>
-                <p className="text-sm" style={{ color: '#a85c2a' }}>{error}</p>
-              </div>
-            )}
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={handleAward}
-                disabled={loading}
-                className="rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 transition-colors"
-                style={{ background: '#1e3a2f' }}
-              >
-                {loading ? 'Processing…' : 'Create Order'}
-              </button>
-              <button
-                type="button"
-                onClick={() => { setShowConfirm(false); setError('') }}
-                className="rounded-xl px-4 py-2 text-sm font-medium transition-colors"
-                style={{ background: '#ffffff', border: '1px solid #e2d9cf', color: '#4a6358' }}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  )
-}
-
-function PurchaseOrderHandoff({
-  rfq,
-  bids,
-  demoMode,
-  projectName,
-}: {
-  rfq: ContractorRFQ
-  bids: ContractorBid[]
-  demoMode: boolean
-  projectName: string
-}) {
-  const router = useRouter()
-  const [selectedBidId, setSelectedBidId] = useState<string>('')
-  const [handoffNotes, setHandoffNotes] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [downloading, setDownloading] = useState(false)
-  const [error, setError] = useState('')
-
-  const sortedBids = bids.slice().sort(compareAwardablePrice)
-  const selectedBid = sortedBids.find((bid) => bid.id === selectedBidId)
-  const fullBids = sortedBids.filter(isFullCoverageBid)
-  const lowestBid = getFullCoverageLowestBid(sortedBids)
-
-  function getResponse(bid: ContractorBid, lineItemId: string) {
-    return bid.line_item_responses.find((response) => response.line_item_id === lineItemId)
-  }
-
-  function getAllocatedQuantity(bid: ContractorBid, item: ContractorRFQ['line_items'][number]) {
-    const response = getResponse(bid, item.id)
-    if (!response || response.availability === 'unavailable') return 0
-    const fulfillable = response.units_available ?? response.quoted_quantity ?? response.quantity ?? item.quantity
-    return Math.min(item.quantity, fulfillable)
-  }
-
-  const selectedAllocations = selectedBid
-    ? rfq.line_items
-      .map((item) => ({
-        bidId: selectedBid.id,
-        lineItemId: item.id,
-        quantity: getAllocatedQuantity(selectedBid, item),
-      }))
-      .filter((allocation) => allocation.quantity > 0)
-    : []
-  const selectedAllocatedUnits = selectedAllocations.reduce((total, allocation) => total + allocation.quantity, 0)
-  const selectedTotal = selectedBid
-    ? rfq.line_items.reduce((total, item) => {
-      const response = getResponse(selectedBid, item.id)
-      return total + (response && response.availability !== 'unavailable'
-        ? response.unit_price * getAllocatedQuantity(selectedBid, item)
-        : 0)
-    }, 0)
-    : 0
-  const canSubmit = Boolean(selectedBid) && selectedAllocations.length > 0 && !demoMode && !submitting && selectedBid?.source !== 'email'
-  const selectedContact = selectedBid ? getVendorContact(rfq, selectedBid) : ''
-
-  async function downloadDocuments() {
-    if (!selectedBid || downloading) return
-    setDownloading(true)
-    setError('')
-    const bid = selectedBid
-    const contact = getVendorContact(rfq, bid)
-    try {
-      const quoteRows = [
-        ['Item', 'Description', 'Allocated Qty', 'Unit Price', 'Line Total'],
-        ...rfq.line_items.map((item) => {
-          const itemResponse = getResponse(bid, item.id)
-          const quantity = getAllocatedQuantity(bid, item)
-          return [
-            item.sku || item.description,
-            item.description,
-            `${quantity.toLocaleString()} ${item.unit}`,
-            itemResponse && quantity > 0 ? `${fmt(itemResponse.unit_price)}/${item.unit}` : '-',
-            itemResponse && quantity > 0 ? fmt(itemResponse.unit_price * quantity) : '-',
-          ]
-        }),
-      ]
-      const comparisonRows = [
-        ['Vendor', 'Contact', 'Total', 'Lead Time', 'Coverage', 'Decision'],
-        ...sortedBids.map((candidate) => [
-          candidate.vendor_name,
-          getVendorContact(rfq, candidate),
-          fmt(candidate.total_price),
-          `${candidate.lead_time_days} days`,
-          `${coveragePct(candidate)}%`,
-          candidate.id === bid.id ? 'Selected for PO handoff' : sourceLabel(candidate),
-        ]),
-        [],
-        ['Line Item', ...sortedBids.map((candidate) => candidate.vendor_name)],
-        ...rfq.line_items.map((item) => [
-          item.sku || item.description,
-          ...sortedBids.map((candidate) => {
-            const itemResponse = getResponse(candidate, item.id)
-            return itemResponse && itemResponse.availability !== 'unavailable' ? `${fmt(itemResponse.unit_price)}/${item.unit}` : 'Excluded'
-          }),
-        ]),
-      ]
-      const scopeRows = [
-        ['Item', 'Scope Status', 'Quantity', 'Delivery / Lead Time', 'Notes / Exclusions'],
-        ...rfq.line_items.map((item) => {
-          const itemResponse = getResponse(bid, item.id)
-          const quantity = getAllocatedQuantity(bid, item)
-          return [
-            item.sku || item.description,
-            quantity > 0 ? 'Provided' : 'Excluded',
-            quantity > 0 ? `${quantity.toLocaleString()} ${item.unit}` : '-',
-            quantity > 0 ? `${itemResponse?.lead_time_days ?? bid.lead_time_days} days` : '-',
-            [itemResponse?.delivery_terms, itemResponse?.substitution_notes, itemResponse?.notes].filter(Boolean).join(' | ') || (quantity > 0 ? 'Included in vendor handoff.' : 'Not included in selected vendor handoff.'),
-          ]
-        }),
-      ]
-      const takeoffRows = [
-        ['Item', 'Description', 'Requested', 'Selected Vendor Allocation', 'Delta'],
-        ...rfq.line_items.map((item) => {
-          const allocated = getAllocatedQuantity(bid, item)
-          return [
-            item.sku || item.description,
-            item.description,
-            `${item.quantity.toLocaleString()} ${item.unit}`,
-            `${allocated.toLocaleString()} ${item.unit}`,
-            `${(item.quantity - allocated).toLocaleString()} ${item.unit}`,
-          ]
-        }),
-      ]
-      const meta: [string, string][] = [
-        ['Project', projectName],
-        ['RFQ', rfq.title],
-        ['Vendor', bid.vendor_name],
-        ['Contact', contact],
-      ]
-      const vendorQuotePdf = await createPdfBlob({
-        eyebrow: 'Vendor Quote',
-        title: `${bid.vendor_name} Quote`,
-        meta,
-        sections: [
-          { heading: 'Commercial Terms', body: [`Payment: ${bid.terms?.payment_terms ?? 'Standard net terms'}`, `Delivery: ${bid.terms?.shipping_terms ?? 'Jobsite delivery included'}`, `Total allocated value: ${fmt(selectedTotal)}`] },
-          { heading: 'Quoted Line Items', rows: quoteRows },
-        ],
-      })
-      const scopePdf = await createPdfBlob({
-        eyebrow: 'Scope of Work',
-        title: `${bid.vendor_name} Scope of Work`,
-        meta,
-        sections: [
-          { heading: 'Vendor Scope', body: [rfq.rfp_details?.scope_summary ?? 'Selected vendor-provided materials and exclusions for coordinator handoff.'] },
-          { heading: 'Provided / Excluded Items', rows: scopeRows },
-          { heading: 'Project Exclusions', body: [rfq.rfp_details?.exclusions ?? 'Installation labor, hoisting, and after-hours premiums excluded unless explicitly noted.'] },
-        ],
-      })
-      const specsPdf = await createPdfBlob({
-        eyebrow: 'Plans & Specs',
-        title: `Relevant Specs For ${rfq.title}`,
-        meta,
-        sections: [
-          { heading: 'Section 01 33 00 - Submittals', body: ['Product data, certificates, warranty documents, delivery tickets, and material traceability records must be attached to the coordinator release packet.'] },
-          { heading: 'Section 01 60 00 - Product Requirements', body: ['Materials must match RFQ line item descriptions. Alternates, substitutions, and exclusions must be explicitly acknowledged before PO release.'] },
-          { heading: 'Section 01 65 00 - Delivery', body: ['Vendor must coordinate delivery timing with the superintendent and reference the purchase order number on all shipping documents.'] },
-          { heading: 'Referenced Items', rows: [['Item', 'Spec Notes'], ...rfq.line_items.map((item) => [item.sku || item.description, item.specs || item.notes || item.description])] },
-        ],
-      })
-      const notesPdf = await createPdfBlob({
-        eyebrow: 'Estimator Notes / Assumptions',
-        title: `Coordinator Notes For ${rfq.title}`,
-        meta,
-        sections: [
-          { heading: 'Notes / Clarifications / Assumptions', body: [handoffNotes || 'No notes entered.'] },
-        ],
-      })
-      const comparisonXlsx = createXlsxBlob('Quote Comparison', comparisonRows)
-      const takeoffsXlsx = createXlsxBlob('Takeoffs Quantities', takeoffRows)
-      const folder = `${safeFilePart(projectName)}_Coordinator_Handoff`
-      const zipBlob = createZipBlob([
-        { path: `${folder}/Vendor quote - ${slugifyFilePart(bid.vendor_name)}.pdf`, data: await blobToBytes(vendorQuotePdf) },
-        { path: `${folder}/Quote comparison sheet.xlsx`, data: await blobToBytes(comparisonXlsx) },
-        { path: `${folder}/Scope sheet - scope of work.pdf`, data: await blobToBytes(scopePdf) },
-        { path: `${folder}/Plans & specs.pdf`, data: await blobToBytes(specsPdf) },
-        { path: `${folder}/Takeoffs - quantities.xlsx`, data: await blobToBytes(takeoffsXlsx) },
-        { path: `${folder}/Estimator notes - assumptions.pdf`, data: await blobToBytes(notesPdf) },
-      ])
-      const url = URL.createObjectURL(zipBlob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = `${folder}.zip`
-      document.body.appendChild(anchor)
-      anchor.click()
-      anchor.remove()
-      URL.revokeObjectURL(url)
-    } catch {
-      setError('Failed to generate coordinator handoff documents.')
-    } finally {
-      setDownloading(false)
-    }
-  }
-
-  async function submitAllocations() {
-    if (!canSubmit) return
-    setSubmitting(true)
-    setError('')
-    try {
-      const result = await awardSplitPOAction(rfq.id, selectedAllocations, handoffNotes)
-      if (!result.success) {
-        setError(result.error ?? 'Failed to send PO handoff.')
-        setSubmitting(false)
-        return
-      }
-      router.refresh()
-    } catch {
-      setError('Failed to send PO handoff.')
-      setSubmitting(false)
-    }
-  }
-
-  if (sortedBids.length === 0) {
-    return (
-      <div className="rounded-2xl p-5" style={{ background: '#ffffff', border: '1px solid #e2d9cf' }}>
-        <p className="text-sm font-semibold" style={{ color: '#1e3a2f' }}>Purchase Order Handoff</p>
-        <p className="mt-1 text-sm" style={{ color: '#4a6358' }}>No quotes are available for PO creation yet.</p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="space-y-5">
-      <div className="rounded-2xl" style={{ background: '#ffffff', border: '1px solid #e2d9cf' }}>
-        <div className="flex flex-col gap-3 px-5 py-4 lg:flex-row lg:items-start lg:justify-between" style={{ borderBottom: '1px solid #e2d9cf' }}>
-          <div>
-            <h3 className="text-base font-semibold" style={{ color: '#1e3a2f' }}>Purchase Order Handoff</h3>
-            <p className="mt-1 max-w-3xl text-sm" style={{ color: '#4a6358' }}>
-              Select one vendor to auto-fill their quoted quantities and assemble the coordinator handoff packet.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full px-3 py-1 text-xs font-semibold" style={{ background: '#ede8e2', color: '#4a6358' }}>
-              {selectedBid ? `${selectedAllocatedUnits.toLocaleString()} units selected` : 'No vendor selected'}
-            </span>
-            <button
-              type="button"
-              disabled={!selectedBid || downloading}
-              onClick={downloadDocuments}
-              className="rounded-xl px-4 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-              style={{ background: '#ffffff', border: '1px solid #fa6b04', color: '#fa6b04' }}
-            >
-              {downloading ? 'Packaging...' : 'Download Documents'}
-            </button>
-            <button
-              type="button"
-              disabled={!canSubmit}
-              onClick={submitAllocations}
-              className="rounded-xl px-4 py-2 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-              style={{ background: '#fa6b04' }}
-            >
-              {submitting ? 'Sending...' : 'Send to Coordinator'}
-            </button>
-          </div>
-        </div>
-
-        {error && (
-          <div className="mx-5 mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: '#fdf0e8', border: '1px solid #e8c4a0', color: '#a85c2a' }}>
-            {error}
-          </div>
-        )}
-
-        {demoMode && (
-          <div className="mx-5 mt-4 rounded-xl px-4 py-3 text-sm" style={{ background: '#fdf0e8', border: '1px solid #e8c4a0', color: '#a85c2a' }}>
-            Demo mode is read only.
-          </div>
-        )}
-
-        <div className="grid gap-3 p-4 lg:grid-cols-3">
-          {sortedBids.map((bid) => {
-            const isSelected = selectedBidId === bid.id
-            const fulfillableCount = rfq.line_items.filter((item) => getAllocatedQuantity(bid, item) > 0).length
-            const disabled = bid.source === 'email' || fulfillableCount === 0 || demoMode || submitting
-            const contact = getVendorContact(rfq, bid)
-            return (
-              <label
-                key={`po-vendor-${bid.id}`}
-                className="flex cursor-pointer gap-3 rounded-xl p-3 transition-all"
-                style={{
-                  background: isSelected ? '#fff3eb' : '#ffffff',
-                  border: isSelected ? '2px solid #fa6b04' : '1px solid #e2d9cf',
-                  opacity: disabled ? 0.6 : 1,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  disabled={disabled}
-                  onChange={() => {
-                    setSelectedBidId(isSelected ? '' : bid.id)
-                    setError('')
-                  }}
-                  className="mt-1 h-4 w-4 accent-[#fa6b04]"
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-bold leading-tight" style={{ color: '#1e3a2f' }}>{bid.vendor_name}</span>
-                  <span className="mt-0.5 block text-xs font-medium" style={{ color: '#4a6358' }}>Contact: {contact}</span>
-                  <span className="mt-1 block text-xs" style={{ color: '#8a9e96' }}>
-                    {fmt(bid.total_price)} total · {bid.lead_time_days}d · {fulfillableCount}/{rfq.line_items.length} items
-                  </span>
-                  <span className="mt-2 flex flex-wrap gap-1.5">
-                    <SourceBadge bid={bid} />
-                    <CoverageBadge bid={bid} />
-                    {bid.source === 'email' && (
-                      <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ background: '#ede8e2', color: '#8a9e96' }}>
-                        Compare only
-                      </span>
-                    )}
-                  </span>
-                </span>
-              </label>
-            )
-          })}
-        </div>
-      </div>
-
-      {!selectedBid ? (
-        <div className="rounded-2xl border border-dashed px-5 py-10 text-center" style={{ background: '#ffffff', borderColor: '#e2d9cf' }}>
-          <p className="text-base font-semibold" style={{ color: '#1e3a2f' }}>Select a vendor to assemble the PO packet.</p>
-          <p className="mt-1 text-sm" style={{ color: '#8a9e96' }}>The quote, comparison, scope, specs, notes, and takeoff previews will populate here.</p>
-        </div>
-      ) : (
-        <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-          <section className="rounded-2xl p-4" style={{ background: '#ffffff', border: '1px solid #e2d9cf' }}>
-            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#8a9e96' }}>Exact Vendor Quote</p>
-            <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h4 className="text-lg font-bold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>{selectedBid.vendor_name}</h4>
-                <p className="mt-1 text-sm" style={{ color: '#4a6358' }}>Contact: <span className="font-semibold">{selectedContact}</span> · {selectedBid.lead_time_days} day lead time</p>
-              </div>
-              <p className="text-2xl font-bold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>{fmt(selectedTotal)}</p>
-            </div>
-            <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-              <p style={{ color: '#4a6358' }}><span className="font-semibold" style={{ color: '#1e3a2f' }}>Payment:</span> {selectedBid.terms?.payment_terms ?? 'Standard net terms'}</p>
-              <p style={{ color: '#4a6358' }}><span className="font-semibold" style={{ color: '#1e3a2f' }}>Delivery:</span> {selectedBid.terms?.shipping_terms ?? 'Jobsite delivery included'}</p>
-            </div>
-            <div className="mt-3 max-h-[22rem] overflow-auto rounded-xl" style={{ border: '1px solid #e2d9cf' }}>
-              <table className="min-w-full text-sm">
-                <thead className="text-xs font-semibold uppercase tracking-wider" style={{ background: '#ede8e2', color: '#8a9e96' }}>
-                  <tr>
-                    <th className="px-3 py-2 text-left">Item</th>
-                    <th className="px-3 py-2 text-right">Qty</th>
-                    <th className="px-3 py-2 text-right">Unit</th>
-                    <th className="px-3 py-2 text-right">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rfq.line_items.map((item) => {
-                    const response = getResponse(selectedBid, item.id)
-                    const quantity = getAllocatedQuantity(selectedBid, item)
-                    return (
-                      <tr key={`quote-preview-${item.id}`} style={{ borderTop: '1px solid #e2d9cf' }}>
-                        <td className="px-3 py-2">
-                          <p className="font-semibold" style={{ color: quantity > 0 ? '#1e3a2f' : '#8a9e96' }}>{item.sku || item.description}</p>
-                          {item.sku && <p className="text-xs" style={{ color: '#8a9e96' }}>{item.description}</p>}
-                        </td>
-                        <td className="px-3 py-2 text-right" style={{ color: '#4a6358' }}>{quantity.toLocaleString()} {item.unit}</td>
-                        <td className="px-3 py-2 text-right" style={{ color: '#4a6358' }}>{response && quantity > 0 ? fmt(response.unit_price) : '-'}</td>
-                        <td className="px-3 py-2 text-right font-semibold" style={{ color: '#1e3a2f' }}>{response && quantity > 0 ? fmt(response.unit_price * quantity) : '-'}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <div className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <DocumentPreviewTile
-                title="Quote Comparison Sheet"
-                fileType="XLSX"
-                subtitle="Current workbook view, pricing matrix, hidden columns, highlights, and selected-vendor context."
-                preview={
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wider" style={{ color: '#8a9e96' }}>Quote Comparison</p>
-                    <h4 className="mt-2 text-3xl font-bold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>{rfq.title}</h4>
-                    <div className="mt-5 grid grid-cols-3 gap-3">
-                      <div className="rounded-lg p-3" style={{ background: '#ede8e2' }}><p className="text-xs">Quotes</p><p className="text-3xl font-bold">{bids.length}</p></div>
-                      <div className="rounded-lg p-3" style={{ background: '#ede8e2' }}><p className="text-xs">Full</p><p className="text-3xl font-bold">{fullBids.length}</p></div>
-                      <div className="rounded-lg p-3" style={{ background: '#fff3eb' }}><p className="text-xs">Selected</p><p className="truncate text-xl font-bold">{selectedBid.vendor_name}</p></div>
-                    </div>
-                    <div className="mt-5 space-y-2">
-                      {sortedBids.slice(0, 4).map((bid) => (
-                        <div key={`comparison-preview-${bid.id}`} className="flex justify-between rounded-lg px-3 py-2" style={{ border: '1px solid #e2d9cf' }}>
-                          <span>{bid.vendor_name}</span><strong>{fmt(bid.total_price)}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                }
-              >
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em]" style={{ color: '#8a9e96' }}>Generated from current Quote Comparison tab state</p>
-                  <h4 className="mt-2 text-2xl font-bold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>{rfq.title}</h4>
-                  <div className="mt-5 grid gap-3 sm:grid-cols-4">
-                    <div className="rounded-xl p-3" style={{ background: '#ede8e2' }}><p className="text-xs" style={{ color: '#8a9e96' }}>Quotes</p><p className="text-xl font-bold" style={{ color: '#1e3a2f' }}>{bids.length}</p></div>
-                    <div className="rounded-xl p-3" style={{ background: '#ede8e2' }}><p className="text-xs" style={{ color: '#8a9e96' }}>Full Quotes</p><p className="text-xl font-bold" style={{ color: '#1e3a2f' }}>{fullBids.length}</p></div>
-                    <div className="rounded-xl p-3" style={{ background: '#ede8e2' }}><p className="text-xs" style={{ color: '#8a9e96' }}>Best Value</p><p className="truncate text-sm font-bold" style={{ color: '#1e3a2f' }}>{lowestBid?.vendor_name ?? '-'}</p></div>
-                    <div className="rounded-xl p-3" style={{ background: '#fff3eb', border: '1px solid #fdc89a' }}><p className="text-xs" style={{ color: '#fa6b04' }}>Selected</p><p className="truncate text-sm font-bold" style={{ color: '#1e3a2f' }}>{selectedBid.vendor_name}</p></div>
-                  </div>
-                  <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                    {sortedBids.map((bid) => (
-                      <div key={`comparison-score-${bid.id}`} className="rounded-xl p-4" style={{ border: bid.id === selectedBid.id ? '2px solid #fa6b04' : '1px solid #e2d9cf' }}>
-                        <p className="text-sm font-bold" style={{ color: '#1e3a2f' }}>{bid.vendor_name}</p>
-                        <p className="mt-1 text-xs" style={{ color: '#4a6358' }}>Contact: {getVendorContact(rfq, bid)}</p>
-                        <p className="mt-3 text-2xl font-bold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>{fmt(bid.total_price)}</p>
-                        <p className="text-xs" style={{ color: '#8a9e96' }}>{bid.lead_time_days}d lead · {coveragePct(bid)}% coverage</p>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-6 overflow-hidden rounded-xl" style={{ border: '1px solid #e2d9cf' }}>
-                    <table className="w-full text-sm">
-                      <thead style={{ background: '#ede8e2', color: '#8a9e96' }}>
-                        <tr><th className="px-3 py-2 text-left">Item</th>{sortedBids.map((bid) => <th key={`matrix-head-${bid.id}`} className="px-3 py-2 text-right">{bid.vendor_name}</th>)}</tr>
-                      </thead>
-                      <tbody>
-                        {rfq.line_items.map((item) => (
-                          <tr key={`matrix-row-${item.id}`} style={{ borderTop: '1px solid #e2d9cf' }}>
-                            <td className="px-3 py-2 font-semibold" style={{ color: '#1e3a2f' }}>{item.sku || item.description}</td>
-                            {sortedBids.map((bid) => {
-                              const response = getResponse(bid, item.id)
-                              return <td key={`matrix-cell-${bid.id}-${item.id}`} className="px-3 py-2 text-right" style={{ color: '#4a6358' }}>{response && response.availability !== 'unavailable' ? `${fmt(response.unit_price)}/${item.unit}` : 'Excluded'}</td>
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </DocumentPreviewTile>
-
-              <DocumentPreviewTile
-                title="Scope of Work Sheet"
-                fileType="PDF"
-                subtitle="What the selected vendor provides, delivery timing, substitutions, and exclusions."
-                preview={
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wider" style={{ color: '#8a9e96' }}>Scope of Work</p>
-                    <h4 className="mt-2 text-3xl font-bold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>{selectedBid.vendor_name}</h4>
-                    <div className="mt-5 space-y-3">
-                      {rfq.line_items.slice(0, 4).map((item) => {
-                        const qty = getAllocatedQuantity(selectedBid, item)
-                        return <div key={`scope-mini-${item.id}`} className="flex justify-between border-b pb-2"><span>{item.sku || item.description}</span><strong>{qty > 0 ? `${qty.toLocaleString()} ${item.unit}` : 'Excluded'}</strong></div>
-                      })}
-                    </div>
-                  </div>
-                }
-              >
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em]" style={{ color: '#8a9e96' }}>Scope of Work</p>
-                  <h4 className="mt-2 text-2xl font-bold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>{selectedBid.vendor_name}</h4>
-                  <p className="mt-1 text-sm" style={{ color: '#4a6358' }}>Contact: {selectedContact}</p>
-                  <div className="mt-5 space-y-3">
-                    {rfq.line_items.map((item) => {
-                      const response = getResponse(selectedBid, item.id)
-                      const quantity = getAllocatedQuantity(selectedBid, item)
-                      const excluded = quantity === 0
-                      return (
-                        <div key={`scope-full-${item.id}`} className="rounded-xl p-4" style={{ background: excluded ? '#f8f6f3' : '#ffffff', border: '1px solid #e2d9cf' }}>
-                          <div className="flex items-start justify-between gap-3">
-                            <div><p className="font-bold" style={{ color: excluded ? '#8a9e96' : '#1e3a2f' }}>{item.sku || item.description}</p>{item.sku && <p className="text-sm" style={{ color: '#8a9e96' }}>{item.description}</p>}</div>
-                            <span className="rounded-full px-3 py-1 text-xs font-bold" style={excluded ? { background: '#fdeaea', color: '#c0392b' } : { background: '#e8f4ee', color: '#2d6a4f' }}>{excluded ? 'Excluded' : `${quantity.toLocaleString()} ${item.unit}`}</span>
-                          </div>
-                          <p className="mt-3 text-sm" style={{ color: '#4a6358' }}>{excluded ? 'Not included in this vendor handoff.' : `Provides ${quantity.toLocaleString()} ${item.unit}; delivery target ${response?.lead_time_days ?? selectedBid.lead_time_days} days.`}</p>
-                          {(response?.delivery_terms || response?.substitution_notes || response?.notes) && <p className="mt-1 text-sm" style={{ color: '#8a9e96' }}>{[response.delivery_terms, response.substitution_notes, response.notes].filter(Boolean).join(' · ')}</p>}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              </DocumentPreviewTile>
-
-              <DocumentPreviewTile
-                title="Relevant Specs"
-                fileType="PDF"
-                subtitle="Temporary spec extract tied to the selected RFQ line items."
-                preview={
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wider" style={{ color: '#8a9e96' }}>Specification Extract</p>
-                    <h4 className="mt-2 text-3xl font-bold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>Division 01 / 05 / 07</h4>
-                    <p className="mt-4 text-lg leading-7" style={{ color: '#4a6358' }}>Materials must match RFQ descriptions. Approved alternates require written confirmation.</p>
-                  </div>
-                }
-              >
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em]" style={{ color: '#8a9e96' }}>Mock Specification Extract</p>
-                  <h4 className="mt-2 text-2xl font-bold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>Project Spec Sections Relevant To {rfq.title}</h4>
-                  <div className="mt-5 space-y-4 text-sm leading-7" style={{ color: '#4a6358' }}>
-                    <p><strong style={{ color: '#1e3a2f' }}>Section 01 33 00 - Submittals:</strong> Product data, mill certificates, warranty documents, batch tickets, and delivery tickets must be attached to the coordinator release packet.</p>
-                    <p><strong style={{ color: '#1e3a2f' }}>Section 01 60 00 - Product Requirements:</strong> Materials must match RFQ line item descriptions. Alternates, substitutions, and exclusions must be explicitly acknowledged before PO release.</p>
-                    <p><strong style={{ color: '#1e3a2f' }}>Section 01 65 00 - Delivery:</strong> Vendor must coordinate delivery timing with the superintendent and reference the purchase order number on all shipping documents.</p>
-                  </div>
-                  <div className="mt-5 flex flex-wrap gap-2">
-                    {rfq.line_items.map((item) => <span key={`spec-full-${item.id}`} className="rounded-full px-3 py-1 text-xs font-semibold" style={{ background: '#fff3eb', color: '#a85c2a', border: '1px solid #fdc89a' }}>{item.sku || item.description}</span>)}
-                  </div>
-                </div>
-              </DocumentPreviewTile>
-
-              <DocumentPreviewTile
-                title="Takeoffs / Quantities"
-                fileType="XLSX"
-                subtitle="Requested takeoff quantities versus selected-vendor allocated quantities."
-                preview={
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wider" style={{ color: '#8a9e96' }}>Takeoffs</p>
-                    <h4 className="mt-2 text-3xl font-bold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>Quantity Check</h4>
-                    <div className="mt-5 space-y-3">
-                      {rfq.line_items.slice(0, 4).map((item) => <div key={`takeoff-mini-${item.id}`} className="grid grid-cols-3 gap-3 border-b pb-2"><span>{item.sku || item.description}</span><span>{item.quantity.toLocaleString()}</span><strong>{getAllocatedQuantity(selectedBid, item).toLocaleString()}</strong></div>)}
-                    </div>
-                  </div>
-                }
-              >
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em]" style={{ color: '#8a9e96' }}>Takeoffs / Quantities</p>
-                  <h4 className="mt-2 text-2xl font-bold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>Requested vs. Selected Vendor Allocation</h4>
-                  <div className="mt-5 overflow-hidden rounded-xl" style={{ border: '1px solid #e2d9cf' }}>
-                    <table className="w-full text-sm">
-                      <thead style={{ background: '#ede8e2', color: '#8a9e96' }}>
-                        <tr><th className="px-3 py-2 text-left">Item</th><th className="px-3 py-2 text-right">Requested</th><th className="px-3 py-2 text-right">Allocated</th><th className="px-3 py-2 text-right">Delta</th></tr>
-                      </thead>
-                      <tbody>
-                        {rfq.line_items.map((item) => {
-                          const allocated = getAllocatedQuantity(selectedBid, item)
-                          return (
-                            <tr key={`takeoff-full-${item.id}`} style={{ borderTop: '1px solid #e2d9cf' }}>
-                              <td className="px-3 py-2 font-semibold" style={{ color: '#1e3a2f' }}>{item.sku || item.description}</td>
-                              <td className="px-3 py-2 text-right" style={{ color: '#4a6358' }}>{item.quantity.toLocaleString()} {item.unit}</td>
-                              <td className="px-3 py-2 text-right font-bold" style={{ color: allocated === item.quantity ? '#2d6a4f' : '#a85c2a' }}>{allocated.toLocaleString()} {item.unit}</td>
-                              <td className="px-3 py-2 text-right" style={{ color: item.quantity - allocated === 0 ? '#2d6a4f' : '#a85c2a' }}>{(item.quantity - allocated).toLocaleString()} {item.unit}</td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </DocumentPreviewTile>
-            </div>
-
-            <section className="rounded-2xl p-4" style={{ background: '#ffffff', border: '1px solid #e2d9cf' }}>
-            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#8a9e96' }}>Notes / Clarifications / Assumptions</p>
-            <textarea
-              value={handoffNotes}
-              onChange={(event) => setHandoffNotes(event.target.value)}
-              rows={5}
-              placeholder="Write coordinator notes, clarifications, exclusions, assumptions, or handoff instructions..."
-              className="mt-4 w-full resize-y rounded-xl px-4 py-3 text-sm focus:outline-none"
-              style={{ background: '#f8f6f3', border: '1px solid #e2d9cf', color: '#1e3a2f' }}
-            />
-            {selectedAllocations.length === 0 && (
-              <p className="mt-3 text-sm font-medium" style={{ color: '#a85c2a' }}>
-                This vendor has no fulfillable quoted quantities, so the coordinator handoff cannot be sent.
-              </p>
-            )}
-          </section>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
 function BidScorecardGrid({
   rfq,
   bids,
@@ -1702,9 +1011,10 @@ function BidScorecardGrid({
   recheckingBidIds: Record<string, boolean>
 }) {
   const [showLineItems, setShowLineItems] = useState(false)
-  const lowestBid = getFullCoverageLowestBid(bids)
-  const fastestBid = getFastestBid(bids)
-  const sorted = bids.slice().sort(compareAwardablePrice)
+  const comparisonSummary = useMemo(() => buildLiveQuoteComparisonSummary(rfq, bids), [rfq, bids])
+  const lowestBid = comparisonSummary.lowestCompleteBid
+  const fastestBid = comparisonSummary.fastestBid
+  const sorted = comparisonSummary.sortedBids
 
   function expandAllLineItems(anchor: HTMLElement) {
     setShowLineItems(true)
@@ -1717,7 +1027,7 @@ function BidScorecardGrid({
     <div>
       <div className="mb-5 flex items-center justify-between">
         <p className="text-sm font-semibold" style={{ color: '#4a6358' }}>
-          {bids.length} quotes received <span style={{ color: '#8a9e96' }}>· {bids.filter(isFullCoverageBid).length} full quotes</span>
+          {bids.length} quotes received <span style={{ color: '#8a9e96' }}>· {comparisonSummary.fullQuoteCount} full quotes</span>
         </p>
       </div>
       <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
@@ -1857,7 +1167,7 @@ function moneyShort(value: number | null | undefined) {
 interface SheetColumn {
   key: string
   label: string
-  kind: 'rfq-core' | 'rfq-attribute' | 'rfq-standard' | 'vendor' | 'derived'
+  kind: 'rfq-core' | 'rfq-attribute' | 'rfq-standard' | 'vendor' | 'derived' | 'manual'
   align: 'left' | 'right' | 'center'
   defaultWidth: number
   vendorId?: string
@@ -1867,7 +1177,15 @@ interface SheetColumn {
   derivedFormula?: string
 }
 
-function buildColumns(rfq: ContractorRFQ, bids: ContractorBid[], derivedColumns: { key: string; label: string; formula: string; insertAfterColKey?: string }[]): SheetColumn[] {
+function insertColumnAfter(cols: SheetColumn[], col: SheetColumn, insertAfterColKey?: string): SheetColumn[] {
+  if (insertAfterColKey === '__before_first__') return [col, ...cols]
+  if (!insertAfterColKey) return [...cols, col]
+  const idx = cols.findIndex((entry) => entry.key === insertAfterColKey)
+  if (idx === -1) return [...cols, col]
+  return [...cols.slice(0, idx + 1), col, ...cols.slice(idx + 1)]
+}
+
+function buildColumns(rfq: ContractorRFQ, bids: ContractorBid[], derivedColumns: { key: string; label: string; formula: string; insertAfterColKey?: string }[], manualColumns: ManualColumn[] = []): SheetColumn[] {
   const cols: SheetColumn[] = []
   cols.push({ key: '__item', label: 'Item', kind: 'rfq-core', align: 'left', defaultWidth: 150 })
   cols.push({ key: '__desc', label: 'Description', kind: 'rfq-core', align: 'left', defaultWidth: 300 })
@@ -1893,9 +1211,15 @@ function buildColumns(rfq: ContractorRFQ, bids: ContractorBid[], derivedColumns:
     }
   }
 
-  // Append AI-derived columns. (For now we just append; insertAfter ordering is best-effort.)
+  for (const mc of manualColumns) {
+    const col: SheetColumn = { key: `manual:${mc.key}`, label: mc.label, kind: 'manual', align: 'left', defaultWidth: 130 }
+    const anchor = mc.insertAfterColKey?.startsWith('manual:') ? mc.insertAfterColKey : mc.insertAfterColKey
+    cols.splice(0, cols.length, ...insertColumnAfter(cols, col, anchor))
+  }
+
   for (const dc of derivedColumns) {
-    cols.push({ key: `derived:${dc.key}`, label: dc.label, kind: 'derived', align: 'right', defaultWidth: 130, derivedFormula: dc.formula })
+    const col: SheetColumn = { key: `derived:${dc.key}`, label: dc.label, kind: 'derived', align: 'right', defaultWidth: 130, derivedFormula: dc.formula }
+    cols.splice(0, cols.length, ...insertColumnAfter(cols, col, dc.insertAfterColKey))
   }
   return cols
 }
@@ -1932,6 +1256,7 @@ function valueForCol(item: ContractorRFQ['line_items'][number], col: SheetColumn
       return response.response_attributes?.find((attribute) => attribute.key === col.responseFieldKey)?.value ?? ''
     }
   }
+  if (col.kind === 'manual') return ''
   if (col.kind === 'derived' && col.derivedFormula) {
     return evaluateDerived(col.derivedFormula, item, bids)
   }
@@ -1951,6 +1276,7 @@ function computeSmartWidth(col: SheetColumn, items: ContractorRFQ['line_items'],
     'rfq-attribute': { min: 70, max: 200 },
     'vendor': { min: 80, max: 140 },
     'derived': { min: 90, max: 160 },
+    'manual': { min: 90, max: 200 },
   }
   const { min, max } = bounds[col.kind] ?? { min: 70, max: 200 }
 
@@ -1964,6 +1290,20 @@ function computeSmartWidth(col: SheetColumn, items: ContractorRFQ['line_items'],
 }
 
 function evaluateDerived(formula: string, item: ContractorRFQ['line_items'][number], bids: ContractorBid[]): string {
+  const divideColumn = formula.trim().match(/^divide\(column\.([^,]+),\s*([0-9.]+)\)$/i)
+  if (divideColumn) {
+    const source = divideColumn[1]
+    const divisor = Number(divideColumn[2])
+    const value = source === '__qty_unit' ? item.quantity : null
+    if (value == null || !Number.isFinite(value) || !Number.isFinite(divisor) || divisor === 0) return ''
+    return (value / divisor).toLocaleString(undefined, { maximumFractionDigits: 3 })
+  }
+  const copyColumn = formula.trim().match(/^copy\(column\.([^)]+)\)$/i)
+  if (copyColumn) {
+    if (copyColumn[1] === '__qty_unit') return `${item.quantity.toLocaleString()} ${item.unit}`
+    if (copyColumn[1] === '__item') return item.sku || item.id
+    if (copyColumn[1] === '__desc') return item.description
+  }
   const responses = bids.map((bid) => bid.line_item_responses.find((r) => r.line_item_id === item.id)).filter((r): r is NonNullable<typeof r> => Boolean(r) && r!.availability !== 'unavailable')
   const lookup: Record<string, number[]> = {
     'vendor.unit_price': responses.map((r) => r.unit_price),
@@ -2036,16 +1376,43 @@ function vendorCellState(item: ContractorRFQ['line_items'][number], bid: Contrac
 }
 
 function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRFQ; bids: ContractorBid[]; vendorColors: Record<string, string>; userKey: string }) {
-  const items = rfq.line_items
+  const baseItems = rfq.line_items
 
-  const { view, hideColumns, showColumns, hideLineItems, showLineItems, addHighlights, removeHighlights, clearHighlights, addDerivedColumns, removeDerivedColumns, setColumnWidth } = useComparisonSheetView(userKey, rfq.id)
+  const { view, hideColumns, showColumns, hideLineItems, showLineItems, addHighlights, removeHighlights, clearHighlights, addDerivedColumns, removeDerivedColumns, setColumnWidth, addManualColumns, addManualLineItems, setCellOverride, setColumnLabel, setLineItemOrder } = useComparisonSheetView(userKey, rfq.id)
 
-  const allCols = useMemo(() => buildColumns(rfq, bids, view.derivedColumns), [rfq, bids, view.derivedColumns])
+  const items = useMemo(() => {
+    let next = [...baseItems]
+    for (const manual of view.manualLineItems ?? []) {
+      const item = { ...manual, attributes: [], certifications: [] } satisfies ContractorRFQ['line_items'][number]
+      if (manual.insertAfterLineItemId === '__before_first__') {
+        next = [item, ...next]
+        continue
+      }
+      const idx = manual.insertAfterLineItemId ? next.findIndex((entry) => entry.id === manual.insertAfterLineItemId) : -1
+      if (idx === -1) next = [...next, item]
+      else next = [...next.slice(0, idx + 1), item, ...next.slice(idx + 1)]
+    }
+    return next
+  }, [baseItems, view.manualLineItems])
+
+  const allCols = useMemo(() => {
+    const cols = buildColumns(rfq, bids, view.derivedColumns, view.manualColumns)
+    return cols.map((col) => ({ ...col, label: view.columnLabelOverrides?.[col.key] ?? col.label }))
+  }, [rfq, bids, view.derivedColumns, view.manualColumns, view.columnLabelOverrides])
   const visibleCols = useMemo(() => allCols.filter((c) => !view.hiddenColumnKeys.includes(c.key)), [allCols, view.hiddenColumnKeys])
-  const visibleItems = useMemo(() => items.filter((it) => !view.hiddenLineItemIds.includes(it.id)), [items, view.hiddenLineItemIds])
-  const fullQuoteCount = useMemo(() => bids.filter(isFullCoverageBid).length, [bids])
-  const lowestBid = useMemo(() => getFullCoverageLowestBid(bids), [bids])
-  const fastestBid = useMemo(() => getFastestBid(bids), [bids])
+  const visibleItems = useMemo(() => {
+    const ordered = view.lineItemOrder?.length
+      ? [
+          ...view.lineItemOrder.map((id) => items.find((item) => item.id === id)).filter((item): item is typeof items[number] => Boolean(item)),
+          ...items.filter((item) => !view.lineItemOrder!.includes(item.id)),
+        ]
+      : items
+    return ordered.filter((it) => !view.hiddenLineItemIds.includes(it.id))
+  }, [items, view.hiddenLineItemIds, view.lineItemOrder])
+  const comparisonSummary = useMemo(() => buildLiveQuoteComparisonSummary(rfq, bids), [rfq, bids])
+  const fullQuoteCount = comparisonSummary.fullQuoteCount
+  const lowestBid = comparisonSummary.lowestCompleteBid
+  const fastestBid = comparisonSummary.fastestBid
 
   // Smart default widths: compute from content + label so empty columns don't waste space.
   const computedWidths = useMemo(() => {
@@ -2119,7 +1486,211 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     return map
   }, [visibleItems, bids])
 
-  const getCellText = (item: typeof items[number], col: SheetColumn): string => valueForCol(item, col, bids)
+  const getCellText = (item: typeof items[number], col: SheetColumn): string => view.cellOverrides?.[`${item.id}|${col.key}`] ?? valueForCol(item, col, bids)
+
+  const [editingCell, setEditingCell] = useState<{ rowKey: string; colKey: string } | null>(null)
+  const [editingHeader, setEditingHeader] = useState<{ colKey: string } | null>(null)
+  const [draftValue, setDraftValue] = useState('')
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; rowKey?: string; colKey?: string } | null>(null)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const [rangeStart, setRangeStart] = useState<{ r: number; c: number } | null>(null)
+  const [isDraggingRange, setIsDraggingRange] = useState(false)
+
+  function startCellEdit(item: typeof items[number], col: SheetColumn) {
+    setEditingCell({ rowKey: item.id, colKey: col.key })
+    setDraftValue(getCellText(item, col))
+  }
+
+  function commitCellEdit() {
+    if (!editingCell) return
+    setCellOverride(editingCell.rowKey, editingCell.colKey, draftValue)
+    setEditingCell(null)
+  }
+
+  function startHeaderEdit(col: SheetColumn) {
+    setEditingHeader({ colKey: col.key })
+    setDraftValue(col.label)
+  }
+
+  function commitHeaderEdit() {
+    if (!editingHeader) return
+    setColumnLabel(editingHeader.colKey, draftValue)
+    setEditingHeader(null)
+  }
+
+  function makeManualColumn(anchorKey: string | undefined, side: 'left' | 'right') {
+    const anchorIndex = anchorKey ? visibleCols.findIndex((col) => col.key === anchorKey) : -1
+    const insertAfterColKey = side === 'right'
+      ? anchorKey
+      : anchorIndex > 0
+        ? visibleCols[anchorIndex - 1]?.key
+        : '__before_first__'
+    const col: ManualColumn = {
+      key: `col-${Date.now()}`,
+      label: 'New Column',
+      insertAfterColKey,
+    }
+    addManualColumns([col])
+    setContextMenu(null)
+  }
+
+  function makeManualRow(rowKey: string | undefined, side: 'above' | 'below') {
+    const rowIndex = rowKey ? visibleItems.findIndex((item) => item.id === rowKey) : -1
+    const insertAfterLineItemId = side === 'below'
+      ? rowKey
+      : rowIndex > 0
+        ? visibleItems[rowIndex - 1]?.id
+        : '__before_first__'
+    const row: ManualLineItem = {
+      id: `manual-row-${Date.now()}`,
+      sku: '',
+      description: '',
+      quantity: 0,
+      unit: '',
+      insertAfterLineItemId,
+    }
+    addManualLineItems([row])
+    setContextMenu(null)
+  }
+
+  function clearCell(rowKey: string | undefined, colKey: string | undefined) {
+    if (rowKey && colKey) setCellOverride(rowKey, colKey, '')
+    setContextMenu(null)
+  }
+
+  function renameColumnInline(colKey: string | undefined) {
+    const col = colKey ? allCols.find((entry) => entry.key === colKey) : undefined
+    if (col) startHeaderEdit(col)
+    setContextMenu(null)
+  }
+
+  function setSelectedCellValue(value: string) {
+    const col = visibleCols[sel.c]
+    if (col && sel.r === fieldHeaderRowIdx) {
+      setColumnLabel(col.key, value)
+      return
+    }
+    const item = visibleItems[sel.r - dataStartRow]
+    if (col && item) setCellOverride(item.id, col.key, value)
+  }
+
+  function selectedDataCells() {
+    const cells: Array<{ item: typeof items[number]; col: SheetColumn; r: number; c: number }> = []
+    for (let r = selectedRange.r1; r <= selectedRange.r2; r += 1) {
+      const item = visibleItems[r - dataStartRow]
+      if (!item) continue
+      for (let c = selectedRange.c1; c <= selectedRange.c2; c += 1) {
+        const col = visibleCols[c]
+        if (col) cells.push({ item, col, r, c })
+      }
+    }
+    return cells
+  }
+
+  function clearSelectedRange() {
+    const cells = selectedDataCells()
+    if (cells.length === 0) {
+      setSelectedCellValue('')
+      return
+    }
+    for (const cell of cells) setCellOverride(cell.item.id, cell.col.key, '')
+  }
+
+  function copySelectedRange() {
+    const rows: string[][] = []
+    for (let r = selectedRange.r1; r <= selectedRange.r2; r += 1) {
+      const row: string[] = []
+      for (let c = selectedRange.c1; c <= selectedRange.c2; c += 1) {
+        const col = visibleCols[c]
+        if (r === fieldHeaderRowIdx && col) row.push(col.label)
+        else {
+          const item = visibleItems[r - dataStartRow]
+          row.push(item && col ? getCellText(item, col) : '')
+        }
+      }
+      rows.push(row)
+    }
+    return rows.map((row) => row.join('\t')).join('\n')
+  }
+
+  function pasteTextToSelection(text: string) {
+    const rows = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').map((row) => row.split('\t'))
+    if (rows.length === 1 && rows[0].length === 1) {
+      const cells = selectedDataCells()
+      if (cells.length > 1) {
+        for (const cell of cells) setCellOverride(cell.item.id, cell.col.key, rows[0][0])
+        return
+      }
+      setSelectedCellValue(rows[0][0])
+      return
+    }
+    rows.forEach((row, rowOffset) => {
+      row.forEach((value, colOffset) => {
+        const r = selectedRange.r1 + rowOffset
+        const c = selectedRange.c1 + colOffset
+        const col = visibleCols[c]
+        if (!col) return
+        if (r === fieldHeaderRowIdx) {
+          setColumnLabel(col.key, value)
+          return
+        }
+        const item = visibleItems[r - dataStartRow]
+        if (item) setCellOverride(item.id, col.key, value)
+      })
+    })
+  }
+
+  function sortRowsByColumn(colKey: string | undefined, direction: 'asc' | 'desc') {
+    const col = colKey ? allCols.find((entry) => entry.key === colKey) : undefined
+    if (!col) { setContextMenu(null); return }
+    const sorted = [...items].sort((a, b) => {
+      const av = getCellText(a, col)
+      const bv = getCellText(b, col)
+      const an = Number(av.replace(/[$,\sA-Za-z]/g, ''))
+      const bn = Number(bv.replace(/[$,\sA-Za-z]/g, ''))
+      const result = Number.isFinite(an) && Number.isFinite(bn)
+        ? an - bn
+        : av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' })
+      return direction === 'asc' ? result : -result
+    })
+    setLineItemOrder(sorted.map((item) => item.id))
+    setContextMenu(null)
+  }
+
+  function hideBlankRowsForColumn(colKey: string | undefined) {
+    const col = colKey ? allCols.find((entry) => entry.key === colKey) : undefined
+    if (!col) { setContextMenu(null); return }
+    hideLineItems(visibleItems.filter((item) => getCellText(item, col).trim() === '').map((item) => item.id))
+    setContextMenu(null)
+  }
+
+  function openContextMenu(e: React.MouseEvent, rowKey?: string, colKey?: string) {
+    e.preventDefault()
+    setContextMenu({ x: e.clientX, y: e.clientY, rowKey, colKey })
+  }
+
+  function startRangeSelect(r: number, c: number) {
+    containerRef.current?.focus()
+    setSel({ r, c })
+    setRangeStart({ r, c })
+    setIsDraggingRange(true)
+  }
+
+  function extendRangeSelect(r: number, c: number) {
+    if (!isDraggingRange) return
+    setSel({ r, c })
+  }
+
+  function exportRows(): (string | number)[][] {
+    return [
+      visibleCols.map((col) => col.label),
+      ...visibleItems.map((item) => visibleCols.map((col) => getCellText(item, col))),
+    ]
+  }
+
+  function exportViaServer(format: 'csv' | 'xlsx' | 'pdf') {
+    window.location.href = `/api/comparison-export?rfqId=${encodeURIComponent(rfq.id)}&format=${format}`
+  }
 
   // Layout constants
   const GUTTER_W = 44
@@ -2147,11 +1718,45 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
 
   // Cell selection — bounds extend through the empty filler rows + cols.
   const [sel, setSel] = useState<{ r: number; c: number }>({ r: dataStartRow, c: 0 })
+  const selectedRange = useMemo(() => {
+    const start = rangeStart ?? sel
+    return {
+      r1: Math.min(start.r, sel.r),
+      r2: Math.max(start.r, sel.r),
+      c1: Math.min(start.c, sel.c),
+      c2: Math.max(start.c, sel.c),
+    }
+  }, [rangeStart, sel])
+
+  function isInSelectedRange(r: number, c: number) {
+    return r >= selectedRange.r1 && r <= selectedRange.r2 && c >= selectedRange.c1 && c <= selectedRange.c2
+  }
   useEffect(() => {
     setSel((s) => ({ r: Math.min(s.r, lastEmptyRow), c: Math.min(s.c, Math.max(0, totalGridCols - 1)) }))
   }, [lastEmptyRow, totalGridCols])
 
   const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!contextMenu) return
+    const close = () => setContextMenu(null)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [contextMenu])
+
+  useEffect(() => {
+    if (!exportMenuOpen) return
+    const close = () => setExportMenuOpen(false)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [exportMenuOpen])
+
+  useEffect(() => {
+    if (!isDraggingRange) return
+    const stop = () => setIsDraggingRange(false)
+    window.addEventListener('mouseup', stop)
+    return () => window.removeEventListener('mouseup', stop)
+  }, [isDraggingRange])
 
   function moveSel(dr: number, dc: number) {
     setSel((s) => {
@@ -2164,7 +1769,48 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (editingCell || editingHeader) {
+      if (e.key === 'Escape') { e.preventDefault(); setEditingCell(null); setEditingHeader(null) }
+      return
+    }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); dispatchAssistant(true); return }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
+      const value = copySelectedRange()
+      if (value && navigator.clipboard) void navigator.clipboard.writeText(value)
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') {
+      e.preventDefault()
+      if (navigator.clipboard) void navigator.clipboard.readText().then((text) => pasteTextToSelection(text))
+      return
+    }
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      e.preventDefault()
+      clearSelectedRange()
+      return
+    }
+    if (e.key === 'Enter') {
+      const col = visibleCols[sel.c]
+      const item = visibleItems[sel.r - dataStartRow]
+      if (col && sel.r === fieldHeaderRowIdx) { e.preventDefault(); startHeaderEdit(col); return }
+      if (col && item) { e.preventDefault(); startCellEdit(item, col); return }
+    }
+    if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) {
+      const col = visibleCols[sel.c]
+      const item = visibleItems[sel.r - dataStartRow]
+      if (col && sel.r === fieldHeaderRowIdx) {
+        e.preventDefault()
+        setEditingHeader({ colKey: col.key })
+        setDraftValue(e.key)
+        return
+      }
+      if (col && item) {
+        e.preventDefault()
+        setEditingCell({ rowKey: item.id, colKey: col.key })
+        setDraftValue(e.key)
+        return
+      }
+    }
     if (e.key === 'ArrowDown') { e.preventDefault(); moveSel(1, 0) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); moveSel(-1, 0) }
     else if (e.key === 'ArrowRight' || e.key === 'Tab') { e.preventDefault(); moveSel(0, 1) }
@@ -2277,6 +1923,15 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     if (patch.addHighlights?.length) addHighlights(patch.addHighlights)
     if (patch.addDerivedColumns?.length) addDerivedColumns(patch.addDerivedColumns)
     if (patch.removeDerivedColumnKeys?.length) removeDerivedColumns(patch.removeDerivedColumnKeys)
+    if (patch.addManualColumns?.length) addManualColumns(patch.addManualColumns)
+    if (patch.addManualLineItems?.length) addManualLineItems(patch.addManualLineItems)
+    if (patch.setCells?.length) {
+      for (const cell of patch.setCells) setCellOverride(cell.rowKey, cell.colKey, cell.value)
+    }
+    if (patch.setColumnLabels?.length) {
+      for (const col of patch.setColumnLabels) setColumnLabel(col.colKey, col.label)
+    }
+    if (patch.setLineItemOrder?.length) setLineItemOrder(patch.setLineItemOrder)
     dispatchAssistant(false)
   }
 
@@ -2285,11 +1940,11 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
   const emptyColumnKeys = useMemo(() => {
     const set = new Set<string>()
     for (const col of allCols) {
-      const anyValue = visibleItems.some((it) => valueForCol(it, col, bids).trim().length > 0)
+      const anyValue = visibleItems.some((it) => getCellText(it, col).trim().length > 0)
       if (!anyValue) set.add(col.key)
     }
     return set
-  }, [allCols, visibleItems, bids])
+  }, [allCols, visibleItems, view.cellOverrides, bids])
 
   const sheetSchema = useMemo(() => ({
     columns: allCols.map((c) => ({
@@ -2349,15 +2004,23 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
             <span className="rounded-md border bg-white px-2.5 py-1 text-xs font-semibold" style={{ borderColor: '#d9e0dc', color: '#1e3a2f' }}>
               Fastest: {fastestBid ? `${fastestBid.vendor_name} ${fastestBid.lead_time_days}d` : 'None'}
             </span>
-            <button
-              type="button"
-              onClick={() => dispatchAssistant(true)}
-              className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-bold text-white transition"
-              style={{ background: '#fa6b04' }}
-            >
-              <Bot className="h-3.5 w-3.5" />
-              AI
-            </button>
+            <div className="relative" onClick={(event) => event.stopPropagation()}>
+              <button
+                type="button"
+                onClick={() => setExportMenuOpen((open) => !open)}
+                className="rounded-md border bg-white px-3 py-1.5 text-xs font-bold transition"
+                style={{ borderColor: '#d9e0dc', color: '#4a6358' }}
+              >
+                Export
+              </button>
+              {exportMenuOpen && (
+                <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-40 rounded-md border bg-white p-1 shadow-xl" style={{ borderColor: '#d9e0dc' }}>
+                  <button type="button" onClick={() => { exportViaServer('csv'); setExportMenuOpen(false) }} className="block w-full rounded px-3 py-2 text-left text-xs font-semibold hover:bg-[#edf3f0]" style={{ color: '#1e3a2f' }}>CSV</button>
+                  <button type="button" onClick={() => { exportViaServer('xlsx'); setExportMenuOpen(false) }} className="block w-full rounded px-3 py-2 text-left text-xs font-semibold hover:bg-[#edf3f0]" style={{ color: '#1e3a2f' }}>Excel</button>
+                  <button type="button" onClick={() => { exportViaServer('pdf'); setExportMenuOpen(false) }} className="block w-full rounded px-3 py-2 text-left text-xs font-semibold hover:bg-[#edf3f0]" style={{ color: '#1e3a2f' }}>PDF</button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -2366,9 +2029,13 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
             {visibleCols[sel.c] ? `${colLetter(sel.c)}${sel.r + 1}` : '-'}
           </div>
           <div style={{ width: 30, borderRight: baseBorder, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, color: '#587067', fontStyle: 'italic' }}>fx</div>
-          <div className="flex-1 px-3 py-2" style={{ fontSize: 12, color: '#1f2328', fontFamily: 'ui-monospace, SFMono-Regular, monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {getSelValue()}
-          </div>
+          <input
+            value={getSelValue()}
+            onChange={(event) => setSelectedCellValue(event.target.value)}
+            className="flex-1 px-3 py-2 outline-none"
+            style={{ fontSize: 12, color: '#1f2328', fontFamily: 'ui-monospace, SFMono-Regular, monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+            aria-label="Formula bar"
+          />
           <div className="hidden items-center gap-2 px-3 lg:flex" style={{ borderLeft: baseBorder }}>
             <span className="inline-flex items-center gap-1 text-[11px] font-semibold" style={{ color: '#587067' }}>
               <Columns3 className="h-3.5 w-3.5" />
@@ -2435,7 +2102,8 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                 justifyContent: 'center',
                 ...(col.key === frozenColumnKey ? { left: GUTTER_W, borderRight: strongBorder } : {}),
               }}
-              onClick={() => setSel((s) => ({ ...s, c }))}
+              onMouseDown={() => { setSel((s) => ({ ...s, c })); setRangeStart({ r: sel.r, c }) }}
+              onContextMenu={(e) => openContextMenu(e, undefined, col.key)}
             >
               <span style={{ position: 'relative', width: '100%', textAlign: 'center', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
                 {colLetter(c)}
@@ -2451,10 +2119,11 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
             const c = visibleCols.length + i
             return (
               <div
-                key={`colletter-extra-${i}`}
-                style={{ ...gutterBase, gridRow: 1, gridColumn: visibleCols.length + 2 + i, position: 'sticky', top: COL_LETTER_TOP, zIndex: 5, background: sel.c === c ? '#dbeafe' : '#f4f7f5', textAlign: 'center', justifyContent: 'center' }}
-                onClick={() => setSel((s) => ({ ...s, c }))}
-              >
+              key={`colletter-extra-${i}`}
+              style={{ ...gutterBase, gridRow: 1, gridColumn: visibleCols.length + 2 + i, position: 'sticky', top: COL_LETTER_TOP, zIndex: 5, background: sel.c === c ? '#dbeafe' : '#f4f7f5', textAlign: 'center', justifyContent: 'center' }}
+              onMouseDown={() => setSel((s) => ({ ...s, c }))}
+              onContextMenu={(e) => openContextMenu(e)}
+            >
                 <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>{colLetter(c)}</span>
               </div>
             )
@@ -2479,7 +2148,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                 while (i + span < visibleCols.length && visibleCols[i + span].vendorId === vendorId) span++
                 cells.push(
                   <div
-                    key={`gh-vendor-${vendorId}`}
+                    key={`gh-vendor-${vendorId}-${i}`}
                     onClick={() => setSel((s) => ({ ...s, r: groupHeaderRowIdx, c: i }))}
                     style={{
                       ...groupHeaderBase,
@@ -2542,7 +2211,10 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
           {visibleCols.map((col, c) => (
             <div
               key={`fh-${col.key}`}
-              onClick={() => setSel({ r: fieldHeaderRowIdx, c })}
+              onMouseDown={() => startRangeSelect(fieldHeaderRowIdx, c)}
+              onMouseEnter={() => extendRangeSelect(fieldHeaderRowIdx, c)}
+              onDoubleClick={() => startHeaderEdit(col)}
+              onContextMenu={(e) => openContextMenu(e, undefined, col.key)}
               style={{
                 ...headerCellBase,
                 gridRow: fieldHeaderRowIdx + 1,
@@ -2556,7 +2228,21 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
               }}
               title={col.label}
             >
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.label}</span>
+              {editingHeader?.colKey === col.key ? (
+                <input
+                  autoFocus
+                  value={draftValue}
+                  onChange={(event) => setDraftValue(event.target.value)}
+                  onBlur={commitHeaderEdit}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') { event.preventDefault(); commitHeaderEdit() }
+                    if (event.key === 'Escape') { event.preventDefault(); setEditingHeader(null) }
+                  }}
+                  style={{ width: '100%', height: ROW_H - 6, border: '1px solid #2563eb', borderRadius: 3, padding: '0 6px', fontSize: 12, outline: 'none', background: '#ffffff', color: '#111827', fontWeight: 700 }}
+                />
+              ) : (
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.label}</span>
+              )}
             </div>
           ))}
           {/* Field header — empty filler */}
@@ -2566,7 +2252,8 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
               <div
                 key={`fh-extra-${i}`}
                 onClick={() => setSel({ r: fieldHeaderRowIdx, c })}
-                style={{ ...headerCellBase, gridRow: fieldHeaderRowIdx + 1, gridColumn: visibleCols.length + 2 + i, position: 'sticky', top: FIELD_HEADER_TOP, zIndex: 4, ...selRing(fieldHeaderRowIdx, c) }}
+                  style={{ ...headerCellBase, gridRow: fieldHeaderRowIdx + 1, gridColumn: visibleCols.length + 2 + i, position: 'sticky', top: FIELD_HEADER_TOP, zIndex: 4, ...selRing(fieldHeaderRowIdx, c) }}
+                  onContextMenu={(e) => openContextMenu(e)}
               />
             )
           })}
@@ -2580,6 +2267,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                 <div
                   style={{ ...gutterBase, gridRow: r + 1, gridColumn: 1, position: 'sticky', left: 0, zIndex: 3, background: sel.r === r ? '#dbeafe' : stripe }}
                   onClick={() => setSel((s) => ({ ...s, r }))}
+                  onContextMenu={(e) => openContextMenu(e, item.id)}
                 >
                   {r + 1}
                 </div>
@@ -2594,6 +2282,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                   const autoHighlight = isLowestPrice ? '#dcfce7' : isFastestLead ? '#dbeafe' : undefined
                   const highlight = highlightMap.get(`${item.id}|${col.key}`) ?? autoHighlight
                   const isSelected = sel.r === r && sel.c === c
+                  const inRange = isInSelectedRange(r, c)
                   const isFrozen = col.key === frozenColumnKey
                   const stateStyle: React.CSSProperties =
                     state.tone === 'violation'
@@ -2608,7 +2297,10 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                   return (
                     <div
                       key={`cell-${item.id}-${col.key}`}
-                      onClick={() => setSel({ r, c })}
+                      onMouseDown={() => startRangeSelect(r, c)}
+                      onMouseEnter={() => extendRangeSelect(r, c)}
+                      onDoubleClick={() => startCellEdit(item, col)}
+                      onContextMenu={(e) => openContextMenu(e, item.id, col.key)}
                       title={[
                         isLowestPrice ? 'Lowest total price for this item.' : '',
                         isFastestLead ? 'Fastest lead time for this item.' : '',
@@ -2619,17 +2311,29 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                         gridRow: r + 1,
                         gridColumn: c + 2,
                         ...stateStyle,
-                        background: highlight ?? stateStyle.background ?? stripe,
+                        background: isSelected ? (highlight ?? '#dbeafe') : inRange ? (highlight ?? '#eff6ff') : (highlight ?? stateStyle.background ?? stripe),
                         fontWeight: col.kind === 'vendor' && col.vendorMetric === 'total' ? 600 : 400,
                         color: stateStyle.color ?? '#24292f',
                         justifyContent: alignToJustify(col.align),
                         fontVariantNumeric: col.align === 'right' ? 'tabular-nums' : 'normal',
                         ...(isLowestPrice || isFastestLead ? { boxShadow: `inset 0 -2px 0 ${isLowestPrice ? '#16a34a' : '#2563eb'}` } : {}),
                         ...(isFrozen ? { position: 'sticky', left: GUTTER_W, zIndex: 2, borderRight: strongBorder } : {}),
-                        ...(isSelected ? { boxShadow: 'inset 0 0 0 2px #2563eb', background: highlight ?? '#dbeafe' } : {}),
+                        ...(isSelected ? { boxShadow: 'inset 0 0 0 2px #2563eb' } : inRange ? { boxShadow: 'inset 0 0 0 1px #93c5fd' } : {}),
                       }}
                     >
-                      {col.vendorMetric === 'alternate' && value ? (
+                      {editingCell?.rowKey === item.id && editingCell.colKey === col.key ? (
+                        <input
+                          autoFocus
+                          value={draftValue}
+                          onChange={(event) => setDraftValue(event.target.value)}
+                          onBlur={commitCellEdit}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') { event.preventDefault(); commitCellEdit() }
+                            if (event.key === 'Escape') { event.preventDefault(); setEditingCell(null) }
+                          }}
+                          style={{ width: '100%', height: ROW_H - 6, border: '1px solid #2563eb', borderRadius: 3, padding: '0 6px', fontSize: 12, outline: 'none', background: '#ffffff', color: '#111827' }}
+                        />
+                      ) : col.vendorMetric === 'alternate' && value ? (
                         <span className="rounded px-1.5 py-0.5 text-[10px] font-bold" style={{ background: '#fff7cc', color: '#74531a', border: '1px solid #d7ad43', lineHeight: '14px' }}>
                           {value}
                         </span>
@@ -2643,11 +2347,14 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                 {Array.from({ length: EXTRA_COLS }).map((_, i) => {
                   const c = visibleCols.length + i
                   const isSelected = sel.r === r && sel.c === c
+                  const inRange = isInSelectedRange(r, c)
                   return (
                     <div
                       key={`cell-${item.id}-extra-${i}`}
-                      onClick={() => setSel({ r, c })}
-                      style={{ ...cellBase, gridRow: r + 1, gridColumn: visibleCols.length + 2 + i, background: stripe, ...(isSelected ? { boxShadow: 'inset 0 0 0 2px #2563eb', background: '#dbeafe' } : {}) }}
+                      onMouseDown={() => startRangeSelect(r, c)}
+                      onMouseEnter={() => extendRangeSelect(r, c)}
+                      onContextMenu={(e) => openContextMenu(e, item.id)}
+                      style={{ ...cellBase, gridRow: r + 1, gridColumn: visibleCols.length + 2 + i, background: isSelected ? '#dbeafe' : inRange ? '#eff6ff' : stripe, ...(isSelected ? { boxShadow: 'inset 0 0 0 2px #2563eb' } : inRange ? { boxShadow: 'inset 0 0 0 1px #93c5fd' } : {}) }}
                     />
                   )
                 })}
@@ -2731,10 +2438,68 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
         </div>
       </div>
 
+      {contextMenu && createPortal(
+        <div
+          role="menu"
+          onClick={(event) => event.stopPropagation()}
+          style={{
+            position: 'fixed',
+            top: contextMenu.y,
+            left: contextMenu.x,
+            zIndex: 1000,
+            minWidth: 210,
+            border: '1px solid #d9e0dc',
+            borderRadius: 6,
+            background: '#ffffff',
+            boxShadow: '0 12px 32px rgba(31, 41, 55, 0.18)',
+            padding: 4,
+            color: '#1e3a2f',
+            fontSize: 12,
+          }}
+        >
+          <button type="button" role="menuitem" onClick={() => makeManualColumn(contextMenu.colKey, 'left')} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
+            Insert column left
+          </button>
+          <button type="button" role="menuitem" onClick={() => makeManualColumn(contextMenu.colKey, 'right')} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
+            Insert column right
+          </button>
+          <button type="button" role="menuitem" onClick={() => renameColumnInline(contextMenu.colKey)} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
+            Rename column
+          </button>
+          <div style={{ margin: '4px 0', borderTop: '1px solid #edf3f0' }} />
+          <button type="button" role="menuitem" onClick={() => makeManualRow(contextMenu.rowKey, 'above')} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
+            Insert row above
+          </button>
+          <button type="button" role="menuitem" onClick={() => makeManualRow(contextMenu.rowKey, 'below')} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
+            Insert row below
+          </button>
+          <div style={{ margin: '4px 0', borderTop: '1px solid #edf3f0' }} />
+          <button type="button" role="menuitem" onClick={() => contextMenu.colKey ? hideColumns([contextMenu.colKey]) : setContextMenu(null)} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
+            Hide column
+          </button>
+          <button type="button" role="menuitem" onClick={() => contextMenu.rowKey ? hideLineItems([contextMenu.rowKey]) : setContextMenu(null)} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
+            Hide row
+          </button>
+          <button type="button" role="menuitem" onClick={() => sortRowsByColumn(contextMenu.colKey, 'asc')} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
+            Sort A to Z
+          </button>
+          <button type="button" role="menuitem" onClick={() => sortRowsByColumn(contextMenu.colKey, 'desc')} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
+            Sort Z to A
+          </button>
+          <button type="button" role="menuitem" onClick={() => hideBlankRowsForColumn(contextMenu.colKey)} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
+            Filter blanks in column
+          </button>
+          <button type="button" role="menuitem" onClick={() => clearCell(contextMenu.rowKey, contextMenu.colKey)} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#fff7ed]" style={{ color: '#a85c2a' }}>
+            Clear cell edit
+          </button>
+        </div>,
+        document.body,
+      )}
+
       {/* Status bar */}
       <div className="flex items-center justify-between shrink-0" style={{ borderTop: baseBorder, background: '#f6f8fa', padding: '4px 10px', fontSize: 11, color: '#57606a' }}>
-        <span>{visibleItems.length} of {items.length} items · {bids.length} vendors · {visibleCols.length} of {allCols.length} columns</span>
-        <span>Click cell · Arrow keys navigate · Drag column edges · ⌘K for AI</span>
+        <span>{visibleItems.length} of {items.length} items · {bids.length} vendors · {visibleCols.length} of {allCols.length} columns · {selectedRange.r2 - selectedRange.r1 + 1}x{selectedRange.c2 - selectedRange.c1 + 1} selected</span>
+        <span>Double-click or Enter to edit · Drag to select · Right-click rows/columns · ⌘K for AI</span>
       </div>
 
       <BidComparisonAssistant
@@ -2763,11 +2528,10 @@ export function BidDashboard({
   rfq: ContractorRFQ
   bids: ContractorBid[]
   demoMode?: boolean
-  section?: 'all' | 'comparison' | 'decision' | 'purchase-order'
+  section?: 'all' | 'comparison' | 'decision'
   userKey?: string
 }) {
   const router = useRouter()
-  const canAwardPO = rfq.status === 'active'
   const [isPending, startTransition] = useTransition()
   const [decisionNotes, setDecisionNotes] = useState<Record<string, string>>({})
   const [decisionStatuses, setDecisionStatuses] = useState<Record<string, ContractorBid['buyer_decision_status']>>({})
@@ -2839,14 +2603,12 @@ export function BidDashboard({
     )
   }
 
-  const fullBids = bids.filter(isFullCoverageBid)
-  const lowestBid = getFullCoverageLowestBid(bids)
-  const fastestBid = getFastestBid(bids)
-  const preferredBids = bids.filter((bid) => (decisionStatuses[bid.id] ?? bid.buyer_decision_status) === 'preferred')
-  const preferredBid = preferredBids.length === 1 ? preferredBids[0] : undefined
-  const awardDisabledReason = canAwardPO
-    ? undefined
-    : 'Only active RFQs can create tracking orders.'
+  const comparisonSummary = buildLiveQuoteComparisonSummary(rfq, bids)
+  const fullBids = comparisonSummary.sortedBids.filter((bid) =>
+    comparisonSummary.evaluation.vendors.find((vendor) => vendor.vendorId === (bid.vendor_id ?? bid.vendor_email ?? bid.id))?.completeComparable,
+  )
+  const lowestBid = comparisonSummary.lowestCompleteBid
+  const fastestBid = comparisonSummary.fastestBid
   const selectedBid = selectedBidId ? bids.find((bid) => bid.id === selectedBidId) : undefined
 
   function getMentionQuery(bid: ContractorBid): string | null {
@@ -2952,7 +2714,6 @@ export function BidDashboard({
 
   const showComparison = section === 'all' || section === 'comparison'
   const showDecision = section === 'all' || section === 'decision'
-  const showPurchaseOrder = section === 'all' || section === 'decision' || section === 'purchase-order'
   const vendorColors = buildVendorColorMap(bids)
 
   return (
@@ -2971,7 +2732,7 @@ export function BidDashboard({
         )}
         {bids
           .slice()
-          .sort(compareAwardablePrice)
+          .sort((a, b) => comparisonSummary.sortedBids.findIndex((bid) => bid.id === a.id) - comparisonSummary.sortedBids.findIndex((bid) => bid.id === b.id))
           .map((bid) => (
             <div key={`decision-${bid.id}`} className="rounded-2xl p-5" style={{ background: '#ffffff', border: '1px solid #e2d9cf', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -3164,13 +2925,6 @@ export function BidDashboard({
         </div>
       )}
 
-      {/* Purchase order handoff */}
-      {showPurchaseOrder && canAwardPO && (
-        <div className={showDecision ? 'mt-8' : ''}>
-          <PurchaseOrderHandoff rfq={rfq} bids={bids} demoMode={demoMode} projectName={projectName} />
-        </div>
-      )}
-
       {selectedBid && (
         <div
           className="fixed inset-0 z-40"
@@ -3241,7 +2995,7 @@ export function BidDashboard({
                   </div>
                   {selectedBid.spec_compliance_report.summary_status === 'violation' && (
                     <div className="mt-3 rounded-md px-3 py-2 text-xs font-medium" style={{ background: '#fdeaea', border: '1px solid #f5c6c6', color: '#c0392b' }}>
-                      This quote has possible spec violations. Awarding is still allowed, but review the evidence before issuing a PO.
+                      This quote has possible spec violations. Review the evidence before marking it preferred.
                     </div>
                   )}
                   {selectedBid.spec_compliance_report.error && (
@@ -3380,16 +3134,6 @@ export function BidDashboard({
                 <p className="text-2xl font-bold leading-none" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>
                   {fmt(selectedBid.total_price)}
                 </p>
-              </div>
-              <div className="flex">
-                <AwardPOButton
-                  rfqId={rfq.id}
-                  bid={selectedBid}
-                  disabledReason={selectedBid.id === preferredBid?.id ? awardDisabledReason : 'Mark exactly this quote as preferred before awarding.'}
-                  demoMode={demoMode}
-                  fullWidth
-                  label={`Award PO to ${selectedBid.vendor_name}`}
-                />
               </div>
             </div>
           </aside>

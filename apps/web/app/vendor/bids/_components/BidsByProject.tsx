@@ -15,21 +15,21 @@ const TABS: { value: FilterTab; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'pending', label: 'Pending' },
   { value: 'under_review', label: 'Under Review' },
-  { value: 'awarded', label: 'Awarded' },
+  { value: 'shortlisted', label: 'Shortlisted' },
   { value: 'rejected', label: 'Rejected' },
 ]
 
 const STATUS_STYLES: Record<SubmittedBidStatus, React.CSSProperties> = {
   pending: { background: '#ede8e2', color: '#4a6358' },
   under_review: { background: '#fff3eb', color: '#fa6b04' },
-  awarded: { background: '#e8f4ee', color: '#2d6a4f' },
+  shortlisted: { background: '#e8f4ee', color: '#2d6a4f' },
   rejected: { background: '#fdeaea', color: '#c0392b' },
 }
 
 const STATUS_LABELS: Record<SubmittedBidStatus, string> = {
   pending: 'Pending',
   under_review: 'Under Review',
-  awarded: 'Awarded',
+  shortlisted: 'Shortlisted',
   rejected: 'Rejected',
 }
 
@@ -126,7 +126,7 @@ export function BidsByProject({ bids }: Props) {
           {grouped.map(({ projectId, projectName, bids: projectBids }) => {
             const isExpanded = expandedProjects.has(projectId)
             const projectTotal = projectBids.reduce((s, b) => s + b.total_price, 0)
-            const awardedCount = projectBids.filter((b) => b.status === 'awarded').length
+            const shortlistedCount = projectBids.filter((b) => b.status === 'shortlisted').length
 
             return (
               <div
@@ -157,12 +157,12 @@ export function BidsByProject({ bids }: Props) {
                       >
                         {projectBids.length} bid{projectBids.length !== 1 ? 's' : ''}
                       </span>
-                      {awardedCount > 0 && (
+                      {shortlistedCount > 0 && (
                         <span
                           className="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium"
                           style={{ background: '#e8f4ee', color: '#2d6a4f' }}
                         >
-                          {awardedCount} awarded
+                          {shortlistedCount} shortlisted
                         </span>
                       )}
                     </div>
@@ -180,24 +180,16 @@ export function BidsByProject({ bids }: Props) {
                         className="flex items-center justify-between gap-4 px-4 py-3 transition-colors"
                         style={{
                           borderTop: idx > 0 ? '1px solid #ede8e2' : undefined,
-                          background: bid.status === 'awarded' ? '#e8f4ee' : '#ffffff',
+                          background: bid.status === 'shortlisted' ? '#e8f4ee' : '#ffffff',
                         }}
                         onMouseEnter={(e) => (e.currentTarget.style.background = '#ede8e2')}
-                        onMouseLeave={(e) => (e.currentTarget.style.background = bid.status === 'awarded' ? '#e8f4ee' : '#ffffff')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = bid.status === 'shortlisted' ? '#e8f4ee' : '#ffffff')}
                       >
                         <div className="min-w-0">
                           <p className="text-sm font-medium truncate" style={{ color: '#1e3a2f' }}>{bid.rfq_title}</p>
                           <p className="text-xs mt-0.5" style={{ color: '#8a9e96' }}>
                             {bid.contractor_name} · {formatRelativeTime(bid.submitted_at)}
                           </p>
-                          {bid.po_number && (
-                            <p
-                              className="text-xs mt-0.5"
-                              style={{ fontFamily: 'var(--font-dm-mono, monospace)', color: '#2d6a4f' }}
-                            >
-                              {bid.po_number}
-                            </p>
-                          )}
                         </div>
                         <div className="flex items-center gap-4 shrink-0">
                           <p className="text-sm font-semibold" style={{ color: '#1e3a2f' }}>{formatCurrency(bid.total_price)}</p>

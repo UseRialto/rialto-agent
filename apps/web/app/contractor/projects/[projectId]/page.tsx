@@ -1,11 +1,11 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { ArrowLeft, FilePlus2, MapPin, Settings, SlidersHorizontal } from 'lucide-react'
-import { getContractorProject, getContractorProjectOrders, getContractorProjectRFQCounts, getContractorProjectRFQs } from '@/lib/api/contractor'
+import { getContractorProject, getContractorProjectRFQCounts, getContractorProjectRFQs } from '@/lib/api/contractor'
 import { RFQCounterCards } from './_components/RFQCounterCards'
 import { ProjectSpecIndexKickoff } from './_components/ProjectSpecIndexKickoff'
+import { ExternalQuoteImportButton } from './_components/ExternalQuoteImportButton'
 import { RFQListTable } from './rfqs/_components/RFQListTable'
-import { ContractorOrderTable } from '@/app/contractor/orders/_components/ContractorOrderTable'
 import { formatDate } from '@/lib/utils'
 
 export async function generateMetadata({ params }: { params: Promise<{ projectId: string }> }) {
@@ -19,7 +19,6 @@ const STATUS_TABS = [
   { label: 'Drafts', value: 'pending' },
   { label: 'Active', value: 'active' },
   { label: 'Closed', value: 'closed' },
-  { label: 'Purchase Orders', value: 'purchase_orders' },
 ]
 
 export default async function ProjectDashboardPage({
@@ -32,13 +31,11 @@ export default async function ProjectDashboardPage({
   const { projectId } = await params
   const { status } = await searchParams
   const activeTab = status ?? ''
-  const showPurchaseOrders = activeTab === 'purchase_orders'
 
-  const [project, counts, rfqs, orders] = await Promise.all([
+  const [project, counts, rfqs] = await Promise.all([
     getContractorProject(projectId),
     getContractorProjectRFQCounts(projectId),
-    showPurchaseOrders ? Promise.resolve([]) : getContractorProjectRFQs(projectId, status),
-    showPurchaseOrders ? getContractorProjectOrders(projectId) : Promise.resolve([]),
+    getContractorProjectRFQs(projectId, status),
   ])
 
   if (!project) notFound()
@@ -76,6 +73,7 @@ export default async function ProjectDashboardPage({
           )}
         </div>
             <div className="flex flex-wrap items-center gap-2">
+          <ExternalQuoteImportButton projectId={projectId} />
           <Link
             href={`/contractor/projects/${projectId}/settings`}
                   className="inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-white transition-colors"
@@ -122,11 +120,12 @@ export default async function ProjectDashboardPage({
           </div>
         </div>
 
-        {!showPurchaseOrders && counts.total === 0 ? (
+        {counts.total === 0 ? (
           <div className="rounded-2xl border-2 border-dashed p-10 text-center" style={{ borderColor: '#e2d9cf', background: 'rgba(255,255,255,0.8)' }}>
             <p className="text-sm font-semibold" style={{ color: '#4a6358' }}>No procurement requests yet for this project.</p>
             <p className="mt-1 text-xs" style={{ color: '#8a9e96' }}>Create an RFQ to request exact pricing from vendors.</p>
             <div className="mt-4 flex items-center justify-center gap-3">
+              <ExternalQuoteImportButton projectId={projectId} variant="empty" />
               <Link
                 href={`/contractor/projects/${projectId}/rfqs/new`}
                 className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white transition-colors"
@@ -137,24 +136,6 @@ export default async function ProjectDashboardPage({
               </Link>
             </div>
           </div>
-        ) : showPurchaseOrders ? (
-          orders.length === 0 ? (
-            <div className="rounded-2xl border-2 border-dashed p-10 text-center" style={{ borderColor: '#e2d9cf', background: 'rgba(255,255,255,0.8)' }}>
-              <p className="text-sm font-semibold" style={{ color: '#4a6358' }}>No purchase orders yet for this project.</p>
-              <p className="mt-1 text-xs" style={{ color: '#8a9e96' }}>Accepted PO awards will appear here and link directly into Track Orders.</p>
-              <div className="mt-4">
-                <Link
-                  href="/contractor/orders"
-                  className="inline-flex rounded-xl px-4 py-2 text-sm font-semibold transition-colors"
-                  style={{ background: '#ffffff', border: '1px solid #e2d9cf', color: '#4a6358' }}
-                >
-                  Open Track Orders
-                </Link>
-              </div>
-            </div>
-          ) : (
-            <ContractorOrderTable orders={orders} />
-          )
         ) : (
           <RFQListTable rfqs={rfqs} projectId={projectId} />
         )}

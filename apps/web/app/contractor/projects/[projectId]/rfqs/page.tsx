@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getContractorProject, getContractorProjectRFQs } from '@/lib/api/contractor'
 import { RFQListTable } from './_components/RFQListTable'
+import { ExternalQuoteImportButton } from '../_components/ExternalQuoteImportButton'
 
 export const metadata = { title: 'RFQs - Rialto' }
 
@@ -45,6 +46,7 @@ export default async function RFQListPage({
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>RFQs</h1>
         <div className="flex items-center gap-2">
+          <ExternalQuoteImportButton projectId={projectId} variant="empty" />
           <Link
             href={`/contractor/projects/${projectId}/rfqs/new`}
             className="rounded-md px-4 py-2 text-sm font-semibold text-white transition-colors"

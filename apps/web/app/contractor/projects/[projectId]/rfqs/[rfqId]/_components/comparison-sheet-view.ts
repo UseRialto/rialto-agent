@@ -23,6 +23,21 @@ export interface DerivedColumn {
   insertAfterColKey?: string
 }
 
+export interface ManualColumn {
+  key: string
+  label: string
+  insertAfterColKey?: string
+}
+
+export interface ManualLineItem {
+  id: string
+  sku: string
+  description: string
+  quantity: number
+  unit: string
+  insertAfterLineItemId?: string
+}
+
 export interface ChartConfig {
   slot: 'left' | 'right'
   metric: ChartMetric
@@ -36,8 +51,13 @@ export interface ComparisonSheetView {
   hiddenLineItemIds: string[]
   highlights: ComparisonHighlight[]
   derivedColumns: DerivedColumn[]
+  manualColumns: ManualColumn[]
+  manualLineItems: ManualLineItem[]
+  cellOverrides: Record<string, string>
+  columnLabelOverrides: Record<string, string>
   charts: ChartConfig[]
   columnOrder?: string[]
+  lineItemOrder?: string[]
   columnWidths?: Record<string, number>
 }
 
@@ -46,6 +66,10 @@ export const DEFAULT_VIEW: ComparisonSheetView = {
   hiddenLineItemIds: [],
   highlights: [],
   derivedColumns: [],
+  manualColumns: [],
+  manualLineItems: [],
+  cellOverrides: {},
+  columnLabelOverrides: {},
   charts: [
     { slot: 'left', metric: 'price', title: 'Total Price' },
     { slot: 'right', metric: 'lead', title: 'Lead Time' },
@@ -136,6 +160,36 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
     setView((prev) => ({ ...prev, columnWidths: { ...(prev.columnWidths ?? {}), [colKey]: width } }))
   }, [])
 
+  const addManualColumns = useCallback((cols: ManualColumn[]) => {
+    setView((prev) => ({ ...prev, manualColumns: [...(prev.manualColumns ?? []), ...cols] }))
+  }, [])
+
+  const addManualLineItems = useCallback((rows: ManualLineItem[]) => {
+    setView((prev) => ({ ...prev, manualLineItems: [...(prev.manualLineItems ?? []), ...rows] }))
+  }, [])
+
+  const setCellOverride = useCallback((rowKey: string, colKey: string, value: string) => {
+    setView((prev) => {
+      const key = `${rowKey}|${colKey}`
+      const next = { ...(prev.cellOverrides ?? {}) }
+      next[key] = value
+      return { ...prev, cellOverrides: next }
+    })
+  }, [])
+
+  const setColumnLabel = useCallback((colKey: string, label: string) => {
+    setView((prev) => {
+      const next = { ...(prev.columnLabelOverrides ?? {}) }
+      if (label.trim() === '') delete next[colKey]
+      else next[colKey] = label.trim()
+      return { ...prev, columnLabelOverrides: next }
+    })
+  }, [])
+
+  const setLineItemOrder = useCallback((ids: string[]) => {
+    setView((prev) => ({ ...prev, lineItemOrder: ids }))
+  }, [])
+
   const reset = useCallback(() => setView(DEFAULT_VIEW), [])
 
   return {
@@ -153,6 +207,11 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
     removeDerivedColumns,
     setChart,
     setColumnWidth,
+    addManualColumns,
+    addManualLineItems,
+    setCellOverride,
+    setColumnLabel,
+    setLineItemOrder,
     reset,
   }
 }
@@ -169,6 +228,11 @@ export interface ComparisonViewPatch {
   clearHighlights?: boolean
   addDerivedColumns?: DerivedColumn[]
   removeDerivedColumnKeys?: string[]
+  addManualColumns?: ManualColumn[]
+  addManualLineItems?: ManualLineItem[]
+  setCells?: Array<{ rowKey: string; colKey: string; value: string }>
+  setColumnLabels?: Array<{ colKey: string; label: string }>
+  setLineItemOrder?: string[]
   setCharts?: ChartConfig[]
 }
 
@@ -198,6 +262,31 @@ export function applyPatch(view: ComparisonSheetView, patch: ComparisonViewPatch
   }
   if (patch.addDerivedColumns?.length) {
     next = { ...next, derivedColumns: [...next.derivedColumns, ...patch.addDerivedColumns] }
+  }
+  if (patch.addManualColumns?.length) {
+    next = { ...next, manualColumns: [...(next.manualColumns ?? []), ...patch.addManualColumns] }
+  }
+  if (patch.addManualLineItems?.length) {
+    next = { ...next, manualLineItems: [...(next.manualLineItems ?? []), ...patch.addManualLineItems] }
+  }
+  if (patch.setCells?.length) {
+    const cellOverrides = { ...(next.cellOverrides ?? {}) }
+    for (const cell of patch.setCells) {
+      const key = `${cell.rowKey}|${cell.colKey}`
+      cellOverrides[key] = cell.value
+    }
+    next = { ...next, cellOverrides }
+  }
+  if (patch.setColumnLabels?.length) {
+    const columnLabelOverrides = { ...(next.columnLabelOverrides ?? {}) }
+    for (const col of patch.setColumnLabels) {
+      if (col.label.trim() === '') delete columnLabelOverrides[col.colKey]
+      else columnLabelOverrides[col.colKey] = col.label.trim()
+    }
+    next = { ...next, columnLabelOverrides }
+  }
+  if (patch.setLineItemOrder?.length) {
+    next = { ...next, lineItemOrder: patch.setLineItemOrder }
   }
   if (patch.setCharts?.length) {
     next = {

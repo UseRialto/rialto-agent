@@ -106,7 +106,7 @@ export async function getMagicRFQAccess(token: string): Promise<MagicRFQAccess> 
   if (new Date(link.expires_at).getTime() < Date.now()) return { status: 'expired' }
 
   const rfq = await getRFQById(link.rfq_id)
-  if (!rfq || (rfq.status !== 'active' && rfq.status !== 'po_offered')) {
+  if (!rfq || rfq.status !== 'active') {
     return { status: 'closed' }
   }
   if (rfq.bid_deadline && new Date(`${rfq.bid_deadline}T23:59:59.999Z`).getTime() < Date.now()) {

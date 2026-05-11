@@ -94,9 +94,8 @@ export function BidLeadTimeTable({ bids, rfq }: { bids: ContractorBid[]; rfq: Co
                   </td>
                   <td className="px-4 py-3 text-center">
                     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                      bid.status === 'awarded'     ? 'bg-green-100 text-green-700'
+                      bid.status === 'shortlisted' ? 'bg-purple-100 text-purple-700'
                       : bid.status === 'under_review' ? 'bg-amber-100 text-amber-800'
-                      : bid.status === 'shortlisted' ? 'bg-purple-100 text-purple-700'
                       : bid.status === 'rejected'    ? 'bg-red-100 text-red-700'
                       : 'bg-gray-100 text-gray-500'
                     }`}>

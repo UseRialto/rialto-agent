@@ -14,10 +14,10 @@ import type {
 // Vendor-side types (seller/supplier view of the marketplace)
 // These are the API contract shapes for all vendor-facing endpoints.
 
-export type ProjectStatus = 'active' | 'awarded' | 'closed'
+export type ProjectStatus = 'active' | 'closed'
 export type VendorResponseStatus = 'not_started' | 'draft' | 'submitted'
 export type BidDraftStatus = 'draft' | 'submitted'
-export type SubmittedBidStatus = 'pending' | 'under_review' | 'awarded' | 'rejected'
+export type SubmittedBidStatus = 'pending' | 'under_review' | 'shortlisted' | 'rejected'
 export type LineItemAvailability = 'in_stock' | 'can_source' | 'unavailable'
 
 // --- Projects ---
@@ -123,7 +123,7 @@ export interface BidDraft {
   updated_at: string
 }
 
-// --- Submitted Bid (vendor's "My Orders" view) ---
+// --- Submitted Bid (vendor's quote history view) ---
 // GET /api/vendor/bids  - all submitted bids across all projects
 export interface SubmittedBid {
   id: string
@@ -137,43 +137,8 @@ export interface SubmittedBid {
   total_price: number             // sum across all line items
   line_item_count: number
   status: SubmittedBidStatus
-  po_number?: string              // populated once contractor awards
   line_item_responses: BidLineItemResponse[]
   vendor_id?: string              // scopes bid to the submitting vendor
   terms?: BidTerms
   compliance_declarations?: ComplianceDeclaration[]
-}
-
-// --- Order Fulfillment ---
-
-export type OrderStage = 'confirmed' | 'packaged' | 'shipped' | 'out_for_delivery' | 'delivered'
-
-export interface OrderStageProgress {
-  stage: OrderStage
-  completed_at?: string
-  photos?: string[]               // served from /api/files/[orderId]/[filename]
-  carrier?: string
-  tracking_number?: string
-  ship_date?: string
-  notes?: string
-}
-
-export interface VendorOrder {
-  id: string                      // same as bid id (sb-xxx)
-  rfq_id: string
-  bid_id?: string
-  rfq_title: string
-  project_id: string
-  project_name: string
-  contractor_name: string
-  po_number: string
-  agreed_price: number
-  line_items_snapshot: RFQLineItem[]         // denormalized at order creation
-  line_item_responses: BidLineItemResponse[]
-  delivery_date: string
-  delivery_location: string
-  awarded_at: string
-  current_stage: OrderStage
-  stage_history: OrderStageProgress[]
-  vendor_id?: string              // scopes order to the awarded vendor
 }

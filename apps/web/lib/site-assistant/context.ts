@@ -2,12 +2,10 @@ import type { SessionPayload } from '@/lib/auth/types'
 import { findUserById } from '@/lib/auth/users'
 import {
   getContractorActivity,
-  getContractorProjectOrders,
   getContractorProjectRFQs,
   getContractorProjects,
   getContractorRFQBids,
 } from '@/lib/api/contractor'
-import { getVendorOrders } from '@/lib/api/orders'
 import {
   getRFQsForProject,
   getSubmittedBids,
@@ -18,7 +16,6 @@ import type { RFQLineItem } from '@/lib/types/vendor'
 const MAX_PROJECTS = 6
 const MAX_RFQS_PER_PROJECT = 4
 const MAX_BIDS_PER_RFQ = 4
-const MAX_ORDERS_PER_PROJECT = 4
 const MAX_RECENT_ITEMS = 8
 
 type JsonValue =
@@ -70,10 +67,7 @@ async function buildContractorSnapshot(session: SessionPayload) {
     .slice(0, MAX_PROJECTS)
 
   const projectSnapshots = await Promise.all(activeProjects.map(async (project) => {
-    const [rfqs, orders] = await Promise.all([
-      getContractorProjectRFQs(project.id, 'all'),
-      getContractorProjectOrders(project.id),
-    ])
+    const rfqs = await getContractorProjectRFQs(project.id, 'all')
 
     const rfqSnapshots = await Promise.all(
       rfqs
@@ -121,17 +115,7 @@ async function buildContractorSnapshot(session: SessionPayload) {
       budget: money(project.budget),
       description: compactText(project.description),
       rfqCount: rfqs.length,
-      orderCount: orders.length,
       rfqs: rfqSnapshots,
-      recentOrders: orders.slice(0, MAX_ORDERS_PER_PROJECT).map((order) => ({
-        id: order.id,
-        vendor: order.vendor_name,
-        poNumber: order.po_number,
-        agreedPrice: money(order.agreed_price),
-        currentStage: order.current_stage,
-        expectedDeliveryDate: order.expected_delivery_date,
-        followUpStatus: order.follow_up_status,
-      })),
     }
   }))
 
@@ -147,16 +131,14 @@ async function buildContractorSnapshot(session: SessionPayload) {
       createdAt: item.created_at,
       projectId: item.project_id,
       rfqId: item.rfq_id,
-      orderId: item.order_id,
     })),
   }
 }
 
 async function buildVendorSnapshot(session: SessionPayload) {
-  const [summary, submittedBids, orders] = await Promise.all([
+  const [summary, submittedBids] = await Promise.all([
     getVendorProjectsSummary(session.email, session.userId),
     getSubmittedBids(session.userId),
-    getVendorOrders(session.userId),
   ])
 
   const projectSnapshots = await Promise.all(
@@ -190,7 +172,7 @@ async function buildVendorSnapshot(session: SessionPayload) {
   )
 
   return {
-    roleContext: 'vendor bidding and order workspace',
+    roleContext: 'vendor quote response workspace',
     visibleProjectCount: summary.projects.length,
     totalOpenRFQs: summary.totalOpenRFQs,
     invitedProjectCount: summary.invitedProjectCount,
@@ -204,16 +186,6 @@ async function buildVendorSnapshot(session: SessionPayload) {
       totalPrice: money(bid.total_price),
       status: bid.status,
       lineItemCount: bid.line_item_count,
-      poNumber: bid.po_number,
-    })),
-    recentOrders: orders.slice(0, MAX_RECENT_ITEMS).map((order) => ({
-      id: order.id,
-      rfqTitle: order.rfq_title,
-      projectName: order.project_name,
-      poNumber: order.po_number,
-      agreedPrice: money(order.agreed_price),
-      currentStage: order.current_stage,
-      deliveryDate: order.delivery_date,
     })),
   }
 }

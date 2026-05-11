@@ -7,7 +7,7 @@ import type { ComparisonSheetView, ComparisonViewPatch } from './comparison-shee
 interface SheetSchemaColumn {
   key: string
   label: string
-  kind: 'rfq-core' | 'rfq-attribute' | 'rfq-standard' | 'vendor' | 'derived'
+  kind: 'rfq-core' | 'rfq-attribute' | 'rfq-standard' | 'vendor' | 'derived' | 'manual'
   vendorId?: string
   vendorName?: string
   metric?: 'unit_price' | 'total' | 'lead' | 'alternate' | 'response_attr'
@@ -65,6 +65,15 @@ function describePatch(patch: ComparisonViewPatch | null, schema: BidComparisonA
   if (patch.clearHighlights) chips.push({ id: 'clear-hl', label: 'Clear highlights', tone: 'remove', onDismiss: () => {} })
   patch.addDerivedColumns?.forEach((c) => {
     chips.push({ id: `derived-${c.key}`, label: `Add column: ${c.label}`, tone: 'add', onDismiss: () => {} })
+  })
+  patch.addManualColumns?.forEach((c) => {
+    chips.push({ id: `manual-col-${c.key}`, label: `Insert column: ${c.label}`, tone: 'add', onDismiss: () => {} })
+  })
+  patch.addManualLineItems?.forEach((r) => {
+    chips.push({ id: `manual-row-${r.id}`, label: `Insert row: ${r.description || r.id}`, tone: 'add', onDismiss: () => {} })
+  })
+  patch.setCells?.forEach((cell) => {
+    chips.push({ id: `set-${cell.rowKey}-${cell.colKey}`, label: `Set cell: ${cell.colKey}`, tone: 'add', onDismiss: () => {} })
   })
   return chips
 }
