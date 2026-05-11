@@ -26,7 +26,6 @@ test.describe('Comparison dashboard', () => {
     await summaryCard.getByRole('button', { name: /^Payment$/i }).click()
     await expect(rows.first()).toContainText('Consolidated Materials')
 
-    await expect(page.getByText('Award Preferred Vendor')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Demo Only' })).toBeVisible()
   })
 })

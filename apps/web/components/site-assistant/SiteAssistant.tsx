@@ -76,7 +76,7 @@ interface StoredState {
 const WELCOME_MESSAGE: ChatMessage = {
   id: 'welcome',
   role: 'assistant',
-  content: 'Hi, I can help you reason through your Rialto projects, RFQs, bids, and orders.',
+  content: 'Hi, I can help you reason through your Rialto projects, quote requests, vendor responses, and quote comparisons.',
 }
 
 function makeId(): string {
@@ -663,7 +663,7 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
                 isClosing ? 'animate-[sa-content-hide_160ms_ease-in_forwards]' : 'animate-[sa-content-fade_260ms_ease-out_800ms_both]',
               )}
               style={{ color: '#1e3a2f' }}
-              placeholder="Ask anything about your projects, RFQs, bids, or orders…"
+              placeholder="Ask anything about your projects, quote requests, vendor responses, or comparisons..."
               disabled={isSending}
               onKeyDown={(event) => {
                 if (event.key === 'Escape') { event.preventDefault(); dismissChat() }

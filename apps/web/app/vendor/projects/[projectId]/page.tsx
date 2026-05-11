@@ -57,7 +57,7 @@ export default async function ProjectPage({ params }: Props) {
               </p>
               {hasAnonymousRFQs && (
                 <p className="mt-1 text-xs" style={{ color: '#a85c2a' }}>
-                  Some public requests in this project are anonymized for marketplace quoting.
+                  Some public requests in this project hide buyer identity during quoting.
                 </p>
               )}
               {contractorProject.description && (

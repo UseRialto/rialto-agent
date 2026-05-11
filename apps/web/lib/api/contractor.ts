@@ -17,6 +17,7 @@ import {
   getRFQ,
   getProjectRFQCounts,
   getProjectRFQCountsByProjectIds,
+  type ProjectRFQCounts,
   getAllActiveRFQs,
   getInvitedRFQsForVendor,
   getRFQById,
@@ -57,13 +58,13 @@ export async function getContractorRFQ(
 
 export async function getContractorProjectRFQCounts(
   projectId: string,
-): Promise<{ total: number; pending: number; active: number; awarded: number }> {
+): Promise<ProjectRFQCounts> {
   return getProjectRFQCounts(projectId)
 }
 
 export async function getContractorProjectRFQCountsByProjectIds(
   projectIds: string[],
-): Promise<Map<string, { total: number; pending: number; active: number; awarded: number }>> {
+): Promise<Map<string, ProjectRFQCounts>> {
   return getProjectRFQCountsByProjectIds(projectIds)
 }
 

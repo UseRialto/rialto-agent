@@ -31,12 +31,6 @@ ALTER TABLE "bids" ADD COLUMN "vendor_reliability_flag" text;
 ALTER TABLE "bid_line_items" ADD COLUMN "quoted_quantity" real;
 ALTER TABLE "bid_line_items" ADD COLUMN "substitution_notes" text;
 
-ALTER TABLE "orders" ADD COLUMN "ordered_at" text;
-ALTER TABLE "orders" ADD COLUMN "expected_delivery_date" text;
-ALTER TABLE "orders" ADD COLUMN "next_follow_up_date" text;
-ALTER TABLE "orders" ADD COLUMN "follow_up_status" text;
-ALTER TABLE "orders" ADD COLUMN "follow_up_notes" text;
-
 CREATE TABLE "vendor_relationships" (
   "id" serial PRIMARY KEY NOT NULL,
   "contractor_user_id" text NOT NULL,

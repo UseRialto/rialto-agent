@@ -495,22 +495,22 @@ export async function getProjectRFQs(projectId: string, status?: string): Promis
   }))
 }
 
-export async function getProjectRFQCounts(projectId: string): Promise<{ total: number; pending: number; active: number; awarded: number }> {
+export async function getProjectRFQCounts(projectId: string): Promise<ProjectRFQCounts> {
   const rows = await db.select({ status: rfqsTable.status }).from(rfqsTable).where(eq(rfqsTable.project_id, projectId))
   return {
     total: rows.length,
     pending: rows.filter((r) => r.status === 'draft').length,
     active: rows.filter((r) => r.status === 'active').length,
-    awarded: rows.filter((r) => r.status === 'closed').length,
+    closed: rows.filter((r) => r.status === 'closed').length,
   }
 }
 
-export type ProjectRFQCounts = { total: number; pending: number; active: number; awarded: number }
+export type ProjectRFQCounts = { total: number; pending: number; active: number; closed: number }
 
 export async function getProjectRFQCountsByProjectIds(projectIds: string[]): Promise<Map<string, ProjectRFQCounts>> {
   const counts = new Map<string, ProjectRFQCounts>()
   for (const projectId of projectIds) {
-    counts.set(projectId, { total: 0, pending: 0, active: 0, awarded: 0 })
+    counts.set(projectId, { total: 0, pending: 0, active: 0, closed: 0 })
   }
   if (projectIds.length === 0) return counts
 
@@ -520,7 +520,7 @@ export async function getProjectRFQCountsByProjectIds(projectIds: string[]): Pro
       total: sql<number>`count(*)::int`,
       pending: sql<number>`sum(case when ${rfqsTable.status} = 'draft' then 1 else 0 end)::int`,
       active: sql<number>`sum(case when ${rfqsTable.status} = 'active' then 1 else 0 end)::int`,
-      awarded: sql<number>`sum(case when ${rfqsTable.status} = 'closed' then 1 else 0 end)::int`,
+      closed: sql<number>`sum(case when ${rfqsTable.status} = 'closed' then 1 else 0 end)::int`,
     })
     .from(rfqsTable)
     .where(inArray(rfqsTable.project_id, projectIds))
@@ -531,7 +531,7 @@ export async function getProjectRFQCountsByProjectIds(projectIds: string[]): Pro
       total: Number(row.total),
       pending: Number(row.pending),
       active: Number(row.active),
-      awarded: Number(row.awarded),
+      closed: Number(row.closed),
     })
   }
 

@@ -4,7 +4,7 @@ This file captures the shared language for `rialto-agent`. Keep it concise and u
 
 ## Product Shape
 
-Rialto Agent is an agentic system for construction procurement. It helps contractor estimators request material quotes from vendors, collect vendor responses, and compare quotes in spreadsheet-like workflows.
+Rialto Agent is an agentic system for construction procurement. V1 is organized into three product modules: Requesting Quotes, Vendor Response Intake, and Quote Comparison. It helps contractor estimators request material quotes from vendors, collect vendor responses, and compare quotes in spreadsheet-like workflows; it stops at comparison rather than award, purchase order, or order tracking workflows.
 
 ## Domain Language
 
@@ -12,6 +12,7 @@ Rialto Agent is an agentic system for construction procurement. It helps contrac
 | --- | --- |
 | Rialto Agent | The customer-facing agentic construction procurement system being built in this repository. In v1, Rialto sends quote requests, captures vendor responses, extracts response data, and automates the Excel-like quote comparison workflow, but stops at comparison rather than award or purchasing handoff. |
 | Construction procurement | The contractor workflow of requesting, receiving, and comparing vendor quotes for materials needed on a job. |
+| Product Module | A durable v1 product slice with its own domain interface, implementation, tests, and documentation. The active product modules are Requesting Quotes, Vendor Response Intake, and Quote Comparison. |
 | Estimator | The primary user of Rialto Agent: a contractor-side user who requests material quotes from vendors and compares returned quotes. |
 | Contractor Organization | The customer/account boundary for Rialto Agent. It owns users, vendor lists, quote history, templates, and procurement data. |
 | Vendor | A supplier that receives material quote requests and returns pricing or availability information. |
@@ -26,6 +27,7 @@ Rialto Agent is an agentic system for construction procurement. It helps contrac
 | Vendor Directory | A contractor organization's shared reusable list of vendor companies and vendor contacts, built from estimator-entered recipients, past quote requests, quote responses, and explicit edits. Exact email matches can normalize vendor contacts, but trust-affecting changes such as merging, deleting, or organization-wide vendor classifications require elevated permission or review. |
 | Unconfirmed Vendor Contact | A vendor contact typed or pasted into a quote request before Rialto has enough evidence to treat it as part of the reusable vendor directory. Confirmation evidence includes explicit estimator confirmation, a successful vendor email send, or a vendor quote response. |
 | Quote Request | The central procurement object in Rialto: an estimator's request for vendor pricing on a set of materials. It includes project information and a request expiration date, and may include a bill of materials, vendor recipients, outbound email drafts, returned vendor quotes, imported files, and a quote comparison. Rialto creates a quote request even when the estimator starts by importing an external comparison file. |
+| Requesting Quotes | The product module where an estimator prepares a Quote Request, defines the Bill of Materials, chooses vendor recipients, reviews outbound vendor email drafts, and explicitly sends quote requests. |
 | Quote Request Workflow | The Rialto workflow where an estimator prepares a quote request and drafts outbound emails to multiple vendors. The default starting path is uploading a file such as CSV, PDF, or Excel; manual material entry is also supported. |
 | Bill of Materials | The list of materials that an estimator wants vendors to quote. It may come from an uploaded file or manual entry. Red-highlighted shared bill of materials fields that affect vendor scope block the quote request send until reviewed; vendor-specific unresolved fields block only the affected vendor draft. |
 | Vendor Alternate | A vendor-proposed substitution, alternate item, exclusion, or scope variation linked to a requested line item but kept separate from the main comparison until the estimator decides how to compare it. An estimator may select a vendor alternate for a line item, and that line then counts as resolved, but Rialto must preserve that the selection differs from the original requested item. A selected alternate does not count toward complete-comparable lowest quote calculations unless the estimator explicitly accepts the scope change for comparison. |
@@ -39,6 +41,7 @@ Rialto Agent is an agentic system for construction procurement. It helps contrac
 | Vendor Invitation | A vendor company's invitation to respond to a specific quote request, delivered to one or more vendor contacts. |
 | Magic Link | The hard-to-guess, revocable, per-vendor-invitation, no-login link in a vendor email draft that opens the vendor quote form for the associated quote request. Anyone with the link can submit for that vendor invitation in v1. The link expires on the quote request expiration date unless the estimator extends or regenerates access. |
 | Vendor Quote Response | A vendor's submitted pricing, availability, notes, exclusions, or attachments for a quote request, whether received through the vendor quote form or by email reply with body text and attachments. Multiple contacts at the same vendor still roll up to the same vendor's response history for the quote request. When a vendor edits a response before expiration, the latest submission is current while prior submissions remain in response history. |
+| Vendor Response Intake | The product module where Rialto receives, extracts, associates, reconciles, and merges Vendor Quote Responses into structured quote data while preserving source artifacts and review issues. |
 | Quote Response Extraction | Rialto's reading of vendor quote response sources to extract pricing, availability, notes, exclusions, attachments, and other quote details into structured procurement data suitable for quote comparison. High-confidence fields can merge automatically, but uncertain price, quantity, scope, alternate, exclusion, or vendor identity data requires estimator review. |
 | Vendor Response Source | The original form submission, email body, PDF, spreadsheet, or other attachment from which Rialto extracts vendor quote response data. Rialto preserves vendor response sources as the audit trail for extracted quote data. |
 | Quote Value Provenance | The trace from an extracted quote value in a comparison sheet back to the vendor response source and source location that produced it. |
@@ -73,6 +76,5 @@ Rialto Agent is an agentic system for construction procurement. It helps contrac
 
 ## Open Questions
 
-- What is the first product slice Rialto Agent should ship?
 - Which runtime, framework, and persistence boundaries should define the system?
 - Which agent workflows should be product behavior versus development workflow?

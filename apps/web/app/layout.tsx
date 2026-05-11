@@ -24,7 +24,7 @@ const dmMono = DM_Mono({
 export const metadata: Metadata = {
   title: 'Rialto - Construction Supply Chain Procurement',
   description:
-    'B2B procurement marketplace for construction materials with AI supply chain intelligence.',
+    'Construction quote requests, vendor response intake, and quote comparison with AI assistance.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

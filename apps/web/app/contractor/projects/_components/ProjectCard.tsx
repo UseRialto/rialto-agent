@@ -4,7 +4,7 @@ import type { ContractorProject } from '@/lib/types/contractor'
 
 interface Props {
   project: ContractorProject
-  counts: { total: number; pending: number; active: number; awarded: number }
+  counts: { total: number; pending: number; active: number; closed: number }
 }
 
 export function ProjectCard({ project, counts }: Props) {
@@ -45,7 +45,7 @@ export function ProjectCard({ project, counts }: Props) {
           {[
             { label: 'Drafts', value: counts.pending },
             { label: 'Active', value: counts.active },
-            { label: 'Awarded', value: counts.awarded },
+            { label: 'Closed', value: counts.closed },
           ].map((metric) => (
             <div key={metric.label} className="rounded-lg px-2 py-2" style={{ background: '#ede8e2', border: '1px solid #d6cdc3' }}>
               <p className="truncate text-lg font-semibold leading-none" style={{ fontFamily: 'var(--font-lora, Georgia, serif)', color: '#4a6358' }}>{metric.value}</p>

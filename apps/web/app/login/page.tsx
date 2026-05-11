@@ -24,7 +24,7 @@ export default function LoginPage() {
             Turn RFQs and vendor quotes into one controlled comparison workflow.
           </h1>
           <p className="mt-5 max-w-xl text-base leading-7" style={{ color: 'rgba(255,255,255,0.6)' }}>
-            Contractor and vendor teams share a focused workspace for project sourcing, quote comparison, mailbox replies, and order tracking.
+            Contractor and vendor teams share a focused workspace for quote requests, vendor responses, mailbox replies, and quote comparison.
           </p>
           <div className="mt-10 grid max-w-2xl gap-3 sm:grid-cols-2">
             <div className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}>
@@ -46,7 +46,7 @@ export default function LoginPage() {
           <div className="mb-6">
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#fa6b04' }}>Secure access</p>
             <h2 className="mt-2 text-2xl font-semibold tracking-tight" style={{ fontFamily: 'var(--font-lora, Georgia, serif)', color: '#1e3a2f' }}>Sign in to Rialto</h2>
-            <p className="mt-2 text-sm leading-6" style={{ color: '#8a9e96' }}>Use your email and password to enter the marketplace.</p>
+            <p className="mt-2 text-sm leading-6" style={{ color: '#8a9e96' }}>Use your email and password to enter Rialto.</p>
           </div>
           <div className="rounded-2xl p-6" style={{ background: '#ffffff', border: '1px solid #e2d9cf', boxShadow: '0 4px 24px rgba(30,58,47,0.08)' }}>
             <LoginForm />

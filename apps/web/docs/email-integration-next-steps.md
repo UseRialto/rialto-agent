@@ -26,9 +26,9 @@ All email infrastructure from Tomasz's branch and Jack's AI-drafting feature are
 - `/vendor/magic-rfq/[token]` - off-platform vendor secure quote form
 - PDF attachment: `lib/rfq-pdf.ts` + `/api/rfq-pdf/[rfqId]`
 
-### RFQ mailbox panel (Tomasz)
+### RFQ mailbox panel
 - RFQ detail page shows mailbox panel, vendor request state, email activity, review tasks
-- Email-origin bids show `Email` / `Needs Review` labels; PO award blocked for unreviewed email bids
+- Email-origin quotes show `Email` / `Needs Review` labels; unresolved review tasks keep quote comparison caveats visible
 
 ### Seed demo email data
 - `rfq-s001-b` has a full email demo thread: one `rfq_vendor_requests` row, one outbound + one inbound `rfq_email_messages`, one `rfq_quote_responses` + two `rfq_quote_line_items`, one open `rfq_review_tasks`, and an email-origin bid (`source: 'email'`, `status: 'under_review'`)
@@ -41,7 +41,7 @@ All email infrastructure from Tomasz's branch and Jack's AI-drafting feature are
    - Connect Google from contractor Settings
    - Send RFQ emails for an RFQ with off-platform invites
    - Reply on the same Gmail thread
-   - Run mailbox sync and confirm reply appears in bid dashboard
+   - Run mailbox sync and confirm reply appears in the quote comparison dashboard
 
 2. **Microsoft OAuth live setup** - create a Microsoft Entra app registration, add the local/prod callback URLs, grant delegated Graph permissions (`openid`, `email`, `profile`, `offline_access`, `User.Read`, `Mail.Read`, `Mail.Send`), then set `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` / `MICROSOFT_TENANT_ID`.
 
@@ -67,7 +67,7 @@ MICROSOFT_CLIENT_SECRET=     # Outlook OAuth (optional)
 MICROSOFT_TENANT_ID=common   # Outlook OAuth; use a tenant ID for single-tenant deployments
 ```
 
-Add to `apps/insiteai-web/.env.local` for local dev. Add all of the above to Vercel environment variables for production.
+Add to `apps/web/.env.local` for local dev. Add all of the above to Vercel environment variables for production.
 
 ### Google Cloud Console setup
 - **Authorized redirect URIs**: add your Vercel domain - `https://your-app.vercel.app/api/auth/google/callback`

@@ -63,4 +63,62 @@ describe('Vendor Response Workbook handoff', () => {
     expect(comparison.lowestCompleteComparableQuote?.vendorName).toBe('Complete Supply')
     expect(comparison.lowerPartialTotals.map((vendor) => vendor.vendorName)).toContain('Partial Supply')
   })
+
+  it('keeps unresolved quantity mismatches out of lowest complete comparable quote', () => {
+    const workbook = buildVendorResponseWorkbookFromBids(quoteRequest, [
+      bid({
+        id: 'complete',
+        vendor_name: 'Complete Supply',
+        line_item_responses: [
+          { line_item_id: 'line-1', sku: '', description: 'Ready-mix concrete', quantity: 10, unit: 'CY', unit_price: 100, total_price: 1000, lead_time_days: 5, availability: 'in_stock' },
+          { line_item_id: 'line-2', sku: '', description: 'Rebar', quantity: 5, unit: 'TON', unit_price: 200, total_price: 1000, lead_time_days: 5, availability: 'in_stock' },
+        ],
+      }),
+      bid({
+        id: 'quantity-mismatch',
+        vendor_name: 'Mismatch Supply',
+        line_item_responses: [
+          { line_item_id: 'line-1', sku: '', description: 'Ready-mix concrete', quantity: 10, quoted_quantity: 8, unit: 'CY', unit_price: 90, total_price: 720, lead_time_days: 5, availability: 'in_stock' },
+          { line_item_id: 'line-2', sku: '', description: 'Rebar', quantity: 5, unit: 'TON', unit_price: 180, total_price: 900, lead_time_days: 5, availability: 'in_stock' },
+        ],
+      }),
+    ])
+
+    const comparison = evaluateQuoteComparison(quoteComparisonInputFromWorkbook(workbook))
+    const mismatch = comparison.vendors.find((vendor) => vendor.vendorName === 'Mismatch Supply')
+
+    expect(comparison.lowestCompleteComparableQuote?.vendorName).toBe('Complete Supply')
+    expect(mismatch?.completeComparable).toBe(false)
+    expect(mismatch?.total).toBe(1620)
+    expect(mismatch?.caveats.some((caveat) => caveat.includes('quoted quantity is lower'))).toBe(true)
+    expect(comparison.lowerPartialTotals.map((vendor) => vendor.vendorName)).toContain('Mismatch Supply')
+  })
+
+  it('requires estimator review before vendor alternates are complete-comparable', () => {
+    const workbook = buildVendorResponseWorkbookFromBids(quoteRequest, [
+      bid({
+        id: 'complete',
+        vendor_name: 'Complete Supply',
+        line_item_responses: [
+          { line_item_id: 'line-1', sku: '', description: 'Ready-mix concrete', quantity: 10, unit: 'CY', unit_price: 100, total_price: 1000, lead_time_days: 5, availability: 'in_stock' },
+          { line_item_id: 'line-2', sku: '', description: 'Rebar', quantity: 5, unit: 'TON', unit_price: 200, total_price: 1000, lead_time_days: 5, availability: 'in_stock' },
+        ],
+      }),
+      bid({
+        id: 'alternate',
+        vendor_name: 'Alternate Supply',
+        line_item_responses: [
+          { line_item_id: 'line-1', sku: '', description: 'Ready-mix concrete alternate', quantity: 10, unit: 'CY', unit_price: 70, total_price: 700, lead_time_days: 5, availability: 'in_stock', is_alternate: true },
+          { line_item_id: 'line-2', sku: '', description: 'Rebar', quantity: 5, unit: 'TON', unit_price: 180, total_price: 900, lead_time_days: 5, availability: 'in_stock' },
+        ],
+      }),
+    ])
+
+    const comparison = evaluateQuoteComparison(quoteComparisonInputFromWorkbook(workbook))
+    const alternate = comparison.vendors.find((vendor) => vendor.vendorName === 'Alternate Supply')
+
+    expect(comparison.lowestCompleteComparableQuote?.vendorName).toBe('Complete Supply')
+    expect(alternate?.completeComparable).toBe(false)
+    expect(alternate?.caveats.some((caveat) => caveat.includes('vendor alternate'))).toBe(true)
+  })
 })

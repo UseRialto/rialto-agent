@@ -11,7 +11,7 @@ import type {
   RFPDetails,
 } from '@/lib/types/procurement'
 
-// Vendor-side types (seller/supplier view of the marketplace)
+// Vendor-side types for quote request and vendor response workflows.
 // These are the API contract shapes for all vendor-facing endpoints.
 
 export type ProjectStatus = 'active' | 'closed'

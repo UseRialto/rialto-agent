@@ -552,7 +552,7 @@ export function ContractorRFQBidClient({ rfq, isInvited, backHref, existingDraft
             className="mt-3 rounded-md px-3 py-2 text-xs"
             style={{ background: '#fdf0e8', border: '1px solid #e8c4a0', color: '#a85c2a' }}
           >
-            This is an anonymous public marketplace request. Buyer identity is intentionally hidden during quoting.
+            This public quote request hides buyer identity during quoting.
           </div>
         )}
         {rfq.ai_spec_assistant?.summary && (

@@ -1,7 +1,7 @@
 import { ClipboardList, FileClock, Radio } from 'lucide-react'
 
 interface Props {
-  counts: { total: number; pending: number; active: number; awarded: number }
+  counts: { total: number; pending: number; active: number; closed: number }
 }
 
 type CardConfig = { label: string; value: number; color: string; bg: string; border: string; description?: string; icon: React.ComponentType<{ className?: string }> }

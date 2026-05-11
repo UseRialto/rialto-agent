@@ -1,8 +1,8 @@
 /**
  * Seed script - populates Neon Postgres database with realistic dummy data.
- * Run: node scripts/seed.js  (or pnpm seed)
+ * Run: node scripts/seed.js  (or npm run seed)
  *
- * Requires DATABASE_URL in apps/insiteai-web/.env.local
+ * Requires DATABASE_URL in apps/web/.env.local
  * Inserts in FK dependency order. Idempotent - safe to run multiple times.
  */
 
@@ -11,7 +11,7 @@ const { neon } = require('@neondatabase/serverless')
 const bcryptjs = require('bcryptjs')
 
 if (!process.env.DATABASE_URL) {
-  console.error('ERROR: DATABASE_URL not set. Add it to apps/insiteai-web/.env.local')
+  console.error('ERROR: DATABASE_URL not set. Add it to apps/web/.env.local')
   process.exit(1)
 }
 
@@ -62,11 +62,10 @@ async function upsertProject(p) {
 
 async function upsertRFQ(rfq) {
   await sql`
-    INSERT INTO rfqs (id, project_id, title, category, status, visibility, bid_deadline, created_at, published_at,
-      pending_bid_id, pending_vendor_id, pending_vendor_email, pending_offered_at)
+    INSERT INTO rfqs (id, project_id, title, category, status, visibility, bid_deadline, created_at, published_at)
     VALUES (${rfq.id}, ${rfq.project_id}, ${rfq.title}, ${rfq.category || null}, ${rfq.status || 'draft'},
             ${rfq.visibility || 'public'}, ${rfq.bid_deadline || null}, ${rfq.created_at},
-            ${rfq.published_at || null}, ${null}, ${null}, ${null}, ${null})
+            ${rfq.published_at || null})
     ON CONFLICT(id) DO UPDATE SET
       title = EXCLUDED.title, status = EXCLUDED.status, visibility = EXCLUDED.visibility,
       bid_deadline = EXCLUDED.bid_deadline, published_at = EXCLUDED.published_at
@@ -132,11 +131,11 @@ async function insertNegotiationMessage(row) {
 async function upsertBid(bid, rfqId) {
   await sql`
     INSERT INTO bids (id, rfq_id, vendor_id, vendor_email, vendor_name, is_invited, is_on_platform,
-      submitted_at, total_price, currency, lead_time_days, notes, status, is_draft, po_number, source)
+      submitted_at, total_price, currency, lead_time_days, notes, status, is_draft, source)
     VALUES (${bid.id}, ${rfqId}, ${bid.vendor_id || null}, ${bid.vendor_email || null}, ${bid.vendor_name},
             ${bid.is_invited || false}, ${bid.is_on_platform || false}, ${bid.submitted_at},
             ${bid.total_price}, ${bid.currency || 'USD'}, ${bid.lead_time_days}, ${bid.notes || null},
-            ${bid.status || 'pending'}, ${false}, ${bid.po_number || null}, ${bid.source || 'platform'})
+            ${bid.status || 'pending'}, ${false}, ${bid.source || 'platform'})
     ON CONFLICT(id) DO UPDATE SET
       status = EXCLUDED.status, total_price = EXCLUDED.total_price, source = EXCLUDED.source
   `
@@ -150,27 +149,6 @@ async function upsertBid(bid, rfqId) {
       VALUES (${bid.id}, ${r.line_item_id}, ${r.sku || null}, ${r.description || null}, ${r.quantity || null},
               ${r.unit || null}, ${r.unit_price}, ${r.total_price}, ${r.lead_time_days},
               ${r.availability}, ${r.units_available || null}, ${r.notes || null})
-    `
-  }
-}
-
-async function upsertOrder(order) {
-  await sql`
-    INSERT INTO orders (id, rfq_id, bid_id, project_id, vendor_id, vendor_name, po_number,
-      agreed_price, delivery_date, delivery_location, awarded_at, current_stage, line_items_snapshot)
-    VALUES (${order.id}, ${order.rfq_id}, ${order.bid_id}, ${order.project_id}, ${order.vendor_id || null},
-            ${order.vendor_name}, ${order.po_number}, ${order.agreed_price}, ${order.delivery_date || null},
-            ${order.delivery_location || null}, ${order.awarded_at}, ${order.current_stage},
-            ${JSON.stringify(order.line_items_snapshot || [])})
-    ON CONFLICT(id) DO UPDATE SET current_stage = EXCLUDED.current_stage
-  `
-
-  await sql`DELETE FROM order_stage_progress WHERE order_id = ${order.id}`
-  for (const s of (order.stage_history || [])) {
-    await sql`
-      INSERT INTO order_stage_progress (order_id, stage, completed_at, notes, carrier, tracking_number, ship_date)
-      VALUES (${order.id}, ${s.stage}, ${s.completed_at || null}, ${s.notes || null},
-              ${s.carrier || null}, ${s.tracking_number || null}, ${s.ship_date || null})
     `
   }
 }
@@ -360,7 +338,7 @@ async function main() {
     { id: 'rfq-s001-draft', project_id: 'proj-s001', title: 'Elevator Systems - Tower A & B', status: 'draft', category: 'Elevator Systems', visibility: 'public', bid_deadline: '2026-06-01', created_at: '2026-04-14T11:00:00Z', invited_vendor_ids: [], invited_vendor_emails: ['precon@kone.com', 'bids@schindler.com'], line_items: [
       { id: 'li-s001d-1', sku: 'Otis-Gen3Core', description: 'Otis Gen3 Core Machine-Roomless Elevator', quantity: 4, unit: 'each', specs: 'ASME A17.1', contractor_budget: 460000, suggested_lead_time_days: 35 },
     ]},
-    { id: 'rfq-s001-aw1', project_id: 'proj-s001', title: 'Foundation Concrete - Phase 1', status: 'awarded', category: 'Concrete', visibility: 'public', bid_deadline: '2026-03-10', created_at: '2026-02-25T08:00:00Z', published_at: '2026-02-25T08:30:00Z', invited_vendor_ids: [], invited_vendor_emails: ['sales@calportland.com', 'quotes@martinmarietta.com'], line_items: [
+    { id: 'rfq-s001-aw1', project_id: 'proj-s001', title: 'Foundation Concrete - Phase 1', status: 'closed', category: 'Concrete', visibility: 'public', bid_deadline: '2026-03-10', created_at: '2026-02-25T08:00:00Z', published_at: '2026-02-25T08:30:00Z', invited_vendor_ids: [], invited_vendor_emails: ['sales@calportland.com', 'quotes@martinmarietta.com'], line_items: [
       { id: 'li-s001w1-1', sku: 'Ready-Mix 4000 PSI', description: 'Ready-Mix Concrete 4000 PSI', quantity: 2400, unit: 'cy', specs: 'ASTM C150' },
     ]},
     { id: 'rfq-s002-a', project_id: 'proj-s002', title: 'Medical-Grade HVAC Systems', status: 'active', category: 'MEP', visibility: 'public', bid_deadline: '2026-05-20', created_at: '2026-04-12T10:00:00Z', published_at: '2026-04-12T10:20:00Z', invited_vendor_ids: [], invited_vendor_emails: ['quotes@westernhvac.com', 'healthcare@johnsoncontrols.com'], line_items: [
@@ -412,8 +390,8 @@ async function main() {
       { line_item_id: 'li-m001a-2', unit_price: 11200, total_price: 896000, lead_time_days: 28, availability: 'in_stock', units_available: 90 },
       { line_item_id: 'li-m001a-3', unit_price: 4.5, total_price: 216000, lead_time_days: 21, availability: 'in_stock', units_available: 50000 },
     ]},
-    // rfq-s001-aw1: winning bid (awarded)
-    { id: 'bid-s001aw1-winner', rfq_id: 'rfq-s001-aw1', vendor_email: 'sales@calportland.com', vendor_name: 'CalPortland', is_invited: false, is_on_platform: false, submitted_at: '2026-03-08T10:00:00Z', total_price: 533400, currency: 'USD', lead_time_days: 7, status: 'awarded', source: 'email', po_number: 'PO-2026-48001', line_item_responses: [
+    // rfq-s001-aw1: closed historical quote kept for comparison history
+    { id: 'bid-s001aw1-winner', rfq_id: 'rfq-s001-aw1', vendor_email: 'sales@calportland.com', vendor_name: 'CalPortland', is_invited: false, is_on_platform: false, submitted_at: '2026-03-08T10:00:00Z', total_price: 533400, currency: 'USD', lead_time_days: 7, status: 'shortlisted', source: 'email', line_item_responses: [
       { line_item_id: 'li-s001w1-1', unit_price: 222.25, total_price: 533400, lead_time_days: 7, availability: 'in_stock' },
     ]},
   ]
@@ -491,7 +469,7 @@ async function main() {
       vendor_email: 'quotes@martinmarietta.com',
       vendor_name: 'Martin Marietta',
       messages: [
-        ['contractor', 'Sarah Chen', 'Thanks for pricing this one. We awarded elsewhere, but please stay warm for the podium slab package next month.', '2026-03-12T15:12:00Z'],
+        ['contractor', 'Sarah Chen', 'Thanks for pricing this one. We selected a different path for the comparison, but please stay warm for the podium slab package next month.', '2026-03-12T15:12:00Z'],
         ['vendor', 'Martin Marietta', 'Understood. Send the podium package when ready and we will sharpen the freight assumptions for the Denver yard.', '2026-03-12T16:03:00Z'],
       ],
     },
@@ -501,7 +479,7 @@ async function main() {
       vendor_email: 'quotes@westernhvac.com',
       vendor_name: 'Western HVAC Supply',
       messages: [
-        ['contractor', 'Sarah Chen', 'For the HEPA AHUs, can you confirm whether the 35-day lead time starts at submittal approval or PO release?', '2026-04-13T11:25:00Z'],
+        ['contractor', 'Sarah Chen', 'For the HEPA AHUs, can you confirm whether the 35-day lead time starts at submittal approval or quote selection?', '2026-04-13T11:25:00Z'],
         ['vendor', 'Western HVAC Supply', 'Lead time starts at approved submittals. If we can release on preliminary selections, we can protect a production slot.', '2026-04-13T12:17:00Z'],
         ['contractor', 'Sarah Chen', 'Please price the production-slot hold as an alternate and note how long the hold is valid.', '2026-04-13T12:31:00Z'],
       ],
@@ -701,7 +679,7 @@ async function main() {
     title: 'Review Nucor rebar email quote before award',
     details_json: {
       bid_id: 'bid-email-vr-demo-s001b',
-      reason: 'Email-origin quote should be reviewed before PO award.',
+      reason: 'Email-origin quote should be reviewed before comparison decisions rely on it.',
       requested_vendor_email: 'bids@nucor.com',
       outbound_message_id: outboundMessageId,
     },
@@ -722,35 +700,7 @@ async function main() {
   `
   console.log('  ✓ email integration demo rows (rfq-s001-b)')
 
-  // --- Orders ---
-  const ordersData = [
-    {
-      id: 'order-s001-aw1',
-      rfq_id: 'rfq-s001-aw1',
-      bid_id: 'bid-s001aw1-winner',
-      project_id: 'proj-s001',
-      vendor_id: null,
-      vendor_name: 'CalPortland',
-      po_number: 'PO-2026-48001',
-      agreed_price: 533400,
-      delivery_date: '2026-03-28',
-      delivery_location: 'Denver, CO',
-      awarded_at: '2026-03-12T10:00:00Z',
-      current_stage: 'delivered',
-      line_items_snapshot: [
-        { id: 'li-s001w1-1', sku: 'Ready-Mix 4000 PSI', description: 'Ready-Mix Concrete 4000 PSI', quantity: 2400, unit: 'cy', specs: 'ASTM C150' },
-      ],
-      stage_history: [
-        { stage: 'confirmed', completed_at: '2026-03-12T10:00:00Z', notes: 'PO confirmed. CalPortland scheduling batching at Aurora plant.' },
-        { stage: 'packaged', completed_at: '2026-03-20T08:00:00Z', notes: 'Concrete mix verified and loaded at Aurora facility.' },
-        { stage: 'shipped', completed_at: '2026-03-22T06:00:00Z', carrier: 'CalPortland Delivery Fleet', tracking_number: 'CPL-8812034', ship_date: '2026-03-22' },
-        { stage: 'out_for_delivery', completed_at: '2026-03-27T07:00:00Z', notes: 'En route to Riverton Boulevard jobsite.' },
-        { stage: 'delivered', completed_at: '2026-03-28T10:15:00Z', notes: 'Delivered and poured. Signed by Site Foreman J. Mathers.' },
-      ],
-    },
-  ]
-  for (const o of ordersData) await upsertOrder(o)
-  console.log('  ✓ orders (1) + stage_progress (5 stages)')
+  console.log('  ✓ quote request, vendor response, and comparison demo data')
 }
 
 main()

@@ -8,14 +8,14 @@ This version has breaking changes - APIs, conventions, and file structure may al
 
 ## App Scope
 
-This directory is the active app. Run commands from `apps/insiteai-web`.
+This directory is the active app. Run commands from `apps/web`.
 
 ```bash
-pnpm dev
-pnpm build
-pnpm exec tsc --noEmit
-pnpm db:generate
-pnpm db:migrate
+npm run dev
+npm run build
+npm run typecheck
+npm run db:generate
+npm run db:migrate
 node scripts/seed.js
 ```
 
@@ -28,12 +28,12 @@ node scripts/seed.js
 
 ## Core Flows
 
-- Contractor creates RFQ/RFP: `app/contractor/projects/[projectId]/rfqs/new/_components/RFQWizard.tsx`.
+- Contractor creates Quote Request: `app/contractor/projects/[projectId]/rfqs/new/_components/RFQWizard.tsx`.
 - Items step: `StepItems.tsx`. CSV line items import into item cards. Reference files are uploaded from the AI Spec Assistant panel and saved in `attachment_urls`. Item-card fields and the AI Spec Assistant are customizable from the wizard settings control in `RFQWizard.tsx`; settings are persisted in localStorage.
-- Invite step: `StepInviteVendors.tsx`. Marketplace visibility warning lives here. AI vendor outreach draft calls `/api/generate-email-draft`.
+- Invite step: `StepInviteVendors.tsx`. Vendor search/invites live here. AI vendor outreach draft calls `/api/generate-email-draft`.
 - Review step: `StepReview.tsx`. Saves drafts and publishes requests. Email subject/body editing is intentionally not present on Review; the page shows a compact email summary, secure quote-form preview, and PDF preview. Do not re-add expanded specs/constraints or full email-body rendering here.
-- Draft RFQs/RFPs should reopen the creation wizard using `?rfqId=...&step=review`, not the bid comparison page.
-- Contractor bid page: `app/contractor/projects/[projectId]/rfqs/[rfqId]/_components/`.
+- Draft quote requests should reopen the creation wizard using `?rfqId=...&step=review`, not the comparison page.
+- Contractor comparison page: `app/contractor/projects/[projectId]/rfqs/[rfqId]/_components/`.
 - Off-platform magic quote form: `app/vendor/magic-rfq/[token]/_components/MagicRFQFormClient.tsx`.
 - Vendor RFQ submission captures `designer_name`; platform submissions allow it, magic-link submissions require it. Contractor vendor summary displays Designer by default.
 
@@ -45,16 +45,22 @@ AI request authoring lives in `lib/ai/request-authoring.ts`.
 - Optional selector: `OPENAI_MODEL` defaults to `gpt-5-mini`.
 - Vendor outreach email generation can fall back to a deterministic template if no LLM key is configured.
 
-## Bid Comparison Rules
+## Product Modules
 
-- Lowest bid badges must only consider full-coverage bids.
-- Partial bids must clearly show sourced quantity versus requested quantity.
+- Requesting Quotes: quote request authoring, Bill of Materials setup, vendor invites, outbound drafts, and explicit sends.
+- Vendor Response Intake: magic-form responses, mailbox replies, file extraction, external quote import, provenance, and review issues.
+- Quote Comparison: workbook evaluation, complete/partial quote distinction, spreadsheet view state, and visible agent sheet patches.
+
+## Quote Comparison Rules
+
+- Lowest quote badges must only consider complete comparable quotes.
+- Partial quotes must clearly show missing/no-bid lines, sourced quantity versus requested quantity, and review caveats.
 - Magic-link bid totals are calculated from `unit_price * units_available` when available, otherwise `unit_price * quoted_quantity`.
-- Email-origin bids are compare-only and cannot be awarded a PO.
+- Email-origin quotes are compare-only and cannot create award, PO, purchasing handoff, or order tracking workflows in v1.
 - `BidVendorSummaryTable` has customizable draggable columns; default visible columns are Vendor, Designer, Total Price, Lead Time, Coverage, and Payment Terms.
 - `BidSkuTable` is an Excel-style matrix. It supports vendors-as-rows or items-as-rows, row/column drag sequencing, first-column resizing, and metric sorting by total, unit, or lead time.
 - `BidPriceChart` is a ranking table with separate Price Ranking and Lead Time Ranking buttons; vendor names should open the same vendor detail drawer used elsewhere.
-- `BidDashboard` creates tracking orders directly. Use `awardSplitPOAction()` for per-SKU quantity allocations across multiple vendors; `awardPOAction()` now creates a full tracking order directly. The `po_offered` state is legacy compatibility only.
+- `BidDashboard` must remain a Quote Comparison surface. Do not add award, PO, or tracking-order actions here.
 - Expanded line items, expenditure breakdown, and vendor comparison summary are not default bid dashboard sections.
 
 ## Mailbox and Magic Links

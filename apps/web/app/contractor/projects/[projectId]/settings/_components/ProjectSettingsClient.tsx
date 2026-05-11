@@ -246,7 +246,6 @@ export function ProjectSettingsClient({ project }: { project: ContractorProject 
         <h2 className="mb-2 text-sm font-semibold" style={{ color: '#c0392b' }}>Danger Zone</h2>
         <p className="mb-4 text-sm" style={{ color: '#8a9e96' }}>
           Deleting this project will remove all draft and active RFQs. This cannot be undone.
-          Projects with active (non-delivered) orders cannot be deleted.
         </p>
 
         {deleteError && (
@@ -267,7 +266,7 @@ export function ProjectSettingsClient({ project }: { project: ContractorProject 
         ) : (
           <div className="rounded-md border p-4" style={{ borderColor: '#f5c6c6', background: '#fdeaea' }}>
             <p className="mb-3 text-sm font-medium" style={{ color: '#c0392b' }}>
-              Are you sure? This will permanently delete &ldquo;{project.name}&rdquo; and all its non-awarded RFQs.
+              Are you sure? This will permanently delete &ldquo;{project.name}&rdquo; and its quote request history.
             </p>
             <div className="flex gap-3">
               <button

@@ -32,7 +32,7 @@ export default async function ContractorProjectsPage() {
                 Projects
               </h1>
               <p className="mt-2 max-w-2xl text-sm leading-6" style={{ color: '#d8e3dc' }}>
-                Manage RFQs, vendor activity, and awarded procurement from one place.
+                Manage quote requests, vendor activity, and quote comparisons from one place.
               </p>
             </div>
             <Link
@@ -67,7 +67,7 @@ export default async function ContractorProjectsPage() {
               <ProjectCard
                 key={project.id}
                 project={project}
-                counts={rfqCountsByProjectId.get(project.id) ?? { total: 0, pending: 0, active: 0, awarded: 0 }}
+                counts={rfqCountsByProjectId.get(project.id) ?? { total: 0, pending: 0, active: 0, closed: 0 }}
               />
               ))}
             </div>

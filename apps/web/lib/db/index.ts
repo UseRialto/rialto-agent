@@ -5,7 +5,7 @@ import * as schema from './schema'
 const sql = process.env.DATABASE_URL
   ? neon(process.env.DATABASE_URL)
   : (async () => {
-      throw new Error('DATABASE_URL is not configured. Add it to apps/insiteai-web/.env.local to use database-backed pages.')
+      throw new Error('DATABASE_URL is not configured. Add it to apps/web/.env.local to use database-backed pages.')
     }) as unknown as ReturnType<typeof neon>
 export const db = drizzle(sql, { schema })
 export type DB = typeof db

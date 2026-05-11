@@ -1,10 +1,10 @@
-# Rialto
+# Rialto Web App
 
-Rialto is a two-sided construction procurement marketplace built in Next.js. Contractors create projects and RFQs/RFPs, vendors submit bids, contractors compare pricing, coverage, and lead times, and awarded platform bids flow into PO and order tracking.
+Rialto is a construction procurement app built in Next.js. In v1, contractors request quotes, vendors return quote responses, and estimators compare quotes. Award, purchase order, and order tracking workflows are outside the active product boundary.
 
 ## App Location
 
-Run all app commands from `apps/insiteai-web`.
+Run all app commands from `apps/web`.
 
 ## Stack
 
@@ -18,8 +18,8 @@ Run all app commands from `apps/insiteai-web`.
 ## Local Development
 
 ```bash
-cd apps/insiteai-web
-pnpm dev
+cd apps/web
+npm run dev
 ```
 
 App URL: [http://localhost:3000](http://localhost:3000)
@@ -27,10 +27,10 @@ App URL: [http://localhost:3000](http://localhost:3000)
 Useful commands:
 
 ```bash
-pnpm build
-pnpm exec tsc --noEmit
-pnpm db:generate
-pnpm db:migrate
+npm run build
+npm run typecheck
+npm run db:generate
+npm run db:migrate
 node scripts/seed.js
 ```
 
@@ -39,11 +39,11 @@ node scripts/seed.js
 The app uses hosted Neon Postgres. Set `DATABASE_URL` in `.env.local`, then run:
 
 ```bash
-pnpm db:migrate
+npm run db:migrate
 node scripts/seed.js
 ```
 
-Core relationship flow:
+Core active relationship flow:
 
 ```text
 users
@@ -53,8 +53,6 @@ users
       -> rfq_invites
       -> bids
         -> bid_line_items
-      -> orders
-        -> order_stage_progress
 ```
 
 Email integration adds:
@@ -86,16 +84,18 @@ Vendors:
 
 More seeded accounts live in `docs/test-accounts.txt`.
 
-## RFQ Authoring and AI
+## Product Modules
 
-The contractor RFQ/RFP wizard lives in `app/contractor/projects/[projectId]/rfqs/new/_components/`.
+### Requesting Quotes
+
+The contractor quote request wizard lives in `app/contractor/projects/[projectId]/rfqs/new/_components/`.
 
 - `RFQWizard.tsx` owns the three-step flow: Items, Invite Vendors, Review.
-- `StepItems.tsx` owns title/deadline, AI Spec Assistant, CSV import, item cards, supplier requirements, and RFP detail fields.
+- `StepItems.tsx` owns title/deadline, AI Spec Assistant, CSV import, item cards, vendor requirements, and optional request details.
 - Reference files are uploaded from the AI Spec Assistant panel and persisted in `attachment_urls`.
 - CSV line-item upload sits above the item cards and accepts SKU, description, quantity, unit, specs, constraints, certifications, notes, target budget, and suggested lead time.
-- `StepInviteVendors.tsx` owns marketplace visibility, vendor search/invites, and the AI vendor outreach email editor.
-- Draft RFQs/RFPs should reopen the wizard with `?rfqId=...&step=review`.
+- `StepInviteVendors.tsx` owns vendor search/invites and the AI vendor outreach email editor.
+- Draft quote requests should reopen the wizard with `?rfqId=...&step=review`.
 
 AI request authoring lives in `lib/ai/request-authoring.ts`.
 
@@ -103,13 +103,26 @@ AI request authoring lives in `lib/ai/request-authoring.ts`.
 - Optional selector: `OPENAI_MODEL` defaults to `gpt-5-mini`.
 - Vendor outreach draft generation can fall back to a deterministic template if no LLM key is configured.
 
-## Bid Comparison Rules
+### Vendor Response Intake
 
-- Lowest bid labels only apply to full-coverage bids.
-- Partial bids must show sourced quantity versus requested quantity.
+Vendor Response Intake receives magic-form submissions, email replies, attachments, and external quote imports.
+
+- Magic-form submissions are handled in `lib/magic-rfq/service.ts` and `app/vendor/magic-rfq/[token]/`.
+- Email send/sync/extraction lives in `lib/mail/service.ts`.
+- External quote imports live in `lib/procurement/external-quote-import.ts` and `app/api/external-quote-import/route.ts`.
+- `lib/procurement/vendor-response-intake.ts` converts stored bid rows into Vendor Quote Responses for the workbook handoff.
+- Intake code must preserve source artifacts, provenance, review issues, no-bid state, alternates, quantity mismatches, and unit mismatches.
+
+### Quote Comparison
+
+Quote Comparison consumes Vendor Response Workbooks and renders the spreadsheet-like comparison page.
+
+- Lowest complete labels only apply to complete comparable quotes.
+- Partial quote totals may be displayed when clearly labeled, but must not win lowest complete comparison.
+- Quantity mismatches, unit mismatches, vendor alternates, no-bid lines, and missing values must create visible review caveats.
 - SKU-by-SKU cells show extended price, unit price, lead time, availability, and sourceable quantity.
 - Magic-link quote totals are computed as `unit_price * units_available` when units are available, otherwise `unit_price * quoted_quantity`.
-- Email-origin bids remain compare-only in v1 and cannot receive PO awards.
+- Quote Comparison state does not trigger award, vendor notification, purchasing handoff, PO creation, or order tracking.
 
 ## Mailbox RFQ Quote-Return Flow
 
@@ -121,16 +134,16 @@ What it does:
 - Publishing an RFQ sends PDFs and unique magic-form links to off-platform invite emails.
 - Replies are synced manually from the RFQ detail page.
 - Email bodies, PDFs, and CSV attachments are parsed into quote artifacts.
-- Parsed off-platform quotes are projected into normal marketplace `bids` rows with `source = 'email'`.
+- Parsed off-platform quotes are projected into stored quote response rows with `source = 'email'`.
 - Low-confidence matches create inline review tasks and keep the projected bid in `under_review`.
-- Email-origin bids are compare-only in v1 and cannot receive a PO.
+- Email-origin quotes are compare-only in v1 and do not create downstream award or PO workflows.
 
 What it does not do in v1:
 
 - No background worker, webhook, or scheduled sync.
 - No generic SMTP/IMAP provider support.
 - No standalone global review queue.
-- No off-platform PO acceptance or fulfillment flow.
+- No off-platform award, PO acceptance, fulfillment, or order tracking flow.
 
 ## Mailbox OAuth Setup
 
@@ -171,15 +184,15 @@ Use `MICROSOFT_TENANT_ID=common` for the broadest contractor-mailbox compatibili
 
 Use this sequence for a manual end-to-end check:
 
-1. Run `pnpm db:migrate`.
+1. Run `npm run db:migrate`.
 2. Run `node scripts/seed.js`.
-3. Start the app with `pnpm dev`.
+3. Start the app with `npm run dev`.
 4. Open `/login` and sign in as a contractor.
 5. Connect a Gmail or Microsoft 365 mailbox in contractor settings.
 6. Create an RFQ with off-platform invite emails.
 7. Confirm each recipient gets the PDF plus a unique magic-form link from the connected exact sender address.
 8. Submit or update a quote from the magic link.
-9. Confirm the contractor bid comparison page shows coverage, sourceable quantity, lead time, and lowest full-coverage bid state.
+9. Confirm the contractor quote comparison page shows coverage, sourceable quantity, lead time, and lowest complete comparable quote state.
 10. Reply from the vendor mailbox on the same thread with plain text, PDF, or CSV quote content.
 11. Run `Sync Replies` and confirm the reply appears in the RFQ detail page and updates the bid dashboard.
 
@@ -192,9 +205,9 @@ The seed script includes a demo mailbox thread for RFQ `rfq-s001-b`:
 - one inbound quote reply on the same thread
 - one parsed quote response with line items
 - one open review task
-- one projected marketplace bid with `source = 'email'`
+- one projected quote response with `source = 'email'`
 
-This gives the contractor RFQ page enough data to verify the mailbox panel and compare-only email bid state without a live mailbox connection.
+This gives the contractor quote request page enough data to verify the mailbox panel and compare-only email quote state without a live mailbox connection.
 
 ## Key Files
 
