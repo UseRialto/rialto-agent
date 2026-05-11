@@ -1,0 +1,31 @@
+Rialto - Test Accounts
+=======================
+All accounts use the same password: password123
+
+CONTRACTORS
+-----------
+Name:     Sarah Chen
+Email:    sarah@mccarthy.com
+Company:  McCarthy Building Companies (San Francisco, CA)
+
+Name:     Mike Torres
+Email:    mike@turner.com
+Company:  Turner Construction Co. (New York, NY)
+
+Name:     Demo Contractor
+Email:    contractor@demo.com
+Company:  Demo GC Inc.
+
+VENDORS
+-------
+Name:     David Park
+Email:    david@pacificsteel.com
+Company:  Pacific Steel Supply
+
+Name:     Anna Williams
+Email:    anna@consolidated.com
+Company:  Consolidated Materials Inc.
+
+Name:     Demo Vendor
+Email:    vendor@demo.com
+Company:  Demo Supply Co.

@@ -7,10 +7,14 @@ import { z } from 'zod'
 import { RialtoAgentCore } from './agent/core.js'
 import { defaultPlanner } from './agent/llm.js'
 import { evaluateQuoteComparison } from './comparison/evaluate.js'
+import { fallbackComparisonPatch, proposeComparisonPatch } from './comparison/patch-planner.js'
 import { InMemoryUserContextProvider } from './context/user-context-provider.js'
 import { homePageHtml } from './demo/home-page.js'
 import { sampleComparison } from './demo/sample-comparison.js'
 import { defaultToolRegistry } from './tools/registry.js'
+import { loadLocalEnv } from './env.js'
+
+loadLocalEnv()
 
 const userSchema = z.object({
   id: z.string(),
@@ -30,6 +34,30 @@ const turnRequestSchema = z.object({
   currentPage: z.object({
     path: z.string(),
     title: z.string().optional(),
+  }).optional(),
+})
+
+const comparisonPatchRequestSchema = z.object({
+  message: z.string().min(1),
+  currentView: z.unknown().optional(),
+  sheetSchema: z.object({
+    columns: z.array(z.object({
+      key: z.string(),
+      label: z.string(),
+      kind: z.enum(['rfq-core', 'rfq-attribute', 'rfq-standard', 'vendor', 'derived']),
+      vendorId: z.string().optional(),
+      vendorName: z.string().optional(),
+      metric: z.enum(['unit_price', 'total', 'lead', 'alternate', 'response_attr']).optional(),
+      isEmpty: z.boolean().optional(),
+    })).optional(),
+    lineItems: z.array(z.object({
+      id: z.string(),
+      description: z.string(),
+    })).optional(),
+    vendors: z.array(z.object({
+      id: z.string(),
+      name: z.string(),
+    })).optional(),
   }).optional(),
 })
 
@@ -67,6 +95,24 @@ export function buildServer() {
       return reply.status(400).send({ error: 'Invalid agent turn request.', issues: parsed.error.issues })
     }
     return core.runTurn(parsed.data)
+  })
+
+  app.post('/comparison/propose-patch', async (request, reply) => {
+    const parsed = comparisonPatchRequestSchema.safeParse(request.body)
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Invalid comparison patch request.', issues: parsed.error.issues })
+    }
+
+    try {
+      return await proposeComparisonPatch(parsed.data)
+    } catch (error) {
+      request.log.warn({ error }, 'OpenAI comparison patch failed; using deterministic fallback.')
+      return {
+        patch: fallbackComparisonPatch(parsed.data),
+        usedFallback: true,
+        fallbackReason: error instanceof Error ? error.message : 'Comparison patch planner failed.',
+      }
+    }
   })
 
   app.post('/tools/document/extract', async (request, reply) => {

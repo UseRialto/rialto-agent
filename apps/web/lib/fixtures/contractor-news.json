@@ -1,0 +1,74 @@
+[
+  {
+    "id": "n1",
+    "title": "U.S. expands steel tariffs to cover Southeast Asian imports, effective June 1",
+    "source": "Reuters",
+    "published_at": "2026-04-14",
+    "severity": "high",
+    "categories": ["steel"],
+    "url": "#"
+  },
+  {
+    "id": "n2",
+    "title": "Lumber futures up 12% on Pacific Northwest wildfire season concerns",
+    "source": "Bloomberg",
+    "published_at": "2026-04-13",
+    "severity": "medium",
+    "categories": ["lumber"],
+    "url": "#"
+  },
+  {
+    "id": "n3",
+    "title": "Port of Long Beach dockworker strike enters third week, container backlog grows",
+    "source": "Wall Street Journal",
+    "published_at": "2026-04-12",
+    "severity": "high",
+    "categories": ["steel", "concrete", "lumber"],
+    "url": "#"
+  },
+  {
+    "id": "n4",
+    "title": "Ready-mix concrete prices stabilize after Q1 cement shortage in Southwest",
+    "source": "Engineering News-Record",
+    "published_at": "2026-04-11",
+    "severity": "low",
+    "categories": ["concrete"],
+    "url": "#"
+  },
+  {
+    "id": "n5",
+    "title": "New AISC standards for seismic-rated connections take effect Q3 2026",
+    "source": "AISC",
+    "published_at": "2026-04-10",
+    "severity": "low",
+    "categories": ["steel"],
+    "url": "#"
+  },
+  {
+    "id": "n6",
+    "title": "Chinese rebar exports surge 18% as domestic construction slowdown frees capacity",
+    "source": "Metal Bulletin",
+    "published_at": "2026-04-09",
+    "severity": "medium",
+    "categories": ["steel"],
+    "url": "#"
+  },
+  {
+    "id": "n7",
+    "title": "Supply shortfall in post-tension strand leads to 6-8 week lead times across West Coast",
+    "source": "Concrete Construction",
+    "published_at": "2026-04-08",
+    "severity": "high",
+    "categories": ["concrete"],
+    "url": "#"
+  },
+  {
+    "id": "n8",
+    "title": "Canadian softwood lumber anti-dumping duties renewed for another 5-year period",
+    "source": "Washington Post",
+    "published_at": "2026-04-07",
+    "severity": "medium",
+    "categories": ["lumber"],
+    "url": "#"
+  }
+]

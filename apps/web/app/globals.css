@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f5f0eb;
+  --foreground: #1e3a2f;
+  --surface: #ffffff;
+  --surface-muted: #ede8e2;
+  --border: #e2d9cf;
+  --accent: #fa6b04;
+  --accent-strong: #e05f03;
+  --warning: #a85c2a;
+  --ink-soft: #4a6358;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-dm-sans);
+  --font-serif: var(--font-lora);
+  --font-mono: var(--font-dm-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans, 'DM Sans', system-ui, sans-serif);
+}
+
+h1, h2, h3 {
+  font-family: var(--font-serif, 'Lora', Georgia, serif);
+}
+
+::selection {
+  background: #fdc89a;
+  color: #1e3a2f;
+}
+
+a,
+button {
+  outline-color: #fa6b04;
+  outline-offset: 3px;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #c8bdb2;
+  border-radius: 99px;
+}
+
+/* Ensure tables are dense */
+table {
+  border-collapse: collapse;
+}

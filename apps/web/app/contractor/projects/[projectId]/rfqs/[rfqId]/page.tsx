@@ -1,0 +1,413 @@
+import Link from 'next/link'
+import { notFound } from 'next/navigation'
+import {
+  getContractorProject,
+  getContractorRFQ,
+  getContractorRFQBids,
+  getContractorOrderByRFQId,
+} from '@/lib/api/contractor'
+import { getSession } from '@/lib/auth/session'
+import { CONTRACTOR_RFQ_STATUS_LABELS, CONTRACTOR_RFQ_STATUS_STYLES } from '@/lib/contractor-display'
+import { getMailboxSummary } from '@/lib/mail/service'
+import { getNegotiationMessagesForVendor } from '@/lib/store/contractor-store'
+import { formatDate } from '@/lib/utils'
+import { BidDashboard } from './_components/BidDashboard'
+import { MessageCenter } from './_components/MessageCenter'
+import { RFQActions } from './_components/RFQActions'
+import { ContractorOrderProgressStepper } from '@/app/contractor/orders/_components/ContractorOrderProgressStepper'
+
+function fmt(n: number): string {
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(1).replace(/\.0$/, '')}k`
+  return `$${n.toLocaleString()}`
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ projectId: string; rfqId: string }>
+}) {
+  const { projectId, rfqId } = await params
+  const rfq = await getContractorRFQ(projectId, rfqId)
+  return { title: rfq ? `${rfq.title} - Rialto` : 'RFQ - Rialto' }
+}
+
+export default async function RFQDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ projectId: string; rfqId: string }>
+  searchParams?: Promise<{ section?: string }>
+}) {
+  const { projectId, rfqId } = await params
+  const { section } = (await searchParams) ?? {}
+  const activeSection =
+    section === 'purchase-order' || section === 'decision-support'
+      ? 'purchase-order'
+      : section === 'message-center'
+        ? 'message-center'
+      : 'bid-comparison'
+  const [project, rfq] = await Promise.all([
+    getContractorProject(projectId),
+    getContractorRFQ(projectId, rfqId),
+  ])
+
+  if (!project || !rfq) notFound()
+
+  const [bids, order, session] = await Promise.all([
+    rfq.status === 'active' || rfq.status === 'po_offered'
+      ? getContractorRFQBids(rfq)
+      : Promise.resolve([]),
+    rfq.status === 'awarded' ? getContractorOrderByRFQId(rfqId) : Promise.resolve(null),
+    getSession(),
+  ])
+  const mailbox = session ? await getMailboxSummary(session.userId) : null
+  const messageVendors = (rfq.invites ?? [])
+    .filter((invite) => invite.vendor_email)
+    .map((invite) => ({
+      vendorId: invite.vendor_id,
+      vendorEmail: invite.vendor_email.toLowerCase(),
+      vendorName: invite.vendor_name || invite.vendor_email,
+    }))
+  const messageVendorThreads = await Promise.all(
+    messageVendors.map(async (vendor) => ({
+      ...vendor,
+      messages: await getNegotiationMessagesForVendor(rfq.id, vendor.vendorEmail, vendor.vendorId),
+    })),
+  )
+  const fullBids = bids.filter((bid) => !bid.fulfillment_summary?.partial && (bid.fulfillment_summary?.coverage_ratio ?? 1) >= 1)
+  const lowestBid = fullBids.slice().sort((a, b) => a.total_price - b.total_price)[0]
+  const fastestBid = bids.slice().sort((a, b) => a.lead_time_days - b.lead_time_days)[0]
+  const quoteStats = [
+    { label: 'Quotes received', value: bids.length.toString(), sub: `${fullBids.length} full quotes` },
+    { label: 'Lowest complete', value: lowestBid ? fmt(lowestBid.total_price) : '-', sub: lowestBid?.vendor_name ?? 'No full quote' },
+    { label: 'Fastest lead', value: fastestBid ? `${fastestBid.lead_time_days}d` : '-', sub: fastestBid?.vendor_name ?? 'No quotes' },
+  ]
+  const requestedVendorKeys = new Set<string>()
+  for (const invite of rfq.invites ?? []) {
+    if (invite.vendor_id) requestedVendorKeys.add(`id:${invite.vendor_id}`)
+    else if (invite.vendor_email) requestedVendorKeys.add(`email:${invite.vendor_email.toLowerCase()}`)
+  }
+  for (const id of rfq.invited_vendor_ids ?? []) requestedVendorKeys.add(`id:${id}`)
+  for (const email of rfq.invited_vendor_emails ?? []) requestedVendorKeys.add(`email:${email.toLowerCase()}`)
+  const requestedVendorCount = requestedVendorKeys.size
+
+  const shippedStage = order?.stage_history.find((s) => s.stage === 'shipped')
+  const isFullScreenComparison = activeSection === 'bid-comparison' && (rfq.status === 'active' || rfq.status === 'po_offered')
+  const sectionBaseHref = `/contractor/projects/${projectId}/rfqs/${rfqId}`
+  const sectionLinks = [
+    {
+      key: 'bid-comparison',
+      label: 'Quote Comparison',
+      href: sectionBaseHref,
+    },
+    {
+      key: 'purchase-order',
+      label: 'Purchase Order',
+      href: `${sectionBaseHref}?section=purchase-order`,
+    },
+    {
+      key: 'message-center',
+      label: 'Message Center',
+      href: `${sectionBaseHref}?section=message-center`,
+    },
+  ]
+
+  if (isFullScreenComparison) {
+    return (
+      <div className="-m-6 flex h-[calc(100vh-0rem)] min-h-0 flex-col" style={{ background: '#eef3f0' }}>
+        <div className="shrink-0 border-b px-5 pt-4" style={{ borderColor: '#d9e0dc', background: '#f8faf9' }}>
+          <nav className="mb-3 text-xs" style={{ color: '#587067' }}>
+            <Link href="/contractor/projects" className="hover:underline" style={{ color: '#8a9e96' }}>Projects</Link>
+            <span className="mx-2">/</span>
+            <Link href={`/contractor/projects/${projectId}`} className="hover:underline" style={{ color: '#8a9e96' }}>{project.name}</Link>
+            <span className="mx-2">/</span>
+            <span className="font-medium" style={{ color: '#4a6358' }}>{rfq.title}</span>
+          </nav>
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <h1 className="text-xl font-semibold tracking-tight" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>{rfq.title}</h1>
+            <span className={`rounded border px-2 py-0.5 text-xs font-medium ${CONTRACTOR_RFQ_STATUS_STYLES[rfq.status]}`}>
+              {CONTRACTOR_RFQ_STATUS_LABELS[rfq.status]}
+            </span>
+            {rfq.bid_deadline && (
+              <span className="rounded-full px-2.5 py-1 text-xs font-semibold" style={{ background: '#fff3eb', color: '#fa6b04', border: '1px solid #fdc89a' }}>
+                Due {rfq.bid_deadline}
+              </span>
+            )}
+            <div className="ml-auto flex items-center gap-2">
+              <a
+                href={`/api/rfq-pdf/${rfqId}`}
+                download={`${rfq.request_type === 'rfp' ? 'rfp' : 'rfq'}-${rfqId}.pdf`}
+                className="inline-flex items-center gap-1.5 rounded border bg-white px-3 py-1.5 text-xs font-medium shadow-sm transition-colors"
+                style={{ borderColor: '#e2d9cf', color: '#4a6358' }}
+              >
+                Download PDF
+              </a>
+              <RFQActions rfqId={rfqId} projectId={projectId} status={rfq.status} />
+            </div>
+          </div>
+          <nav className="flex gap-1 overflow-x-auto">
+            {sectionLinks.map((item) => (
+              <Link
+                key={item.key}
+                href={item.href}
+                className="shrink-0 px-4 py-3 text-sm font-semibold transition-colors"
+                style={activeSection === item.key
+                  ? { color: '#1e3a2f', borderBottom: '2px solid #fa6b04' }
+                  : { color: '#8a9e96', borderBottom: '2px solid transparent' }}
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+          <div className="grid gap-2 border-t py-3 sm:grid-cols-4" style={{ borderColor: '#d9e0dc' }}>
+            {[
+              { label: 'Quote deadline', value: rfq.bid_deadline ?? 'Not set' },
+              { label: 'Vendors requested', value: requestedVendorCount.toLocaleString() },
+              { label: 'Quotes received', value: `${bids.length.toLocaleString()} / ${Math.max(requestedVendorCount, bids.length).toLocaleString()}` },
+              { label: 'Total items', value: rfq.line_items.length.toLocaleString() },
+            ].map((item) => (
+              <div key={item.label} className="rounded-lg border bg-white px-3 py-2" style={{ borderColor: '#d9e0dc' }}>
+                <p className="text-[10px] font-semibold uppercase" style={{ color: '#587067' }}>{item.label}</p>
+                <p className="mt-0.5 text-sm font-bold" style={{ color: '#1e3a2f' }}>{item.value}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="min-h-0 flex-1">
+          <BidDashboard
+            projectId={projectId}
+            projectName={project.name}
+            rfq={rfq}
+            bids={bids}
+            section="comparison"
+            userKey={session?.userId ?? 'anon'}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mx-auto max-w-7xl pb-16">
+      {/* Breadcrumb */}
+      <nav className="mb-4 text-sm" style={{ color: '#8a9e96' }}>
+        <Link href="/contractor/projects" className="hover:underline" style={{ color: '#8a9e96' }}>Projects</Link>
+        <span className="mx-2">/</span>
+        <Link href={`/contractor/projects/${projectId}`} className="hover:underline" style={{ color: '#8a9e96' }}>{project.name}</Link>
+        <span className="mx-2">/</span>
+        <span className="font-medium" style={{ color: '#4a6358' }}>{rfq.title}</span>
+      </nav>
+
+      {/* Header */}
+      <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            {rfq.bid_deadline && (
+              <span className="rounded-full px-2.5 py-1 text-xs font-semibold" style={{ background: '#fff3eb', color: '#fa6b04', border: '1px solid #fdc89a' }}>
+                Due {rfq.bid_deadline}
+              </span>
+            )}
+          </div>
+          <h1 className="text-3xl font-semibold tracking-tight" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>{rfq.title}</h1>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <span className={`rounded border px-2 py-0.5 text-xs font-medium ${CONTRACTOR_RFQ_STATUS_STYLES[rfq.status]}`}>
+              {CONTRACTOR_RFQ_STATUS_LABELS[rfq.status]}
+            </span>
+            {rfq.category && (
+              <span className="rounded border px-2 py-0.5 text-xs font-medium" style={{ borderColor: '#e2d9cf', background: '#ede8e2', color: '#8a9e96' }}>
+                {rfq.category}
+              </span>
+            )}
+            {rfq.published_at && (
+              <span className="text-sm" style={{ color: '#8a9e96' }}>Published {formatDate(rfq.published_at)}</span>
+            )}
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-2 lg:relative">
+          <div className="flex items-center justify-end gap-2 lg:absolute lg:bottom-full lg:right-0 lg:mb-2">
+            {rfq.status === 'draft' && rfq.request_type === 'rfq' && (
+              <Link
+                href={`/contractor/projects/${projectId}/rfqs/new?rfqId=${rfq.id}`}
+                className="inline-flex items-center gap-1.5 rounded border px-3 py-1.5 text-xs font-medium transition-colors"
+                style={{ borderColor: '#e8c4a0', background: '#fdf0e8', color: '#a85c2a' }}
+              >
+                Edit Draft
+              </Link>
+            )}
+            <a
+              href={`/api/rfq-pdf/${rfqId}`}
+              download={`${rfq.request_type === 'rfp' ? 'rfp' : 'rfq'}-${rfqId}.pdf`}
+              className="inline-flex items-center gap-1.5 rounded border bg-white px-3 py-1.5 text-xs font-medium shadow-sm transition-colors"
+              style={{ borderColor: '#e2d9cf', color: '#4a6358' }}
+            >
+              Download PDF
+            </a>
+            <RFQActions rfqId={rfqId} projectId={projectId} status={rfq.status} />
+          </div>
+          {bids.length > 0 && (
+            <div className="grid grid-cols-3 overflow-hidden rounded-2xl border bg-white shadow-sm" style={{ borderColor: '#e2d9cf' }}>
+              {quoteStats.map((stat) => (
+                <div key={stat.label} className="min-w-0 px-6 py-4" style={{ borderLeft: stat.label === quoteStats[0].label ? 'none' : '1px solid #ede8e2' }}>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: '#8a9e96' }}>{stat.label}</p>
+                  <p className="mt-1 text-2xl font-bold leading-tight" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>
+                    {stat.value}
+                  </p>
+                  <p className="max-w-40 truncate text-xs leading-tight" style={{ color: '#8a9e96' }}>{stat.sub}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <nav className="mb-6 flex gap-1 overflow-x-auto border-b" style={{ borderColor: '#e2d9cf' }}>
+        {sectionLinks.map((item) => (
+          <Link
+            key={item.key}
+            href={item.href}
+            className="shrink-0 px-4 py-3 text-sm font-semibold transition-colors"
+            style={activeSection === item.key
+              ? { color: '#1e3a2f', borderBottom: '2px solid #fa6b04' }
+              : { color: '#8a9e96', borderBottom: '2px solid transparent' }}
+          >
+            {item.label}
+          </Link>
+        ))}
+      </nav>
+
+      {(rfq.rfp_details?.desired_outcome || rfq.rfp_details?.procurement_objective || (rfq.procurement_requirements ?? []).length > 0 || rfq.ai_spec_assistant?.summary) && (
+        <div className="mb-5 grid gap-4 lg:grid-cols-2">
+          {(rfq.rfp_details?.desired_outcome || rfq.rfp_details?.procurement_objective) && (
+            <div className="rounded-xl border bg-white p-4 lg:col-span-2" style={{ borderColor: '#e2d9cf' }}>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider" style={{ color: '#8a9e96' }}>RFP Brief</p>
+              <div className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2" style={{ color: '#4a6358' }}>
+                {rfq.rfp_details.procurement_objective && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Objective:</span> {rfq.rfp_details.procurement_objective}</p>}
+                {rfq.rfp_details.scope_summary && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Scope:</span> {rfq.rfp_details.scope_summary}</p>}
+                <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Outcome:</span> {rfq.rfp_details.desired_outcome}</p>
+                {rfq.rfp_details.performance_requirements && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Performance:</span> {rfq.rfp_details.performance_requirements}</p>}
+                {rfq.rfp_details.approved_alternates && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Alternates:</span> {rfq.rfp_details.approved_alternates}</p>}
+                {rfq.rfp_details.quantity_context && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Quantity / Budget:</span> {rfq.rfp_details.quantity_context}</p>}
+                {rfq.rfp_details.delivery_zip && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Delivery ZIP:</span> {rfq.rfp_details.delivery_zip}</p>}
+                {rfq.rfp_details.delivery_logistics && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Logistics:</span> {rfq.rfp_details.delivery_logistics}</p>}
+                {rfq.rfp_details.delivery_window && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Delivery window:</span> {rfq.rfp_details.delivery_window}</p>}
+                {rfq.rfp_details.phased_delivery && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Phasing:</span> {rfq.rfp_details.phased_delivery}</p>}
+                {rfq.rfp_details.submittals_required && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Submittals:</span> {rfq.rfp_details.submittals_required}</p>}
+                {rfq.rfp_details.lead_time_sensitivity && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Lead time:</span> {rfq.rfp_details.lead_time_sensitivity}</p>}
+                {rfq.rfp_details.exclusions && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Exclusions:</span> {rfq.rfp_details.exclusions}</p>}
+                {rfq.rfp_details.unknowns_or_questions && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Unknowns:</span> {rfq.rfp_details.unknowns_or_questions}</p>}
+                {rfq.rfp_details.vendor_questions_requested && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Vendor questions:</span> {rfq.rfp_details.vendor_questions_requested}</p>}
+                {rfq.rfp_details.vendor_guidance_requested && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Vendor guidance:</span> {rfq.rfp_details.vendor_guidance_requested}</p>}
+                {rfq.rfp_details.attachments_summary && <p><span className="font-medium" style={{ color: '#1e3a2f' }}>Attachments summary:</span> {rfq.rfp_details.attachments_summary}</p>}
+              </div>
+            </div>
+          )}
+          {(rfq.procurement_requirements ?? []).length > 0 && (
+            <div className="rounded-xl border bg-white p-4" style={{ borderColor: '#e2d9cf' }}>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider" style={{ color: '#8a9e96' }}>Supplier Requirements</p>
+              <div className="flex flex-wrap gap-2">
+                {(rfq.procurement_requirements ?? []).map((requirement) => (
+                  <span key={requirement.code} className="rounded-full px-2.5 py-1 text-xs font-medium" style={{ background: '#ede8e2', color: '#4a6358' }}>
+                    {requirement.label}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {rfq.ai_spec_assistant?.summary && (
+            <div className="rounded-xl border p-4 lg:col-span-2" style={{ borderColor: '#fdc89a', background: '#fff3eb' }}>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider" style={{ color: '#fa6b04' }}>AI Spec Assistant Summary</p>
+              <p className="text-sm" style={{ color: '#1e3a2f' }}>{rfq.ai_spec_assistant.summary}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeSection === 'bid-comparison' && (rfq.status === 'active' || rfq.status === 'po_offered') && (
+        <section>
+          <BidDashboard projectId={projectId} projectName={project.name} rfq={rfq} bids={bids} section="comparison" />
+        </section>
+      )}
+
+      {activeSection === 'purchase-order' && (rfq.status === 'active' || rfq.status === 'po_offered') && bids.length > 0 && (
+        <section>
+          <BidDashboard projectId={projectId} projectName={project.name} rfq={rfq} bids={bids} section="purchase-order" />
+        </section>
+      )}
+
+      {activeSection === 'message-center' && (
+        <section>
+          <MessageCenter
+            rfqId={rfq.id}
+            mailboxConnected={Boolean(mailbox?.connected)}
+            vendorThreads={messageVendorThreads}
+          />
+        </section>
+      )}
+
+      {/* Fulfillment progress (only for awarded RFQs with a linked order) */}
+      {rfq.status === 'awarded' && order && (
+        <div className="mt-6">
+          <h2 className="mb-3 text-sm font-semibold" style={{ color: '#4a6358' }}>Fulfillment Progress</h2>
+
+          <div className="mb-4 grid grid-cols-4 gap-3">
+            <div className="rounded-lg border bg-white p-4 shadow-sm" style={{ borderColor: '#e2d9cf' }}>
+              <p className="text-xs font-medium" style={{ color: '#8a9e96' }}>Vendor</p>
+              <p className="mt-1 text-sm font-semibold" style={{ color: '#1e3a2f' }}>{order.vendor_name}</p>
+            </div>
+            <div className="rounded-lg border bg-white p-4 shadow-sm" style={{ borderColor: '#e2d9cf' }}>
+              <p className="text-xs font-medium" style={{ color: '#8a9e96' }}>PO Number</p>
+              <p className="mt-1 text-sm font-semibold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-dm-mono, monospace)' }}>{order.po_number}</p>
+            </div>
+            <div className="rounded-lg border bg-white p-4 shadow-sm" style={{ borderColor: '#e2d9cf' }}>
+              <p className="text-xs font-medium" style={{ color: '#8a9e96' }}>Agreed Value</p>
+              <p className="mt-1 text-sm font-bold" style={{ color: '#1e3a2f' }}>{fmt(order.agreed_price)}</p>
+            </div>
+            <div className="rounded-lg border bg-white p-4 shadow-sm" style={{ borderColor: '#e2d9cf' }}>
+              <p className="text-xs font-medium" style={{ color: '#8a9e96' }}>Delivery Date</p>
+              <p className="mt-1 text-sm font-semibold" style={{ color: '#1e3a2f' }}>{order.delivery_date}</p>
+            </div>
+          </div>
+
+          <ContractorOrderProgressStepper currentStage={order.current_stage} stageHistory={order.stage_history} />
+
+          {shippedStage && (
+            <div className="mt-4 rounded-lg border px-4 py-3" style={{ borderColor: '#e2d9cf', background: '#ede8e2' }}>
+              <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#8a9e96' }}>Shipping Info</p>
+              <div className="mt-2 grid grid-cols-3 gap-4 text-sm">
+                <div>
+                  <p className="text-xs" style={{ color: '#8a9e96' }}>Carrier</p>
+                  <p className="font-medium" style={{ color: '#1e3a2f' }}>{shippedStage.carrier ?? '-'}</p>
+                </div>
+                <div>
+                  <p className="text-xs" style={{ color: '#8a9e96' }}>Tracking #</p>
+                  <p className="font-medium" style={{ color: '#1e3a2f', fontFamily: 'var(--font-dm-mono, monospace)' }}>{shippedStage.tracking_number ?? '-'}</p>
+                </div>
+                <div>
+                  <p className="text-xs" style={{ color: '#8a9e96' }}>Ship Date</p>
+                  <p className="font-medium" style={{ color: '#1e3a2f' }}>{shippedStage.ship_date ?? '-'}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-3 text-right">
+            <Link
+              href={`/contractor/orders/${order.id}`}
+              className="text-xs font-medium"
+              style={{ color: '#fa6b04' }}
+            >
+              View full order detail
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {rfq.status === 'awarded' && !order && (
+        <div className="mt-6 rounded-lg border border-dashed px-4 py-6 text-center" style={{ borderColor: '#e2d9cf', background: '#ede8e2' }}>
+          <p className="text-sm" style={{ color: '#8a9e96' }}>No order linked to this RFQ yet.</p>
+        </div>
+      )}
+    </div>
+  )
+}

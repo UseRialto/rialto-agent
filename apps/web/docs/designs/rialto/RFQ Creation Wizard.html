@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rialto — New RFQ</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body { font-family: 'DM Sans', system-ui, sans-serif; background: #f5f0eb; color: #1e3a2f; }
+    h1, h2, h3, .serif { font-family: 'Lora', Georgia, serif; }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #c8bdb2; border-radius: 99px; }
+    ::selection { background: #e8c4b8; color: #1e3a2f; }
+    input, textarea, select { font-family: 'DM Sans', system-ui, sans-serif; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef, useEffect, useMemo } = React;
+
+// ── Brand ─────────────────────────────────────────────────────────────────────
+const C = {
+  bg: '#f5f0eb', bgMuted: '#ede8e2', surface: '#ffffff',
+  border: '#e2d9cf', borderStrong: '#c8bdb2',
+  ink: '#1e3a2f', inkSoft: '#4a6358', inkMuted: '#8a9e96',
+  primary: '#1e3a2f', primaryHov: '#162d24',
+  accent: '#c8735a', accentHov: '#b5624b', accentLight: '#f5ede9', accentBorder: '#e8c4b8',
+  success: '#2d6a4f', successLight: '#e8f4ee', successBorder: '#a8d5ba',
+  warning: '#a85c2a', warningLight: '#fdf0e8', warningBorder: '#e8c4a0',
+};
+
+const PROJECT = { id: 'p1', name: 'Westside Mixed-Use Tower', location: 'Seattle, WA 98101' };
+const UNIT_OPTIONS = ['LF','SF','EA','CY','LB','TON','GAL','SQ','BF','LS'];
+const CATEGORY_OPTIONS = ['Structural Steel','Concrete','Lumber & Wood','Mechanical','Electrical','Plumbing','Roofing','Glazing','Finishes','Site Work'];
+const STEPS = [
+  { label: 'Items',          desc: 'What do you need?' },
+  { label: 'Invite Vendors', desc: 'Who should respond?' },
+  { label: 'Review',         desc: 'Confirm and publish' },
+];
+const MOCK_VENDORS = [
+  { id:'v1', name:'Pacific Steel Supply Co.', email:'david@pacificsteel.com', platform:true },
+  { id:'v2', name:'Consolidated Metal Works',  email:'anna@consolidated.com',  platform:true },
+  { id:'v3', name:'Northwest Steel Distributors', email:'ops@nwsteel.com',     platform:true },
+  { id:'v4', name:'Atlas Iron & Fabrication',  email:'info@atlasisron.com',    platform:true },
+];
+
+function uid() { return Math.random().toString(36).slice(2,9); }
+function blankItem() { return { id:uid(), sku:'', description:'', quantity:'', unit:'LF', specs:'', budget:'', notes:'' }; }
+
+// ── Logo ─────────────────────────────────────────────────────────────────────
+function RialtoLogo({ size=26 }) {
+  return (
+    <svg width={size*3.6} height={size} viewBox="0 0 116 32" fill="none">
+      <path d="M2 30 L2 16 Q2 2 14 2 Q26 2 26 16 L26 30 L20 30 L20 16 Q20 10 14 10 Q8 10 8 16 L8 30 Z" fill={C.accent} />
+      <text x="33" y="24" fontFamily="Lora,Georgia,serif" fontSize="20" fontWeight="600" fill={C.ink} letterSpacing="-0.5">rialto</text>
+    </svg>
+  );
+}
+
+// ── Shared inputs ─────────────────────────────────────────────────────────────
+function Label({ children }) {
+  return <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider" style={{color:C.inkMuted}}>{children}</p>;
+}
+function Input({ className='', style={}, ...props }) {
+  return (
+    <input
+      className={`w-full rounded-xl px-3 py-2.5 text-sm transition-colors focus:outline-none ${className}`}
+      style={{ border:`1px solid ${C.border}`, background:C.bgMuted, color:C.ink,
+               fontFamily:'inherit', ...style }}
+      onFocus={e => e.target.style.borderColor=C.accent}
+      onBlur={e => e.target.style.borderColor=C.border}
+      {...props}
+    />
+  );
+}
+function Select({ children, value, onChange, style={} }) {
+  return (
+    <select value={value} onChange={onChange}
+      className="w-full rounded-xl px-3 py-2.5 text-sm transition-colors focus:outline-none appearance-none"
+      style={{ border:`1px solid ${C.border}`, background:C.bgMuted, color:C.ink, fontFamily:'inherit', ...style }}>
+      {children}
+    </select>
+  );
+}
+
+// ── Top nav ───────────────────────────────────────────────────────────────────
+function TopNav() {
+  return (
+    <header className="flex h-14 items-center gap-6 px-6 sticky top-0 z-30"
+      style={{background:C.surface, borderBottom:`1px solid ${C.border}`}}>
+      <a href="#" className="flex items-center gap-2 shrink-0"><RialtoLogo size={26}/></a>
+      <nav className="flex items-center gap-1">
+        {[['Projects',false],['Track Orders',false]].map(([l,a])=>(
+          <a key={l} href="#" className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
+            style={a?{background:C.accentLight,color:C.accent}:{color:C.inkMuted}}>{l}</a>
+        ))}
+      </nav>
+      <div className="ml-auto flex items-center gap-3">
+        <span className="text-xs" style={{color:C.inkMuted}}>New RFQ · {PROJECT.name}</span>
+        <div className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold"
+          style={{background:C.accent,color:'#fff'}}>S</div>
+      </div>
+    </header>
+  );
+}
+
+// ── Step indicator ────────────────────────────────────────────────────────────
+function StepIndicator({ step }) {
+  return (
+    <div className="flex items-center gap-0 mb-8">
+      {STEPS.map((s,i) => (
+        <React.Fragment key={s.label}>
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all"
+              style={i<step ? {background:C.accent,color:'#fff'} : i===step ? {background:C.primary,color:'#fff',outline:`2px solid ${C.primary}`,outlineOffset:'2px'} : {background:C.bgMuted,color:C.inkMuted}}>
+              {i<step
+                ? <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>
+                : i+1}
+            </div>
+            <div>
+              <p className="text-sm font-semibold" style={{color: i===step?C.ink:i<step?C.accent:C.inkMuted}}>{s.label}</p>
+              <p className="text-[10px] hidden sm:block" style={{color:C.inkMuted}}>{s.desc}</p>
+            </div>
+          </div>
+          {i<STEPS.length-1 && (
+            <div className="mx-4 h-px w-12 shrink-0 transition-all" style={{background:i<step?C.accent:C.border}}/>
+          )}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+// ── Step 1: Items ─────────────────────────────────────────────────────────────
+function ItemCard({ item, idx, onChange, onRemove, onDuplicate }) {
+  const [expanded, setExpanded] = useState(true);
+  const set = (k,v) => onChange({...item,[k]:v});
+
+  return (
+    <div className="rounded-2xl overflow-hidden shadow-sm transition-shadow hover:shadow-md"
+      style={{border:`1px solid ${C.border}`,background:C.surface}}>
+      {/* Header */}
+      <div className="flex items-center gap-3 px-4 py-3 group"
+        style={{borderBottom:`1px solid ${C.border}`,background:C.bgMuted}}>
+        <div className="flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold shrink-0"
+          style={{background:C.border,color:C.inkSoft}}>{idx+1}</div>
+        <input value={item.description} onChange={e=>set('description',e.target.value)}
+          placeholder="Item description…"
+          className="flex-1 bg-transparent text-sm font-semibold focus:outline-none placeholder:font-normal"
+          style={{color:C.ink, fontFamily:'inherit'}}
+          onFocus={e=>e.target.placeholder=''}
+          onBlur={e=>e.target.placeholder='Item description…'} />
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onClick={onDuplicate} className="rounded-lg p-1.5 transition-colors" style={{color:C.inkMuted}}
+            title="Duplicate" onMouseEnter={e=>e.target.style.background=C.bgMuted} onMouseLeave={e=>e.target.style.background='transparent'}>
+            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+          </button>
+          <button onClick={()=>setExpanded(e=>!e)} className="rounded-lg p-1.5 transition-colors" style={{color:C.inkMuted}}>
+            <svg className={`h-3.5 w-3.5 transition-transform ${expanded?'rotate-180':''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7"/></svg>
+          </button>
+          <button onClick={onRemove} className="rounded-lg p-1.5 transition-colors" style={{color:C.inkMuted}}
+            onMouseEnter={e=>e.currentTarget.style.color='#8b2e2e'} onMouseLeave={e=>e.currentTarget.style.color=C.inkMuted}>
+            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-4">
+          <div>
+            <Label>SKU / Part #</Label>
+            <input value={item.sku} onChange={e=>set('sku',e.target.value)}
+              placeholder="e.g. W8X31-A36"
+              className="w-full rounded-xl px-3 py-2 text-xs focus:outline-none transition-colors"
+              style={{border:`1px solid ${C.border}`,background:C.bgMuted,color:C.ink,fontFamily:'DM Mono,monospace'}}
+              onFocus={e=>e.target.style.borderColor=C.accent} onBlur={e=>e.target.style.borderColor=C.border} />
+          </div>
+          <div>
+            <Label>Quantity</Label>
+            <div className="flex gap-1.5">
+              <input type="number" value={item.quantity} onChange={e=>set('quantity',e.target.value)}
+                placeholder="0"
+                className="w-full rounded-xl px-3 py-2 text-xs focus:outline-none transition-colors"
+                style={{border:`1px solid ${C.border}`,background:C.bgMuted,color:C.ink,fontFamily:'inherit'}}
+                onFocus={e=>e.target.style.borderColor=C.accent} onBlur={e=>e.target.style.borderColor=C.border} />
+              <select value={item.unit} onChange={e=>set('unit',e.target.value)}
+                className="rounded-xl px-2 py-2 text-xs focus:outline-none appearance-none"
+                style={{border:`1px solid ${C.border}`,background:C.bgMuted,color:C.inkSoft,fontFamily:'inherit'}}>
+                {UNIT_OPTIONS.map(u=><option key={u}>{u}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="col-span-2">
+            <Label>Specifications</Label>
+            <input value={item.specs} onChange={e=>set('specs',e.target.value)}
+              placeholder="Grade, finish, ASTM standard…"
+              className="w-full rounded-xl px-3 py-2 text-xs focus:outline-none transition-colors"
+              style={{border:`1px solid ${C.border}`,background:C.bgMuted,color:C.ink,fontFamily:'inherit'}}
+              onFocus={e=>e.target.style.borderColor=C.accent} onBlur={e=>e.target.style.borderColor=C.border} />
+          </div>
+          <div>
+            <Label>Target budget / unit</Label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs" style={{color:C.inkMuted}}>$</span>
+              <input type="number" value={item.budget} onChange={e=>set('budget',e.target.value)}
+                placeholder="0.00"
+                className="w-full rounded-xl pl-6 pr-3 py-2 text-xs focus:outline-none transition-colors"
+                style={{border:`1px solid ${C.border}`,background:C.bgMuted,color:C.ink,fontFamily:'inherit'}}
+                onFocus={e=>e.target.style.borderColor=C.accent} onBlur={e=>e.target.style.borderColor=C.border} />
+            </div>
+          </div>
+          <div className="col-span-3">
+            <Label>Notes for vendors</Label>
+            <input value={item.notes} onChange={e=>set('notes',e.target.value)}
+              placeholder="Optional: alternates, delivery constraints, substitution notes…"
+              className="w-full rounded-xl px-3 py-2 text-xs focus:outline-none transition-colors"
+              style={{border:`1px solid ${C.border}`,background:C.bgMuted,color:C.ink,fontFamily:'inherit'}}
+              onFocus={e=>e.target.style.borderColor=C.accent} onBlur={e=>e.target.style.borderColor=C.border} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Step1({ data, onChange }) {
+  const { title, category, bidDeadline, requestType, items } = data;
+  const set = (k,v) => onChange({...data,[k]:v});
+  const setItems = items => onChange({...data,items});
+  const addItem = () => setItems([...items, blankItem()]);
+  const updateItem = (id,u) => setItems(items.map(i=>i.id===id?u:i));
+  const removeItem = id => setItems(items.filter(i=>i.id!==id));
+  const dupItem = id => {
+    const idx = items.findIndex(i=>i.id===id);
+    const copy = {...items[idx],id:uid()};
+    const next = [...items]; next.splice(idx+1,0,copy);
+    setItems(next);
+  };
+  const fileRef = useRef();
+  function importCSV(e) {
+    const file = e.target.files[0]; if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const lines = ev.target.result.trim().split('\n');
+      const newItems = lines.slice(1).map(line => {
+        const [sku,description,quantity,unit,specs] = line.split(',').map(s=>s.trim().replace(/^"|"$/g,''));
+        return {id:uid(),sku:sku||'',description:description||'',quantity:quantity||'',unit:unit||'LF',specs:specs||'',budget:'',notes:''};
+      }).filter(i=>i.sku||i.description);
+      setItems([...items.filter(i=>i.sku||i.description),...newItems]);
+    };
+    reader.readAsText(file);
+    e.target.value='';
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Request metadata */}
+      <div className="rounded-2xl p-5 shadow-sm" style={{border:`1px solid ${C.border}`,background:C.surface}}>
+        <h3 className="mb-4 text-sm font-bold font-serif" style={{color:C.ink}}>Request details</h3>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <Label>Type</Label>
+            <div className="flex rounded-xl p-0.5" style={{border:`1px solid ${C.border}`,background:C.bgMuted}}>
+              {['rfq','rfp'].map(t=>(
+                <button key={t} onClick={()=>set('requestType',t)}
+                  className="flex-1 rounded-lg py-2 text-xs font-bold uppercase transition-all"
+                  style={requestType===t?{background:C.surface,color:C.ink,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}:{color:C.inkMuted}}>
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="sm:col-span-2">
+            <Label>Title</Label>
+            <input value={title} onChange={e=>set('title',e.target.value)}
+              placeholder="e.g. Structural Steel Package — Tower A"
+              className="w-full rounded-xl px-3 py-2.5 text-sm focus:outline-none transition-colors"
+              style={{border:`1px solid ${C.border}`,background:C.bgMuted,color:C.ink,fontFamily:'inherit'}}
+              onFocus={e=>e.target.style.borderColor=C.accent} onBlur={e=>e.target.style.borderColor=C.border} />
+          </div>
+          <div>
+            <Label>Bid deadline</Label>
+            <input type="date" value={bidDeadline} onChange={e=>set('bidDeadline',e.target.value)}
+              className="w-full rounded-xl px-3 py-2.5 text-sm focus:outline-none transition-colors"
+              style={{border:`1px solid ${C.border}`,background:C.bgMuted,color:C.inkSoft,fontFamily:'inherit'}}
+              onFocus={e=>e.target.style.borderColor=C.accent} onBlur={e=>e.target.style.borderColor=C.border} />
+          </div>
+          <div>
+            <Label>Category</Label>
+            <select value={category} onChange={e=>set('category',e.target.value)}
+              className="w-full rounded-xl px-3 py-2.5 text-sm focus:outline-none transition-colors appearance-none"
+              style={{border:`1px solid ${C.border}`,background:C.bgMuted,color:category?C.inkSoft:C.inkMuted,fontFamily:'inherit'}}>
+              <option value="">Select category…</option>
+              {CATEGORY_OPTIONS.map(c=><option key={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Line items */}
+      <div>
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold font-serif" style={{color:C.ink}}>Line items</h3>
+            <p className="mt-0.5 text-xs" style={{color:C.inkMuted}}>{items.length} item{items.length!==1?'s':''} added</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={importCSV}/>
+            <button onClick={()=>fileRef.current.click()}
+              className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-colors shadow-sm"
+              style={{border:`1px solid ${C.border}`,background:C.surface,color:C.inkSoft}}>
+              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+              Import CSV
+            </button>
+            <button onClick={addItem}
+              className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold shadow-sm transition-colors"
+              style={{background:C.primary,color:'#fff'}}>
+              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4"/></svg>
+              Add item
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {items.map((item,idx)=>(
+            <ItemCard key={item.id} item={item} idx={idx}
+              onChange={u=>updateItem(item.id,u)}
+              onRemove={()=>removeItem(item.id)}
+              onDuplicate={()=>dupItem(item.id)} />
+          ))}
+        </div>
+
+        {items.length===0 && (
+          <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed py-16 text-center"
+            style={{borderColor:C.border,background:C.surface}}>
+            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl" style={{background:C.bgMuted}}>
+              <svg className="h-6 w-6" style={{color:C.inkMuted}} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+            </div>
+            <p className="text-sm font-semibold font-serif" style={{color:C.ink}}>No items yet</p>
+            <p className="mt-1 text-xs" style={{color:C.inkMuted}}>Add items manually or import from a CSV</p>
+            <div className="mt-4 flex gap-2">
+              <button onClick={()=>fileRef.current.click()}
+                className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold transition-colors shadow-sm"
+                style={{border:`1px solid ${C.border}`,background:C.surface,color:C.inkSoft}}>
+                Import CSV
+              </button>
+              <button onClick={addItem}
+                className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition-colors"
+                style={{background:C.primary,color:'#fff'}}>
+                Add first item
+              </button>
+            </div>
+          </div>
+        )}
+
+        {items.length>0 && (
+          <button onClick={addItem}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed py-3 text-xs font-semibold transition-colors"
+            style={{borderColor:C.border,color:C.inkMuted}}
+            onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.color=C.accent;}}
+            onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.color=C.inkMuted;}}>
+            + Add another item
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Step 2: Vendors ───────────────────────────────────────────────────────────
+function Step2({ data, onChange }) {
+  const { vendors, visibility } = data;
+  const [query, setQuery] = useState('');
+  const results = useMemo(() => {
+    if (query.trim().length < 1) return [];
+    const q = query.toLowerCase();
+    return MOCK_VENDORS.filter(v =>
+      !vendors.some(inv=>inv.email===v.email) &&
+      (v.name.toLowerCase().includes(q) || v.email.toLowerCase().includes(q))
+    );
+  }, [query, vendors]);
+  const showAddEmail = query.includes('@') && !results.length && !vendors.some(v=>v.email===query);
+
+  function addVendor(v) { onChange({...data,vendors:[...vendors,{...v}]}); setQuery(''); }
+  function addEmail() {
+    if(!query.includes('@')) return;
+    addVendor({id:uid(),name:query,email:query,platform:false});
+  }
+  function removeVendor(email) { onChange({...data,vendors:vendors.filter(v=>v.email!==email)}); }
+  function setVis(v) { onChange({...data,visibility:v}); }
+
+  return (
+    <div className="space-y-5">
+      {/* Visibility */}
+      <div className="rounded-2xl p-5 shadow-sm" style={{border:`1px solid ${C.border}`,background:C.surface}}>
+        <h3 className="mb-4 text-sm font-bold font-serif" style={{color:C.ink}}>Marketplace visibility</h3>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {[
+            { val:'public', icon:'🌐', title:'Public', desc:'All platform vendors can discover and bid. Your company name is hidden; only ZIP-level freight context shown.' },
+            { val:'invited_only', icon:'🔒', title:'Invited Only', desc:'Only vendors you invite below can see and respond to this request.' },
+          ].map(opt=>(
+            <button key={opt.val} onClick={()=>setVis(opt.val)}
+              className="flex items-start gap-3 rounded-2xl p-4 text-left transition-all"
+              style={visibility===opt.val
+                ? {border:`1px solid ${C.primary}`,background:'#f0f4f1',outline:`2px solid ${C.bgMuted}`}
+                : {border:`1px solid ${C.border}`,background:C.bgMuted}}>
+              <span className="text-xl">{opt.icon}</span>
+              <div className="flex-1">
+                <p className="text-sm font-bold font-serif" style={{color:visibility===opt.val?C.primary:C.ink}}>{opt.title}</p>
+                <p className="mt-0.5 text-xs leading-relaxed" style={{color:C.inkSoft}}>{opt.desc}</p>
+              </div>
+              {visibility===opt.val && (
+                <div className="shrink-0 flex h-5 w-5 items-center justify-center rounded-full" style={{background:C.accent}}>
+                  <svg className="h-3 w-3 text-white" fill="none" stroke="currentColor" strokeWidth={3} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Vendor search */}
+      <div className="rounded-2xl p-5 shadow-sm" style={{border:`1px solid ${C.border}`,background:C.surface}}>
+        <h3 className="mb-1 text-sm font-bold font-serif" style={{color:C.ink}}>Invite vendors</h3>
+        <p className="mb-4 text-xs" style={{color:C.inkMuted}}>Search by name or email. Off-platform vendors receive an email with a secure quote link.</p>
+
+        <div className="relative">
+          <div className="flex items-center gap-2 rounded-xl px-3 py-2.5 transition-colors"
+            style={{border:`1px solid ${C.border}`,background:C.bgMuted}}>
+            <svg className="h-4 w-4 shrink-0" style={{color:C.inkMuted}} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            <input value={query} onChange={e=>setQuery(e.target.value)}
+              onKeyDown={e=>e.key==='Enter'&&(results[0]?addVendor(results[0]):showAddEmail&&addEmail())}
+              placeholder="Vendor name or email…"
+              className="flex-1 bg-transparent text-sm focus:outline-none"
+              style={{color:C.ink,fontFamily:'inherit'}} />
+          </div>
+          {(results.length>0||showAddEmail) && (
+            <div className="absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden rounded-2xl shadow-xl"
+              style={{border:`1px solid ${C.border}`,background:C.surface}}>
+              {results.map(v=>(
+                <button key={v.id} onClick={()=>addVendor(v)}
+                  className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors"
+                  style={{borderBottom:`1px solid ${C.border}`}}
+                  onMouseEnter={e=>e.currentTarget.style.background=C.bgMuted}
+                  onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
+                  <div>
+                    <p className="text-sm font-semibold" style={{color:C.ink}}>{v.name}</p>
+                    <p className="text-xs" style={{color:C.inkMuted}}>{v.email}</p>
+                  </div>
+                  <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{background:C.successLight,color:C.success}}>On Platform</span>
+                </button>
+              ))}
+              {showAddEmail && (
+                <button onClick={addEmail}
+                  className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors"
+                  onMouseEnter={e=>e.currentTarget.style.background=C.bgMuted}
+                  onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
+                  <div>
+                    <p className="text-sm font-semibold" style={{color:C.ink}}>Add {query}</p>
+                    <p className="text-xs" style={{color:C.inkMuted}}>Off-platform · receives email invite</p>
+                  </div>
+                  <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{background:C.bgMuted,color:C.inkSoft}}>Off Platform</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {vendors.length>0 ? (
+          <div className="mt-4 space-y-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider" style={{color:C.inkMuted}}>{vendors.length} vendor{vendors.length!==1?'s':''} invited</p>
+            {vendors.map(v=>(
+              <div key={v.email} className="flex items-center justify-between rounded-xl px-4 py-3"
+                style={{border:`1px solid ${C.border}`,background:C.bgMuted}}>
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold"
+                    style={v.platform?{background:C.successLight,color:C.success}:{background:C.bgMuted,color:C.inkSoft}}>
+                    {v.name[0]?.toUpperCase()}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold" style={{color:C.ink}}>{v.name}</p>
+                    <p className="text-xs" style={{color:C.inkMuted}}>{v.email}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                    style={v.platform?{background:C.successLight,color:C.success}:{background:C.bgMuted,color:C.inkMuted}}>
+                    {v.platform?'On Platform':'Off Platform'}
+                  </span>
+                  <button onClick={()=>removeVendor(v.email)} className="rounded-lg p-1 transition-colors"
+                    style={{color:C.inkMuted}}
+                    onMouseEnter={e=>e.currentTarget.style.color='#8b2e2e'}
+                    onMouseLeave={e=>e.currentTarget.style.color=C.inkMuted}>
+                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-4 text-xs italic" style={{color:C.inkMuted}}>
+            No vendors invited yet.{visibility==='public'?' Since this is public, all platform vendors can discover and bid.':''}
+          </p>
+        )}
+      </div>
+
+      {/* Email preview */}
+      <div className="rounded-2xl p-5 shadow-sm" style={{border:`1px solid ${C.border}`,background:C.surface}}>
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold font-serif" style={{color:C.ink}}>Vendor outreach email</h3>
+            <p className="mt-0.5 text-xs" style={{color:C.inkMuted}}>AI-drafted · sent on publish · personalized per recipient</p>
+          </div>
+          <button className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors"
+            style={{border:`1px solid ${C.border}`,background:C.bgMuted,color:C.inkSoft}}>
+            ↺ Regenerate
+          </button>
+        </div>
+        <div className="rounded-xl p-4 space-y-3 text-sm leading-relaxed" style={{border:`1px solid ${C.border}`,background:C.bgMuted,color:C.inkSoft}}>
+          <p style={{color:C.inkMuted,fontSize:'11px',fontWeight:600}}>Subject: Request for Quotation — {data.title||'New RFQ'} — {PROJECT.name}</p>
+          <p>Hi <span className="inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-xs font-semibold align-middle"
+            style={{border:`1px solid ${C.accentBorder}`,background:C.accentLight,color:C.accent}}>👤 First Name</span>,</p>
+          <p>We are sourcing materials for <strong style={{color:C.ink}}>{PROJECT.name}</strong> in {PROJECT.location} and would like to invite your quote.</p>
+          <p>Please review the attached {data.requestType?.toUpperCase()||'RFQ'} and use the secure form linked below. Bids are due <strong style={{color:C.ink}}>{data.bidDeadline||'[deadline]'}</strong>.</p>
+          <div className="rounded-lg px-3 py-2.5 mt-3" style={{background:C.accentLight,border:`1px solid ${C.accentBorder}`}}>
+            <p className="text-xs font-semibold" style={{color:C.accent}}>🔗 Secure quote form link — inserted per recipient on publish</p>
+          </div>
+        </div>
+        <div className="mt-3 flex gap-2">
+          <input type="text" placeholder='Refine: "make it shorter", "add urgency"…'
+            className="flex-1 rounded-xl px-3 py-2 text-xs focus:outline-none transition-colors"
+            style={{border:`1px solid ${C.border}`,background:C.bgMuted,color:C.ink,fontFamily:'inherit'}}
+            onFocus={e=>e.target.style.borderColor=C.accent} onBlur={e=>e.target.style.borderColor=C.border} />
+          <button className="rounded-xl px-4 py-2 text-xs font-bold transition-colors"
+            style={{background:C.primary,color:'#fff'}}>Refine</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Step 3: Review ────────────────────────────────────────────────────────────
+function Step3({ data, onEditItems, onEditVendors }) {
+  const { title, requestType, category, bidDeadline, items, vendors, visibility } = data;
+  const validItems = items.filter(i=>i.sku||i.description);
+  const offPlatform = vendors.filter(v=>!v.platform);
+
+  return (
+    <div className="space-y-5">
+      {/* Ready banner */}
+      <div className="flex items-center gap-4 rounded-2xl px-5 py-4"
+        style={{border:`1px solid ${C.successBorder}`,background:C.successLight}}>
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl" style={{background:C.success}}>
+          <svg className="h-5 w-5 text-white" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/></svg>
+        </div>
+        <div>
+          <p className="text-sm font-bold font-serif" style={{color:C.success}}>Ready to publish</p>
+          <p className="text-xs" style={{color:C.success,opacity:0.8}}>
+            {validItems.length} item{validItems.length!==1?'s':''} · {vendors.length>0?`${vendors.length} vendors invited`:'Open to all platform vendors'} · {visibility==='public'?'Public marketplace':'Invited only'}
+          </p>
+        </div>
+      </div>
+
+      {/* Request summary */}
+      <div className="rounded-2xl p-5 shadow-sm" style={{border:`1px solid ${C.border}`,background:C.surface}}>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm font-bold font-serif" style={{color:C.ink}}>Request summary</h3>
+          <button onClick={onEditItems} className="text-xs font-semibold transition-colors" style={{color:C.accent}}>Edit →</button>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            {label:'Title',        value:title||'—'},
+            {label:'Type',         value:requestType?.toUpperCase()||'RFQ'},
+            {label:'Category',     value:category||'—'},
+            {label:'Bid deadline', value:bidDeadline||'—'},
+          ].map(f=>(
+            <div key={f.label} className="rounded-xl px-4 py-3" style={{background:C.bgMuted}}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider" style={{color:C.inkMuted}}>{f.label}</p>
+              <p className="mt-1 text-sm font-semibold font-serif truncate" style={{color:C.ink}}>{f.value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Line items */}
+      <div className="rounded-2xl overflow-hidden shadow-sm" style={{border:`1px solid ${C.border}`,background:C.surface}}>
+        <div className="flex items-center justify-between px-5 py-4" style={{borderBottom:`1px solid ${C.border}`}}>
+          <h3 className="text-sm font-bold font-serif" style={{color:C.ink}}>
+            Line items <span className="font-normal" style={{color:C.inkMuted}}>({validItems.length})</span>
+          </h3>
+          <button onClick={onEditItems} className="text-xs font-semibold" style={{color:C.accent}}>Edit →</button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-[10px] font-semibold uppercase tracking-wider" style={{color:C.inkMuted,background:C.bgMuted}}>
+              <tr>
+                {['#','SKU','Description','Qty','Unit','Specs'].map(h=>(
+                  <th key={h} className={`px-5 py-3 ${h==='Qty'?'text-right':'text-left'}`}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {validItems.map((item,i)=>(
+                <tr key={item.id} style={{borderTop:`1px solid ${C.border}`}}>
+                  <td className="px-5 py-3" style={{color:C.inkMuted}}>{i+1}</td>
+                  <td className="px-4 py-3 font-mono" style={{color:C.inkSoft}}>{item.sku||'—'}</td>
+                  <td className="px-4 py-3 font-semibold" style={{color:C.ink}}>{item.description}</td>
+                  <td className="px-4 py-3 text-right" style={{color:C.inkSoft}}>{item.quantity||'—'}</td>
+                  <td className="px-4 py-3" style={{color:C.inkMuted}}>{item.unit}</td>
+                  <td className="px-4 py-3 max-w-[180px] truncate" style={{color:C.inkMuted}}>{item.specs||'—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Vendors */}
+      <div className="rounded-2xl p-5 shadow-sm" style={{border:`1px solid ${C.border}`,background:C.surface}}>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm font-bold font-serif" style={{color:C.ink}}>
+            Vendors <span className="font-normal" style={{color:C.inkMuted}}>({vendors.length})</span>
+          </h3>
+          <button onClick={onEditVendors} className="text-xs font-semibold" style={{color:C.accent}}>Edit →</button>
+        </div>
+        {vendors.length===0
+          ? <p className="text-xs italic" style={{color:C.inkMuted}}>No specific vendors invited. Visible to all platform vendors.</p>
+          : <div className="flex flex-wrap gap-2">
+              {vendors.map(v=>(
+                <span key={v.email} className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold"
+                  style={v.platform?{background:C.successLight,color:C.success,outline:`1px solid ${C.successBorder}`}:{background:C.bgMuted,color:C.inkSoft}}>
+                  {v.platform && <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7"/></svg>}
+                  {v.name}
+                </span>
+              ))}
+            </div>
+        }
+        {offPlatform.length>0 && (
+          <p className="mt-3 rounded-xl px-3 py-2 text-xs" style={{background:C.warningLight,color:C.warning}}>
+            <span className="font-semibold">{offPlatform.length} off-platform vendor{offPlatform.length!==1?'s':''}</span> will receive an email with a secure quote link on publish.
+          </p>
+        )}
+      </div>
+
+      {/* Publish notice */}
+      <div className="rounded-2xl px-5 py-4" style={{border:`1px solid ${C.accentBorder}`,background:C.accentLight}}>
+        <p className="text-sm font-bold font-serif" style={{color:C.ink}}>What happens when you publish?</p>
+        <ul className="mt-2 space-y-1.5">
+          {[
+            `This ${requestType?.toUpperCase()||'RFQ'} becomes ${visibility==='public'?'visible to all platform vendors':'visible to invited vendors only'}`,
+            ...(offPlatform.length>0 ? [`${offPlatform.length} off-platform vendor${offPlatform.length!==1?'s':''} will receive an outreach email with a secure quote link`] : []),
+            'Bids will appear in your Bid Comparison dashboard as vendors respond',
+          ].map((item,i)=>(
+            <li key={i} className="flex items-start gap-2 text-xs" style={{color:C.inkSoft}}>
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full" style={{background:C.accent}}></span>
+              {item}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+// ── Right panel ───────────────────────────────────────────────────────────────
+function ContextPanel({ step, data }) {
+  const validItems = data.items.filter(i=>i.sku||i.description);
+  const tips = [
+    ['Tips for Step 1',[
+      'Add SKUs where possible — vendors can match to catalog',
+      'Include ASTM grades and delivery constraints in Specs',
+      'Import a CSV to add many items at once',
+      'Target budget is optional and hidden from vendors',
+    ],'accentLight','accent'],
+    ['Tips for Step 2',[
+      'Platform vendors respond directly on Rialto',
+      'Off-platform vendors receive a secure quote link by email',
+      'You can skip — public RFQs reach all platform vendors',
+    ],'accentLight','accent'],
+    ['Before you publish',[
+      'Double-check quantities — edits not available after publish',
+      'Confirm bid deadline is correct',
+      'Ensure your mailbox is connected in Settings to send emails',
+    ],'warningLight','warning'],
+  ][step];
+
+  return (
+    <aside className="hidden xl:flex xl:flex-col w-72 shrink-0 overflow-auto p-5"
+      style={{borderLeft:`1px solid ${C.border}`,background:C.surface}}>
+      <div className="mb-5">
+        <p className="text-[10px] font-semibold uppercase tracking-wider" style={{color:C.inkMuted}}>Project</p>
+        <p className="mt-1 text-sm font-bold font-serif" style={{color:C.ink}}>{PROJECT.name}</p>
+        <p className="text-xs" style={{color:C.inkMuted}}>{PROJECT.location}</p>
+      </div>
+
+      {/* Progress */}
+      <div className="mb-5 rounded-2xl p-4" style={{background:C.bgMuted,border:`1px solid ${C.border}`}}>
+        <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{color:C.inkMuted}}>Progress</p>
+        <div className="space-y-2.5">
+          {STEPS.map((s,i)=>(
+            <div key={s.label} className="flex items-center gap-2.5">
+              <div className="h-2 w-2 rounded-full shrink-0"
+                style={{background:i<step?C.accent:i===step?C.primary:C.border}} />
+              <p className="text-xs font-semibold"
+                style={{color:i===step?C.ink:i<step?C.accent:C.inkMuted}}>{s.label}</p>
+              {i<step && <svg className="ml-auto h-3.5 w-3.5" style={{color:C.accent}} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7"/></svg>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Tips */}
+      <div className="rounded-2xl p-4" style={{border:`1px solid ${C[tips[3]+'Border']||C.accentBorder}`,background:C[tips[2]]}}>
+        <p className="text-xs font-bold font-serif mb-2" style={{color:C[tips[3]]}}>{tips[0]}</p>
+        <ul className="space-y-2">
+          {tips[1].map((t,i)=>(
+            <li key={i} className="flex gap-1.5 text-[11px]" style={{color:C.inkSoft}}>
+              <span className="shrink-0" style={{color:C[tips[3]]}}>→</span> {t}
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Summary card */}
+      <div className="mt-auto pt-4">
+        <div className="rounded-2xl p-4" style={{background:C.primary}}>
+          <p className="text-xs font-bold mb-2" style={{color:C.accent}}>Summary</p>
+          <div className="space-y-1.5 text-[11px]" style={{color:'rgba(255,255,255,0.6)'}}>
+            <p><span className="font-bold text-white">{validItems.length}</span> line items</p>
+            <p><span className="font-bold text-white">{data.vendors.length}</span> vendors invited</p>
+            <p><span className="font-bold text-white capitalize">{data.visibility.replace('_',' ')}</span> visibility</p>
+            {data.bidDeadline && <p>Due <span className="font-bold text-white">{data.bidDeadline}</span></p>}
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+// ── Main app ──────────────────────────────────────────────────────────────────
+function App() {
+  const [step, setStep]       = useState(0);
+  const [published, setPub]   = useState(false);
+  const [data, setData]       = useState({
+    requestType: 'rfq',
+    title: `Westside Mixed-Use Tower — May 2026`,
+    category: 'Structural Steel',
+    bidDeadline: '2026-05-15',
+    items: [
+      {id:uid(),sku:'W8X31-A36',description:'W8x31 Wide Flange Beam, A36',quantity:'240',unit:'LF',specs:'ASTM A36, Mill certs required',budget:'18',notes:''},
+      {id:uid(),sku:'HSS6X6X0.5',description:'HSS 6x6x1/2 Square Tube, A500',quantity:'180',unit:'LF',specs:'ASTM A500 Grade B',budget:'24',notes:''},
+    ],
+    vendors: [
+      {id:'v1',name:'Pacific Steel Supply Co.',email:'david@pacificsteel.com',platform:true},
+      {id:'v2',name:'Consolidated Metal Works',email:'anna@consolidated.com',platform:true},
+    ],
+    visibility: 'public',
+  });
+
+  const canNext = step===0 ? (data.title.trim() && data.items.some(i=>i.sku||i.description)) : true;
+
+  if (published) return (
+    <div className="flex min-h-screen flex-col" style={{background:C.bg}}>
+      <TopNav />
+      <div className="flex flex-1 items-center justify-center p-6"
+        style={{background:`radial-gradient(circle at top left, ${C.accentLight} 0, transparent 32rem), linear-gradient(180deg, ${C.bg} 0, ${C.bgMuted} 100%)`}}>
+        <div className="w-full max-w-md text-center">
+          <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-3xl shadow-xl"
+            style={{background:C.accent, boxShadow:`0 20px 40px ${C.accent}40`}}>
+            <svg className="h-10 w-10 text-white" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/>
+            </svg>
+          </div>
+          <h1 className="text-2xl font-bold font-serif" style={{color:C.ink}}>RFQ Published!</h1>
+          <p className="mt-2 text-sm" style={{color:C.inkSoft}}>{data.title}</p>
+          <p className="mt-4 text-xs" style={{color:C.inkMuted}}>
+            {data.vendors.length>0?`${data.vendors.length} vendors invited.`:'Open to all platform vendors.'} Bids will appear as they come in.
+          </p>
+          <div className="mt-8 flex flex-col gap-3">
+            <button onClick={()=>setPub(false)}
+              className="w-full rounded-2xl py-3 text-sm font-bold transition-all"
+              style={{background:C.primary,color:'#fff'}}>
+              View bid comparison dashboard
+            </button>
+            <button onClick={()=>{setPub(false);setStep(0);}}
+              className="w-full rounded-2xl py-3 text-sm font-semibold transition-all"
+              style={{border:`1px solid ${C.border}`,background:C.surface,color:C.inkSoft}}>
+              Create another RFQ
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex min-h-screen flex-col" style={{background:C.bg}}>
+      <TopNav />
+      <div className="flex flex-1 overflow-hidden">
+        <main className="flex-1 overflow-auto p-6"
+          style={{background:`radial-gradient(circle at top left, ${C.accentLight} 0, transparent 32rem), linear-gradient(180deg, ${C.bg} 0, ${C.bgMuted} 100%)`}}>
+          <div className="mx-auto max-w-3xl">
+            {/* Breadcrumb */}
+            <nav className="mb-5 flex items-center gap-1.5 text-xs" style={{color:C.inkMuted}}>
+              <a href="#" className="hover:underline" style={{color:C.inkSoft}}>Projects</a>
+              <span>/</span>
+              <a href="#" className="hover:underline" style={{color:C.inkSoft}}>{PROJECT.name}</a>
+              <span>/</span>
+              <span className="font-semibold" style={{color:C.ink}}>New {data.requestType?.toUpperCase()}</span>
+            </nav>
+
+            <div className="mb-6">
+              <h1 className="text-2xl font-bold font-serif tracking-tight" style={{color:C.ink}}>
+                {step===0?'Define your request':step===1?'Invite vendors':'Review & publish'}
+              </h1>
+              <p className="mt-1 text-sm" style={{color:C.inkSoft}}>{STEPS[step].desc}</p>
+            </div>
+
+            <StepIndicator step={step} />
+
+            {step===0 && <Step1 data={data} onChange={setData} />}
+            {step===1 && <Step2 data={data} onChange={setData} />}
+            {step===2 && <Step3 data={data} onEditItems={()=>setStep(0)} onEditVendors={()=>setStep(1)} />}
+
+            {/* Nav footer */}
+            <div className="mt-8 flex items-center justify-between pt-5" style={{borderTop:`1px solid ${C.border}`}}>
+              <button onClick={()=>step>0?setStep(s=>s-1):null}
+                className="text-sm font-semibold transition-colors" style={{color:C.inkMuted}}>
+                {step===0?'← Cancel':'← Back'}
+              </button>
+              <div className="flex items-center gap-3">
+                {step<2 && (
+                  <button onClick={()=>setStep(s=>s+1)}
+                    className="text-sm font-medium transition-colors" style={{color:C.inkMuted}}>
+                    Skip →
+                  </button>
+                )}
+                <button onClick={()=>step<2?setStep(s=>s+1):setPub(true)}
+                  disabled={!canNext}
+                  className="rounded-2xl px-6 py-2.5 text-sm font-bold transition-all"
+                  style={canNext
+                    ? step===2
+                      ? {background:C.accent,color:'#fff',boxShadow:`0 4px 16px ${C.accent}40`}
+                      : {background:C.primary,color:'#fff'}
+                    : {background:C.bgMuted,color:C.inkMuted,cursor:'not-allowed'}}>
+                  {step===2?'🚀 Publish RFQ':step===1?`Review ${data.requestType?.toUpperCase()||'RFQ'} →`:'Next →'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </main>
+        <ContextPanel step={step} data={data} />
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+<template id="__bundler_thumbnail">
+  <svg viewBox="0 0 120 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect width="120" height="80" fill="#f5f0eb"/>
+    <rect x="0" y="0" width="120" height="14" fill="#fff"/>
+    <path d="M8 10 L8 5 Q8 2 11 2 Q14 2 14 5 L14 10 L12 10 L12 5 Q12 3.5 11 3.5 Q10 3.5 10 5 L10 10 Z" fill="#c8735a"/>
+    <circle cx="28" cy="30" r="6" fill="#1e3a2f"/>
+    <text x="28" y="33" textAnchor="middle" fontSize="7" fontWeight="bold" fill="white">1</text>
+    <line x1="34" y1="30" x2="46" y2="30" stroke="#c8735a" strokeWidth="1"/>
+    <circle cx="52" cy="30" r="6" fill="#ede8e2"/>
+    <text x="52" y="33" textAnchor="middle" fontSize="7" fill="#8a9e96">2</text>
+    <line x1="58" y1="30" x2="70" y2="30" stroke="#e2d9cf" strokeWidth="1"/>
+    <circle cx="76" cy="30" r="6" fill="#ede8e2"/>
+    <text x="76" y="33" textAnchor="middle" fontSize="7" fill="#8a9e96">3</text>
+    <rect x="8" y="44" width="88" height="8" rx="2" fill="#fff" stroke="#e2d9cf"/>
+    <rect x="8" y="56" width="88" height="8" rx="2" fill="#fff" stroke="#e2d9cf"/>
+    <rect x="8" y="68" width="40" height="8" rx="2" fill="#1e3a2f"/>
+  </svg>
+</template>
+</body>
+</html>

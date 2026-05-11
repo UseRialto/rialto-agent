@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rialto — Bid Comparison</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: #f5f0eb;
+      color: #1e3a2f;
+    }
+    h1, h2, h3, .serif { font-family: 'Lora', Georgia, serif; }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #c8bdb2; border-radius: 99px; }
+    ::selection { background: #e8c4b8; color: #1e3a2f; }
+    .font-mono { font-family: 'DM Mono', monospace !important; }
+  </style>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['DM Sans', 'system-ui', 'sans-serif'],
+            serif: ['Lora', 'Georgia', 'serif'],
+            mono: ['DM Mono', 'monospace'],
+          },
+          colors: {
+            rialto: {
+              bg:      '#f5f0eb',
+              ink:     '#1e3a2f',
+              terra:   '#c8735a',
+              sage:    '#2d5a3d',
+              linen:   '#ede8e2',
+              stone:   '#8a9e96',
+            }
+          }
+        }
+      }
+    };
+  </script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo } = React;
+
+// ── Brand tokens ─────────────────────────────────────────────────────────────
+const C = {
+  bg:           '#f5f0eb',
+  bgMuted:      '#ede8e2',
+  surface:      '#ffffff',
+  border:       '#e2d9cf',
+  borderStrong: '#c8bdb2',
+  ink:          '#1e3a2f',
+  inkSoft:      '#4a6358',
+  inkMuted:     '#8a9e96',
+  primary:      '#1e3a2f',
+  primaryHov:   '#162d24',
+  accent:       '#c8735a',
+  accentHov:    '#b5624b',
+  accentLight:  '#f5ede9',
+  accentBorder: '#e8c4b8',
+  success:      '#2d6a4f',
+  successLight: '#e8f4ee',
+  successBorder:'#a8d5ba',
+  warning:      '#a85c2a',
+  warningLight: '#fdf0e8',
+  warningBorder:'#e8c4a0',
+};
+
+// ── Logo ─────────────────────────────────────────────────────────────────────
+function RialtoLogo({ size = 28 }) {
+  const scale = size / 32;
+  return (
+    <svg width={size * 3.6} height={size} viewBox="0 0 116 32" fill="none">
+      {/* Arch */}
+      <path d="M2 30 L2 16 Q2 2 14 2 Q26 2 26 16 L26 30 L20 30 L20 16 Q20 10 14 10 Q8 10 8 16 L8 30 Z" fill={C.accent} />
+      {/* wordmark */}
+      <text x="33" y="24" fontFamily="Lora, Georgia, serif" fontSize="20" fontWeight="600" fill={C.ink} letterSpacing="-0.5">rialto</text>
+    </svg>
+  );
+}
+
+// ── Data ─────────────────────────────────────────────────────────────────────
+const RFQ = {
+  title: 'Structural Steel Package — Tower A',
+  category: 'Structural Steel',
+  bid_deadline: 'May 15, 2026',
+  line_items: [
+    { id: 'li-1', sku: 'W8X31-A36',   description: 'W8x31 Wide Flange Beam, A36',        quantity: 240, unit: 'LF' },
+    { id: 'li-2', sku: 'HSS6X6X0.5', description: 'HSS 6x6x1/2 Square Tube, A500',       quantity: 180, unit: 'LF' },
+    { id: 'li-3', sku: 'PL0.5-A36',   description: '1/2" Steel Plate, A36',               quantity: 420, unit: 'SF' },
+    { id: 'li-4', sku: 'AB0.75X12',   description: '3/4" Anchor Bolts x 12"',             quantity: 96,  unit: 'EA' },
+    { id: 'li-5', sku: 'C8X18.75',    description: 'C8x18.75 Channel, A36',               quantity: 120, unit: 'LF' },
+  ],
+};
+
+const PROJECT = { name: 'Westside Mixed-Use Tower', location: 'Seattle, WA 98101' };
+
+const BIDS = [
+  {
+    id: 'bid-001', vendor_name: 'Pacific Steel Supply Co.', designer_name: 'R. Tanaka',
+    total_price: 42800, lead_time_days: 14, submitted_at: '2026-04-22T14:30:00Z',
+    source: 'platform', is_invited: true, is_on_platform: true,
+    buyer_decision_status: 'preferred',
+    decision_rationale: 'Lowest full-coverage price, certified A36, strong past performance.',
+    fulfillment_summary: { partial: false, coverage_ratio: 1.0 },
+    terms: { payment_terms: 'Net 30', deposit_terms: '10% upfront', shipping_terms: 'Delivered jobsite' },
+    compliance_declarations: [{ code: 'dbe', label: 'DBE Certified' }, { code: 'baa', label: 'Buy American' }],
+    risk_flags: [],
+    line_item_responses: [
+      { line_item_id: 'li-1', unit_price: 15.80, total_price: 3792,   lead_time_days: 10, availability: 'in_stock' },
+      { line_item_id: 'li-2', unit_price: 21.40, total_price: 3852,   lead_time_days: 14, availability: 'in_stock' },
+      { line_item_id: 'li-3', unit_price: 7.90,  total_price: 3318,   lead_time_days: 12, availability: 'can_source' },
+      { line_item_id: 'li-4', unit_price: 12.20, total_price: 1171.2, lead_time_days: 7,  availability: 'in_stock' },
+      { line_item_id: 'li-5', unit_price: 13.90, total_price: 1668,   lead_time_days: 10, availability: 'in_stock' },
+    ],
+  },
+  {
+    id: 'bid-002', vendor_name: 'Consolidated Metal Works', designer_name: 'J. Patterson',
+    total_price: 47350, lead_time_days: 10, submitted_at: '2026-04-23T09:15:00Z',
+    source: 'platform', is_invited: true, is_on_platform: true,
+    buyer_decision_status: 'alternate',
+    decision_rationale: 'Faster lead time. Slightly higher price.',
+    fulfillment_summary: { partial: false, coverage_ratio: 1.0 },
+    terms: { payment_terms: 'Net 45', deposit_terms: 'None', shipping_terms: 'FOB origin' },
+    compliance_declarations: [{ code: 'baa', label: 'Buy American' }],
+    risk_flags: [{ code: 'r1', label: 'Single-source HSS tube' }],
+    line_item_responses: [
+      { line_item_id: 'li-1', unit_price: 17.20, total_price: 4128, lead_time_days: 8,  availability: 'in_stock' },
+      { line_item_id: 'li-2', unit_price: 24.80, total_price: 4464, lead_time_days: 10, availability: 'in_stock' },
+      { line_item_id: 'li-3', unit_price: 8.60,  total_price: 3612, lead_time_days: 9,  availability: 'in_stock' },
+      { line_item_id: 'li-4', unit_price: 13.50, total_price: 1296, lead_time_days: 5,  availability: 'in_stock' },
+      { line_item_id: 'li-5', unit_price: 15.40, total_price: 1848, lead_time_days: 8,  availability: 'in_stock' },
+    ],
+  },
+  {
+    id: 'bid-003', vendor_name: 'Northwest Steel Distributors', designer_name: null,
+    total_price: 39200, lead_time_days: 21, submitted_at: '2026-04-24T16:45:00Z',
+    source: 'magic_form', is_invited: false, is_on_platform: true,
+    buyer_decision_status: null, decision_rationale: null,
+    fulfillment_summary: { partial: true, coverage_ratio: 0.82 },
+    terms: { payment_terms: 'Net 30', deposit_terms: '25% upfront', shipping_terms: 'Delivered jobsite' },
+    compliance_declarations: [],
+    risk_flags: [{ code: 'partial', label: 'Missing anchor bolts' }],
+    line_item_responses: [
+      { line_item_id: 'li-1', unit_price: 14.60, total_price: 3504, lead_time_days: 18, availability: 'in_stock' },
+      { line_item_id: 'li-2', unit_price: 19.80, total_price: 3564, lead_time_days: 21, availability: 'can_source' },
+      { line_item_id: 'li-3', unit_price: 7.20,  total_price: 3024, lead_time_days: 16, availability: 'in_stock' },
+      { line_item_id: 'li-4', unit_price: 0,     total_price: 0,    lead_time_days: 0,  availability: 'unavailable' },
+      { line_item_id: 'li-5', unit_price: 12.80, total_price: 1536, lead_time_days: 14, availability: 'in_stock' },
+    ],
+  },
+  {
+    id: 'bid-004', vendor_name: 'Atlas Iron & Fabrication', designer_name: 'M. Reyes',
+    total_price: 51600, lead_time_days: 8, submitted_at: '2026-04-25T11:20:00Z',
+    source: 'email', is_invited: true, is_on_platform: false,
+    buyer_decision_status: 'hold', decision_rationale: 'Premium but fastest. Hold for schedule-critical scenarios.',
+    fulfillment_summary: { partial: false, coverage_ratio: 1.0 },
+    terms: { payment_terms: 'Net 15', deposit_terms: '30% upfront', shipping_terms: 'Delivered jobsite' },
+    compliance_declarations: [],
+    risk_flags: [{ code: 'price', label: 'Above budget threshold' }],
+    line_item_responses: [
+      { line_item_id: 'li-1', unit_price: 19.50, total_price: 4680,   lead_time_days: 6, availability: 'in_stock' },
+      { line_item_id: 'li-2', unit_price: 27.40, total_price: 4932,   lead_time_days: 8, availability: 'in_stock' },
+      { line_item_id: 'li-3', unit_price: 9.80,  total_price: 4116,   lead_time_days: 7, availability: 'in_stock' },
+      { line_item_id: 'li-4', unit_price: 16.40, total_price: 1574.4, lead_time_days: 4, availability: 'in_stock' },
+      { line_item_id: 'li-5', unit_price: 18.10, total_price: 2172,   lead_time_days: 6, availability: 'in_stock' },
+    ],
+  },
+];
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function fmt(n) {
+  if (n >= 1_000_000) return `$${(n/1e6).toFixed(2)}M`;
+  if (n >= 1_000)     return `$${(n/1e3).toFixed(1).replace(/\.0$/,'')}k`;
+  return `$${n.toLocaleString()}`;
+}
+function isFullCoverage(bid) {
+  return !bid.fulfillment_summary?.partial && (bid.fulfillment_summary?.coverage_ratio ?? 1) >= 1;
+}
+
+// Decision config using brand colors
+const DEC = {
+  preferred:  { label: 'Preferred',  bg: C.primary,  text: '#fff',        border: C.primary,  dot: C.primary  },
+  alternate:  { label: 'Alternate',  bg: C.inkSoft,  text: '#fff',        border: C.inkSoft,  dot: C.inkSoft  },
+  hold:       { label: 'Hold',       bg: C.warning,  text: '#fff',        border: C.warning,  dot: C.warning  },
+  do_not_use: { label: 'Pass',       bg: '#fff',     text: '#8b2e2e',     border: '#e8b4b4',  dot: '#cd5c5c'  },
+};
+
+// ── Top nav ──────────────────────────────────────────────────────────────────
+function TopNav() {
+  return (
+    <header style={{ background: C.surface, borderBottom: `1px solid ${C.border}` }}
+      className="flex h-14 items-center gap-6 px-6 sticky top-0 z-30 backdrop-blur">
+      <a href="#" className="flex items-center gap-2 shrink-0">
+        <RialtoLogo size={26} />
+      </a>
+      <nav className="flex items-center gap-1">
+        {[['Projects', true], ['Track Orders', false]].map(([label, active]) => (
+          <a key={label} href="#"
+            style={active ? { background: C.accentLight, color: C.accent } : { color: C.inkMuted }}
+            className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors hover:opacity-80">
+            {label}
+          </a>
+        ))}
+      </nav>
+      <div className="ml-auto flex items-center gap-3">
+        <span className="hidden sm:flex items-center gap-1.5 text-xs font-medium" style={{ color: C.inkMuted }}>
+          Procurement intelligence
+        </span>
+        <span className="h-4 w-px" style={{ background: C.border }} />
+        <span className="rounded-full px-2.5 py-1 text-[10px] font-bold"
+          style={{ background: C.successLight, color: C.success, outline: `1px solid ${C.successBorder}` }}>
+          Live data
+        </span>
+        <div className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold"
+          style={{ background: C.accent, color: '#fff' }}>S</div>
+      </div>
+    </header>
+  );
+}
+
+// ── Charts ───────────────────────────────────────────────────────────────────
+function PriceChart({ bids, decisions }) {
+  const sorted = [...bids].sort((a,b) => a.total_price - b.total_price);
+  const max = Math.max(...bids.map(b => b.total_price));
+  const min = Math.min(...bids.map(b => b.total_price));
+  const CHART_H = 120, BAR_W = 56, GAP = 20, PAD_L = 52, PAD_B = 38;
+  const totalW = PAD_L + sorted.length * (BAR_W + GAP) - GAP + 16;
+  const fullBids = bids.filter(isFullCoverage);
+  const lowestId = fullBids.length ? fullBids.reduce((a,b)=>a.total_price<b.total_price?a:b).id : null;
+
+  return (
+    <div className="flex-1 rounded-2xl p-5 shadow-sm" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.inkMuted }}>Total Price</p>
+          <p className="mt-0.5 text-sm font-semibold font-serif" style={{ color: C.ink }}>Lowest to highest</p>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px]" style={{ color: C.inkMuted }}>Range</p>
+          <p className="text-sm font-bold" style={{ color: C.ink }}>{fmt(min)} – {fmt(max)}</p>
+        </div>
+      </div>
+      <svg width="100%" viewBox={`0 0 ${totalW} ${CHART_H + PAD_B}`} preserveAspectRatio="xMidYMid meet">
+        {[0, 0.25, 0.5, 0.75, 1].map(t => {
+          const y = CHART_H - t * CHART_H;
+          return (
+            <g key={t}>
+              <line x1={PAD_L} y1={y} x2={totalW} y2={y} stroke={C.border} strokeWidth="1" />
+              <text x={PAD_L-6} y={y+4} textAnchor="end" fontSize="9" fill={C.inkMuted}>{fmt(min + t*(max-min))}</text>
+            </g>
+          );
+        })}
+        {sorted.map((bid, i) => {
+          const ratio = (bid.total_price - min) / (max - min || 1);
+          const barH = Math.max(10, ratio * CHART_H * 0.85 + CHART_H * 0.15);
+          const x = PAD_L + i * (BAR_W + GAP);
+          const y = CHART_H - barH;
+          const dec = decisions[bid.id] ?? bid.buyer_decision_status;
+          const isLowest = bid.id === lowestId;
+          const color = dec === 'preferred' ? C.primary : dec === 'alternate' ? C.inkSoft : dec === 'hold' ? C.warning : dec === 'do_not_use' ? '#e8b4b4' : C.border;
+          return (
+            <g key={bid.id}>
+              <rect x={x} y={y} width={BAR_W} height={barH} rx="6" fill={color} opacity={bid.fulfillment_summary?.partial ? 0.5 : 1} />
+              {isLowest && <text x={x+BAR_W/2} y={y-7} textAnchor="middle" fontSize="9" fontWeight="700" fill={C.accent}>★ lowest</text>}
+              <text x={x+BAR_W/2} y={CHART_H+14} textAnchor="middle" fontSize="9" fill={C.inkSoft} fontWeight="500">{bid.vendor_name.split(' ')[0]}</text>
+              <text x={x+BAR_W/2} y={CHART_H+26} textAnchor="middle" fontSize="9" fill={C.inkMuted}>{fmt(bid.total_price)}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function LeadTimeChart({ bids, decisions }) {
+  const sorted = [...bids].sort((a,b) => a.lead_time_days - b.lead_time_days);
+  const max = Math.max(...bids.map(b => b.lead_time_days));
+  const CHART_H = 120, BAR_W = 56, GAP = 20, PAD_L = 36, PAD_B = 38;
+  const totalW = PAD_L + sorted.length * (BAR_W + GAP) - GAP + 16;
+
+  return (
+    <div className="flex-1 rounded-2xl p-5 shadow-sm" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.inkMuted }}>Lead Time</p>
+          <p className="mt-0.5 text-sm font-semibold font-serif" style={{ color: C.ink }}>Fastest to slowest</p>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px]" style={{ color: C.inkMuted }}>Range</p>
+          <p className="text-sm font-bold" style={{ color: C.ink }}>{Math.min(...bids.map(b=>b.lead_time_days))}d – {max}d</p>
+        </div>
+      </div>
+      <svg width="100%" viewBox={`0 0 ${totalW} ${CHART_H + PAD_B}`} preserveAspectRatio="xMidYMid meet">
+        {[0,0.25,0.5,0.75,1].map(t => (
+          <g key={t}>
+            <line x1={PAD_L} y1={CHART_H - t*CHART_H} x2={totalW} y2={CHART_H - t*CHART_H} stroke={C.border} strokeWidth="1" />
+            <text x={PAD_L-5} y={CHART_H - t*CHART_H + 4} textAnchor="end" fontSize="9" fill={C.inkMuted}>{Math.round(t*max)}d</text>
+          </g>
+        ))}
+        {sorted.map((bid, i) => {
+          const ratio = bid.lead_time_days / max;
+          const barH = Math.max(10, ratio * CHART_H * 0.85 + CHART_H * 0.15);
+          const x = PAD_L + i * (BAR_W + GAP);
+          const y = CHART_H - barH;
+          const dec = decisions[bid.id] ?? bid.buyer_decision_status;
+          const isFastest = sorted[0].id === bid.id;
+          const color = dec === 'preferred' ? C.primary : dec === 'alternate' ? C.inkSoft : dec === 'hold' ? C.warning : dec === 'do_not_use' ? '#e8b4b4' : C.border;
+          return (
+            <g key={bid.id}>
+              <rect x={x} y={y} width={BAR_W} height={barH} rx="6" fill={color} />
+              {isFastest && <text x={x+BAR_W/2} y={y-7} textAnchor="middle" fontSize="9" fontWeight="700" fill={C.accent}>⚡ fastest</text>}
+              <text x={x+BAR_W/2} y={CHART_H+14} textAnchor="middle" fontSize="9" fill={C.inkSoft} fontWeight="500">{bid.vendor_name.split(' ')[0]}</text>
+              <text x={x+BAR_W/2} y={CHART_H+26} textAnchor="middle" fontSize="9" fill={C.inkMuted}>{bid.lead_time_days}d</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// ── Coverage badge ────────────────────────────────────────────────────────────
+function CoverageBadge({ bid }) {
+  const full = isFullCoverage(bid);
+  const pct  = Math.round((bid.fulfillment_summary?.coverage_ratio ?? 1) * 100);
+  if (full) return (
+    <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold"
+      style={{ background: C.successLight, color: C.success, outline: `1px solid ${C.successBorder}` }}>
+      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" /></svg>
+      Full Quote
+    </span>
+  );
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold"
+      style={{ background: C.warningLight, color: C.warning, outline: `1px solid ${C.warningBorder}` }}>
+      ⚠ Partial · {pct}%
+    </span>
+  );
+}
+
+function SourceBadge({ bid }) {
+  const style = { background: C.bgMuted, color: C.inkSoft, fontSize: '10px', fontWeight: 600 };
+  if (bid.source === 'email')      return <span className="rounded px-1.5 py-0.5" style={style}>Email</span>;
+  if (bid.source === 'magic_form') return <span className="rounded px-1.5 py-0.5" style={{ ...style, background: C.accentLight, color: C.accent }}>Magic Form</span>;
+  if (bid.is_invited)              return <span className="rounded px-1.5 py-0.5" style={{ ...style, background: C.warningLight, color: C.warning }}>Invited</span>;
+  return <span className="rounded px-1.5 py-0.5" style={style}>Marketplace</span>;
+}
+
+// ── Line item drawer ──────────────────────────────────────────────────────────
+function Drawer({ bid, onClose }) {
+  if (!bid) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex" onClick={onClose}>
+      <div className="flex-1" style={{ background: 'rgba(30,58,47,0.3)', backdropFilter: 'blur(4px)' }} />
+      <aside className="flex h-full w-full max-w-xl flex-col" style={{ background: C.surface }} onClick={e=>e.stopPropagation()}>
+        <div className="flex items-start justify-between px-6 py-5" style={{ borderBottom: `1px solid ${C.border}`, background: C.bgMuted }}>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.inkMuted }}>Line Items</p>
+            <h3 className="mt-1 text-xl font-bold font-serif" style={{ color: C.ink }}>{bid.vendor_name}</h3>
+            <div className="mt-2 flex items-center gap-2">
+              <CoverageBadge bid={bid} />
+              <span className="text-sm font-semibold" style={{ color: C.inkSoft }}>{bid.lead_time_days}d lead</span>
+            </div>
+          </div>
+          <button onClick={onClose} className="rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors"
+            style={{ border: `1px solid ${C.border}`, color: C.inkSoft }}>Close ✕</button>
+        </div>
+        <div className="flex-1 overflow-auto">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0" style={{ background: C.bgMuted }}>
+              <tr className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.inkMuted }}>
+                <th className="px-5 py-3 text-left">Item</th>
+                <th className="px-3 py-3 text-right">Req'd</th>
+                <th className="px-3 py-3 text-right">Unit $</th>
+                <th className="px-3 py-3 text-right">Total</th>
+                <th className="px-3 py-3 text-right">Lead</th>
+                <th className="px-3 py-3 text-left">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {RFQ.line_items.map(item => {
+                const resp = bid.line_item_responses.find(r=>r.line_item_id===item.id);
+                const unavail = !resp || resp.availability==='unavailable';
+                return (
+                  <tr key={item.id} className="transition-colors" style={{ borderBottom: `1px solid ${C.border}`, opacity: unavail?0.5:1 }}>
+                    <td className="px-5 py-3.5">
+                      <p className="font-semibold" style={{ color: C.ink }}>{item.description}</p>
+                      <p className="mt-0.5 font-mono text-[10px]" style={{ color: C.inkMuted }}>{item.sku}</p>
+                    </td>
+                    <td className="px-3 py-3.5 text-right text-xs" style={{ color: C.inkSoft }}>{item.quantity} {item.unit}</td>
+                    <td className="px-3 py-3.5 text-right font-semibold" style={{ color: C.ink }}>{!unavail?fmt(resp.unit_price):'—'}</td>
+                    <td className="px-3 py-3.5 text-right font-bold" style={{ color: C.ink }}>{!unavail?fmt(resp.total_price):'—'}</td>
+                    <td className="px-3 py-3.5 text-right" style={{ color: C.inkSoft }}>{!unavail?`${resp.lead_time_days}d`:'—'}</td>
+                    <td className="px-3 py-3.5">
+                      {unavail
+                        ? <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: '#fdeaea', color: '#8b2e2e' }}>Unavailable</span>
+                        : resp.availability==='can_source'
+                          ? <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: C.warningLight, color: C.warning }}>Needs sourcing</span>
+                          : <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: C.successLight, color: C.success }}>In stock</span>
+                      }
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="px-6 py-4" style={{ borderTop: `1px solid ${C.border}`, background: C.bgMuted }}>
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-sm font-semibold" style={{ color: C.inkSoft }}>Total</span>
+            <span className="text-2xl font-bold font-serif" style={{ color: C.ink }}>{fmt(bid.total_price)}</span>
+          </div>
+          {bid.source !== 'email'
+            ? <button className="w-full rounded-xl py-3 text-sm font-bold transition-all active:scale-[0.99]"
+                style={{ background: C.primary, color: '#fff' }}>
+                Award PO to {bid.vendor_name}
+              </button>
+            : <div className="rounded-xl py-2.5 text-center text-xs font-semibold" style={{ background: C.bgMuted, color: C.inkMuted }}>
+                Email bid — compare only
+              </div>
+          }
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+// ── Scorecard view ────────────────────────────────────────────────────────────
+function ScorecardView({ decisions, setDecisions }) {
+  const [sortBy, setSortBy]   = useState('price');
+  const [drawerBid, setDrawer] = useState(null);
+  const fullBids  = BIDS.filter(isFullCoverage);
+  const lowestId  = fullBids.length ? fullBids.reduce((a,b)=>a.total_price<b.total_price?a:b).id : null;
+  const fastestId = [...BIDS].sort((a,b)=>a.lead_time_days-b.lead_time_days)[0]?.id;
+
+  const sorted = useMemo(() => [...BIDS].sort((a,b) => {
+    if (sortBy==='price') return a.total_price - b.total_price;
+    if (sortBy==='lead')  return a.lead_time_days - b.lead_time_days;
+    const o = {preferred:0,alternate:1,hold:2,null:3,do_not_use:4};
+    return (o[decisions[a.id]??a.buyer_decision_status??'null']??3) - (o[decisions[b.id]??b.buyer_decision_status??'null']??3);
+  }), [sortBy, decisions]);
+
+  return (
+    <div>
+      <div className="mb-5 flex items-center justify-between">
+        <p className="text-sm font-semibold" style={{ color: C.inkSoft }}>
+          {BIDS.length} bids · <span style={{ color: C.inkMuted }}>{fullBids.length} full quotes</span>
+        </p>
+        <div className="flex items-center gap-2">
+          <span className="text-xs" style={{ color: C.inkMuted }}>Sort</span>
+          <div className="flex rounded-xl p-0.5 shadow-sm" style={{ border: `1px solid ${C.border}`, background: C.surface }}>
+            {[['price','Price'],['lead','Lead time'],['decision','Decision']].map(([v,l]) => (
+              <button key={v} onClick={()=>setSortBy(v)}
+                className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-all"
+                style={sortBy===v ? {background:C.primary, color:'#fff'} : {color:C.inkMuted}}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 grid-cols-1 md:grid-cols-2 2xl:grid-cols-4">
+        {sorted.map(bid => {
+          const dec = decisions[bid.id] ?? bid.buyer_decision_status;
+          const cfg = dec ? DEC[dec] : null;
+          const isLowest  = bid.id === lowestId;
+          const isFastest = bid.id === fastestId;
+          const isPreferred = dec === 'preferred';
+
+          return (
+            <div key={bid.id}
+              className="flex flex-col overflow-hidden rounded-2xl shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg"
+              style={{
+                background: C.surface,
+                border: `1px solid ${isPreferred ? C.primary : C.border}`,
+                outline: isPreferred ? `2px solid ${C.bgMuted}` : 'none',
+              }}>
+              {/* Color bar */}
+              <div className="h-1 w-full"
+                style={{ background: dec==='preferred' ? `linear-gradient(90deg, ${C.primary}, ${C.accent})` : dec==='alternate' ? C.inkSoft : dec==='hold' ? C.warning : dec==='do_not_use' ? '#e8b4b4' : `linear-gradient(90deg, ${C.accent}, ${C.border})` }} />
+
+              <div className="flex flex-col gap-4 p-5">
+                {/* Header */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-base font-bold font-serif leading-tight transition-colors" style={{ color: C.ink }}>
+                      {bid.vendor_name}
+                    </h3>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <SourceBadge bid={bid} />
+                      {bid.designer_name && <span className="text-[10px]" style={{ color: C.inkMuted }}>{bid.designer_name}</span>}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-1 items-end shrink-0">
+                    {isLowest && <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: C.accent, color: '#fff' }}>★ Best Value</span>}
+                    {isFastest && <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: C.warning, color: '#fff' }}>⚡ Fastest</span>}
+                  </div>
+                </div>
+
+                {/* Price + Lead */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="rounded-xl px-4 py-3" style={{ background: isPreferred ? '#f0f4f1' : C.bgMuted }}>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.inkMuted }}>Total Price</p>
+                    <p className="mt-1 text-2xl font-bold font-serif leading-none"
+                      style={{ color: bid.fulfillment_summary?.partial ? C.warning : isPreferred ? C.primary : C.ink }}>
+                      {fmt(bid.total_price)}
+                    </p>
+                  </div>
+                  <div className="rounded-xl px-4 py-3" style={{ background: C.bgMuted }}>
+                    <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: C.inkMuted }}>Lead Time</p>
+                    <p className="mt-1 text-2xl font-bold font-serif leading-none" style={{ color: isFastest ? C.warning : C.ink }}>
+                      {bid.lead_time_days}<span className="text-sm font-semibold" style={{ color: C.inkMuted }}>d</span>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Quote status */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <CoverageBadge bid={bid} />
+                  {bid.terms?.payment_terms && (
+                    <span className="rounded-full px-2.5 py-1 text-[10px] font-medium"
+                      style={{ border: `1px solid ${C.border}`, color: C.inkSoft }}>{bid.terms.payment_terms}</span>
+                  )}
+                </div>
+
+                {/* Compliance */}
+                {bid.compliance_declarations?.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {bid.compliance_declarations.map(d => (
+                      <span key={d.code} className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                        style={{ background: C.successLight, color: C.success }}>✓ {d.label}</span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Risk flags */}
+                {bid.risk_flags?.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {bid.risk_flags.map(f => (
+                      <span key={f.code} className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                        style={{ background: C.warningLight, color: C.warning }}>⚠ {f.label}</span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Decision strip */}
+                <div className="grid grid-cols-4 gap-1 pt-1">
+                  {Object.entries(DEC).map(([status, cfg]) => {
+                    const active = dec === status;
+                    return (
+                      <button key={status}
+                        onClick={() => setDecisions(p => ({ ...p, [bid.id]: active ? null : status }))}
+                        className="rounded-lg py-2 text-[10px] font-bold transition-all"
+                        style={active
+                          ? { background: cfg.bg, color: cfg.text, border: `1px solid transparent` }
+                          : { background: 'transparent', color: C.inkMuted, border: `1px solid ${C.border}` }}>
+                        {cfg.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Rationale */}
+                {bid.decision_rationale && (
+                  <p className="text-[11px] leading-relaxed italic line-clamp-2" style={{ color: C.inkMuted }}>
+                    "{bid.decision_rationale}"
+                  </p>
+                )}
+
+                {/* CTA */}
+                <button onClick={() => setDrawer(bid)}
+                  className="w-full rounded-xl py-2.5 text-xs font-bold transition-all"
+                  style={{ border: `1px solid ${isPreferred ? C.primary : C.border}`, color: isPreferred ? C.primary : C.inkSoft, background: isPreferred ? '#f0f4f1' : 'transparent' }}>
+                  View {RFQ.line_items.length} line items →
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {drawerBid && <Drawer bid={drawerBid} onClose={() => setDrawer(null)} />}
+    </div>
+  );
+}
+
+// ── Spreadsheet view ──────────────────────────────────────────────────────────
+function SpreadsheetView({ decisions, setDecisions }) {
+  const [metric, setMetric] = useState('total');
+  const [selectedBidId, setSelected] = useState(null);
+
+  const itemStats = useMemo(() => RFQ.line_items.reduce((acc, item) => {
+    const vals = BIDS.map(bid => {
+      const r = bid.line_item_responses.find(r=>r.line_item_id===item.id);
+      if (!r || r.availability==='unavailable') return null;
+      return metric==='total' ? r.total_price : metric==='unit' ? r.unit_price : r.lead_time_days;
+    }).filter(v=>v!==null);
+    acc[item.id] = vals.length ? {min:Math.min(...vals),max:Math.max(...vals)} : {min:0,max:0};
+    return acc;
+  }, {}), [metric]);
+
+  function heatStyle(val, min, max, invertGood=false) {
+    if (min===max || val===null) return {};
+    const ratio = (val-min)/(max-min);
+    const good = invertGood ? ratio : 1-ratio;
+    if (good>0.6) return { background: C.successLight, color: C.success };
+    if (good>0.3) return { background: C.warningLight, color: C.warning };
+    return { background: '#fdeaea', color: '#8b2e2e' };
+  }
+
+  const totalStats = {min:Math.min(...BIDS.map(b=>b.total_price)),max:Math.max(...BIDS.map(b=>b.total_price))};
+  const leadStats  = {min:Math.min(...BIDS.map(b=>b.lead_time_days)),max:Math.max(...BIDS.map(b=>b.lead_time_days))};
+  const fullBids   = BIDS.filter(isFullCoverage);
+  const lowestId   = fullBids.length ? fullBids.reduce((a,b)=>a.total_price<b.total_price?a:b).id : null;
+
+  return (
+    <div>
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <p className="text-sm font-semibold" style={{ color: C.ink }}>Item-by-Item Matrix</p>
+          <span className="text-xs" style={{ color: C.inkMuted }}>{RFQ.line_items.length} items · {BIDS.length} vendors</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs" style={{ color: C.inkMuted }}>Show</span>
+          <div className="flex rounded-xl p-0.5 shadow-sm" style={{ border:`1px solid ${C.border}`, background:C.surface }}>
+            {[['total','Total $'],['unit','Unit $'],['lead','Lead']].map(([v,l]) => (
+              <button key={v} onClick={()=>setMetric(v)}
+                className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-all"
+                style={metric===v ? {background:C.primary,color:'#fff'} : {color:C.inkMuted}}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl shadow-sm" style={{ border:`1px solid ${C.border}`, background:C.surface }}>
+        <div className="overflow-x-auto">
+          <table className="w-full border-separate border-spacing-0 text-xs">
+            <thead>
+              <tr>
+                <th className="sticky left-0 z-20 min-w-[200px] px-4 py-3 text-left"
+                  style={{ borderBottom:`1px solid ${C.border}`, background:C.bgMuted }}>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider" style={{color:C.inkMuted}}>Line Item</p>
+                </th>
+                {BIDS.map(bid => {
+                  const dec = decisions[bid.id] ?? bid.buyer_decision_status;
+                  const isSelected = selectedBidId === bid.id;
+                  const isLowest = bid.id === lowestId;
+                  return (
+                    <th key={bid.id}
+                      className="min-w-[160px] cursor-pointer px-4 py-3 text-left align-bottom transition-colors"
+                      style={{
+                        borderBottom:`1px solid ${C.border}`,
+                        borderLeft:`1px solid ${C.border}`,
+                        background: isSelected ? '#f0f4f1' : C.surface,
+                      }}
+                      onClick={() => setSelected(isSelected ? null : bid.id)}>
+                      <div className="flex items-start justify-between gap-1 mb-1">
+                        <p className="text-xs font-bold leading-tight" style={{color:C.ink}}>{bid.vendor_name}</p>
+                        {isLowest && <span className="shrink-0 rounded px-1 text-[8px] font-bold" style={{background:C.accent,color:'#fff'}}>★</span>}
+                      </div>
+                      <p className="text-sm font-bold font-serif" style={{color:C.ink}}>{fmt(bid.total_price)}</p>
+                      <p className="mt-0.5 text-[10px]" style={{color:C.inkMuted}}>{bid.lead_time_days}d lead</p>
+                      <div className="mt-1.5"><CoverageBadge bid={bid} /></div>
+                      <div className="mt-2 flex gap-0.5">
+                        {Object.entries(DEC).map(([status, cfg]) => {
+                          const active = dec === status;
+                          return (
+                            <button key={status}
+                              onClick={e=>{e.stopPropagation();setDecisions(p=>({...p,[bid.id]:active?null:status}));}}
+                              className="flex-1 rounded py-1 text-[9px] font-bold transition-all"
+                              style={active ? {background:cfg.bg,color:cfg.text} : {background:C.bgMuted,color:C.inkMuted}}>
+                              {cfg.label.slice(0,4)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {RFQ.line_items.map(item => {
+                const stats = itemStats[item.id];
+                return (
+                  <tr key={item.id} className="group">
+                    <th className="sticky left-0 z-10 px-4 py-3 text-left align-top transition-colors"
+                      style={{ borderBottom:`1px solid ${C.border}`, background:C.surface }}>
+                      <p className="font-semibold leading-tight" style={{color:C.ink}}>{item.description}</p>
+                      <p className="mt-0.5 font-mono text-[10px]" style={{color:C.inkMuted}}>{item.sku}</p>
+                      <p className="mt-0.5 text-[10px]" style={{color:C.inkMuted}}>{item.quantity} {item.unit}</p>
+                    </th>
+                    {BIDS.map(bid => {
+                      const resp = bid.line_item_responses.find(r=>r.line_item_id===item.id);
+                      const unavail = !resp || resp.availability==='unavailable';
+                      const val = unavail ? null : metric==='total' ? resp.total_price : metric==='unit' ? resp.unit_price : resp.lead_time_days;
+                      const heat = val!==null ? heatStyle(val, stats.min, stats.max, metric==='lead') : {};
+                      const isSelected = selectedBidId===bid.id;
+                      return (
+                        <td key={bid.id} className="px-3 py-3 text-right align-top transition-colors"
+                          style={{
+                            borderBottom:`1px solid ${C.border}`,
+                            borderLeft:`1px solid ${C.border}`,
+                            ...heat,
+                            outline: isSelected ? `2px solid ${C.primary} inset` : 'none',
+                          }}>
+                          {unavail ? <span style={{color:C.borderStrong}}>—</span> : (
+                            <>
+                              <p className="font-bold">{metric==='lead' ? `${val}d` : fmt(val)}</p>
+                              {metric!=='lead' && <p className="mt-0.5 text-[10px] opacity-60">{metric==='total'?`${fmt(resp.unit_price)}/${item.unit}`:`×${item.quantity}`}</p>}
+                              {resp.availability==='can_source' && <p className="mt-0.5 text-[10px] font-semibold" style={{color:C.warning}}>Needs sourcing</p>}
+                            </>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+              {/* Totals row */}
+              <tr>
+                <th className="sticky left-0 z-10 px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider"
+                  style={{borderTop:`1px solid ${C.border}`,background:C.bgMuted,color:C.inkMuted}}>Total</th>
+                {BIDS.map(bid => {
+                  const hs = heatStyle(bid.total_price, totalStats.min, totalStats.max);
+                  return (
+                    <td key={bid.id} className="px-3 py-3 text-right"
+                      style={{borderLeft:`1px solid ${C.border}`,borderTop:`1px solid ${C.border}`,...hs}}>
+                      <p className="text-sm font-bold font-serif">{fmt(bid.total_price)}</p>
+                    </td>
+                  );
+                })}
+              </tr>
+              <tr>
+                <th className="sticky left-0 z-10 px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider"
+                  style={{borderTop:`1px solid ${C.border}`,background:C.bgMuted,color:C.inkMuted}}>Lead</th>
+                {BIDS.map(bid => {
+                  const hs = heatStyle(bid.lead_time_days, leadStats.min, leadStats.max, true);
+                  return (
+                    <td key={bid.id} className="px-3 py-2.5 text-right font-bold text-xs"
+                      style={{borderLeft:`1px solid ${C.border}`,borderTop:`1px solid ${C.border}`,...hs}}>
+                      {bid.lead_time_days}d
+                    </td>
+                  );
+                })}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div className="flex items-center gap-4 px-4 py-3 text-[10px]"
+          style={{borderTop:`1px solid ${C.border}`,color:C.inkMuted}}>
+          <span className="font-semibold uppercase tracking-wider">Heat map</span>
+          {[[C.successLight,'Best'],[C.warningLight,'Mid'],['#fdeaea','Highest cost']].map(([bg,l])=>(
+            <span key={l} className="flex items-center gap-1.5">
+              <span className="inline-block h-3 w-5 rounded" style={{background:bg,outline:`1px solid ${C.border}`}} /> {l}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App() {
+  const [view, setView] = useState('scorecard');
+  const [decisions, setDecisions] = useState(
+    Object.fromEntries(BIDS.map(b => [b.id, b.buyer_decision_status]))
+  );
+
+  const fullBids     = BIDS.filter(isFullCoverage);
+  const lowestBid    = fullBids.length ? fullBids.reduce((a,b)=>a.total_price<b.total_price?a:b) : null;
+  const fastestBid   = [...BIDS].sort((a,b)=>a.lead_time_days-b.lead_time_days)[0];
+  const preferredBid = BIDS.find(b => decisions[b.id]==='preferred');
+
+  return (
+    <div className="flex min-h-screen flex-col" style={{ background: C.bg }}>
+      <TopNav />
+      <main className="flex-1 overflow-auto p-6" style={{
+        background: `radial-gradient(circle at top left, ${C.accentLight} 0, transparent 28rem), linear-gradient(180deg, ${C.bg} 0, ${C.bgMuted} 100%)`
+      }}>
+        {/* Breadcrumb */}
+        <nav className="mb-5 flex items-center gap-1.5 text-xs" style={{ color: C.inkMuted }}>
+          <a href="#" className="hover:underline" style={{ color: C.inkSoft }}>Projects</a>
+          <span>/</span>
+          <a href="#" className="hover:underline" style={{ color: C.inkSoft }}>{PROJECT.name}</a>
+          <span>/</span>
+          <span className="font-semibold" style={{ color: C.ink }}>{RFQ.title}</span>
+        </nav>
+
+        {/* RFQ Header */}
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-bold font-serif tracking-tight" style={{ color: C.ink }}>{RFQ.title}</h1>
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              <span className="rounded px-2 py-0.5 text-[10px] font-bold" style={{ background: C.primary, color: '#fff' }}>RFQ</span>
+              <span className="rounded px-2.5 py-0.5 text-[10px] font-bold"
+                style={{ background: C.successLight, color: C.success, outline: `1px solid ${C.successBorder}` }}>Active</span>
+              <span className="rounded px-2.5 py-0.5 text-[10px] font-medium"
+                style={{ background: C.surface, color: C.inkSoft, border: `1px solid ${C.border}` }}>{RFQ.category}</span>
+              <span className="text-xs" style={{ color: C.inkMuted }}>Deadline: {RFQ.bid_deadline}</span>
+            </div>
+          </div>
+          <button className="rounded-xl px-4 py-2 text-xs font-semibold shadow-sm transition-colors"
+            style={{ border:`1px solid ${C.border}`, background:C.surface, color:C.inkSoft }}>
+            Download PDF
+          </button>
+        </div>
+
+        {/* Section tabs */}
+        <nav className="mb-6 flex gap-1.5 rounded-2xl p-2 shadow-sm w-fit" style={{ border:`1px solid ${C.border}`, background:C.surface }}>
+          {['Bid Comparison','Mailbox & Quote Sync','Purchase Order'].map((tab, i) => (
+            <button key={tab}
+              className="shrink-0 rounded-xl px-5 py-2 text-xs font-bold transition-colors"
+              style={i===0 ? {background:C.primary,color:'#fff'} : {color:C.inkMuted}}>
+              {tab}
+            </button>
+          ))}
+        </nav>
+
+        {/* Stats */}
+        <div className="mb-6 grid grid-cols-4 gap-3">
+          {[
+            { label:'Bids Received',   value: BIDS.length,                              sub:`${fullBids.length} full quotes`,          accent:C.ink },
+            { label:'Lowest Complete', value: lowestBid ? fmt(lowestBid.total_price):'—', sub:lowestBid?.vendor_name??'No full bid', accent:C.primary },
+            { label:'Fastest Lead',    value: `${fastestBid?.lead_time_days}d`,          sub:fastestBid?.vendor_name,                  accent:C.warning },
+            { label:'Preferred',       value: preferredBid?.vendor_name??'None set',     sub:preferredBid?`${fmt(preferredBid.total_price)} · ${preferredBid.lead_time_days}d`:'Mark a bid preferred', accent:preferredBid?C.primary:C.inkMuted },
+          ].map(s => (
+            <div key={s.label} className="rounded-2xl px-5 py-4 shadow-sm" style={{ background:C.surface, border:`1px solid ${C.border}` }}>
+              <p className="text-[10px] font-semibold uppercase tracking-widest" style={{ color:C.inkMuted }}>{s.label}</p>
+              <p className="mt-1.5 text-xl font-bold font-serif leading-tight truncate" style={{ color:s.accent }}>{s.value}</p>
+              <p className="mt-0.5 truncate text-xs" style={{ color:C.inkMuted }}>{s.sub}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Charts */}
+        <div className="mb-6 flex gap-4">
+          <PriceChart bids={BIDS} decisions={decisions} />
+          <LeadTimeChart bids={BIDS} decisions={decisions} />
+        </div>
+
+        {/* View switcher */}
+        <div className="mb-5 flex items-center justify-between">
+          <div className="flex items-center gap-1 rounded-2xl p-1.5 shadow-sm" style={{ border:`1px solid ${C.border}`, background:C.surface }}>
+            {[
+              ['scorecard', 'A — Scorecards'],
+              ['spreadsheet', 'B — Spreadsheet'],
+            ].map(([v, l]) => (
+              <button key={v} onClick={() => setView(v)}
+                className="flex items-center gap-2 rounded-xl px-5 py-2.5 text-xs font-bold transition-all"
+                style={view===v ? {background:C.primary,color:'#fff',boxShadow:'0 1px 4px rgba(30,58,47,0.2)'} : {color:C.inkMuted}}>
+                {l}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs" style={{ color: C.inkMuted }}>
+            {view==='scorecard' ? 'Click "View line items" to drill into any bid.' : 'Click a vendor column to highlight.'}
+          </p>
+        </div>
+
+        {view==='scorecard'
+          ? <ScorecardView decisions={decisions} setDecisions={setDecisions} />
+          : <SpreadsheetView decisions={decisions} setDecisions={setDecisions} />
+        }
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+<template id="__bundler_thumbnail">
+  <svg viewBox="0 0 120 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect width="120" height="80" fill="#f5f0eb"/>
+    <rect x="0" y="0" width="120" height="14" fill="#fff"/>
+    <path d="M8 10 L8 5 Q8 2 11 2 Q14 2 14 5 L14 10 L12 10 L12 5 Q12 3.5 11 3.5 Q10 3.5 10 5 L10 10 Z" fill="#c8735a"/>
+    <rect x="28" y="18" width="26" height="32" rx="3" fill="#fff" stroke="#e2d9cf"/>
+    <rect x="29" y="19" width="26" height="2" rx="1" fill="#1e3a2f"/>
+    <rect x="58" y="18" width="26" height="32" rx="3" fill="#fff" stroke="#e2d9cf"/>
+    <rect x="59" y="19" width="26" height="2" rx="1" fill="#4a6358"/>
+    <rect x="88" y="18" width="26" height="32" rx="3" fill="#fff" stroke="#e2d9cf"/>
+    <rect x="89" y="19" width="26" height="2" rx="1" fill="#a85c2a"/>
+  </svg>
+</template>
+</body>
+</html>

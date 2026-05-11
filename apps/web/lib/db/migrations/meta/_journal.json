@@ -1,0 +1,90 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1777348900579,
+      "tag": "0000_cheerful_doctor_spectrum",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1777399200000,
+      "tag": "0001_califsheetmetal_procurement_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777399300000,
+      "tag": "0002_rfp_materials_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1777399400000,
+      "tag": "0003_rfq_attachment_urls",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1777400000000,
+      "tag": "0004_rfq_invite_names",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1777400100000,
+      "tag": "0005_bid_designer_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1777937575848,
+      "tag": "0006_silent_lorna_dane",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1777400200000,
+      "tag": "0006_project_general_contractor",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1778011200000,
+      "tag": "0007_project_spec_compliance",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1778014800000,
+      "tag": "0008_spec_rag_accuracy",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1778270400000,
+      "tag": "0009_magic_link_response_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1778274000000,
+      "tag": "0010_user_onboarding_completed",
+      "breakpoints": true
+    }
+  ]
+}

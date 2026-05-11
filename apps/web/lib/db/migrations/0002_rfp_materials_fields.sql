@@ -1,0 +1,12 @@
+ALTER TABLE "rfqs" ADD COLUMN "procurement_objective" text;
+ALTER TABLE "rfqs" ADD COLUMN "scope_summary" text;
+ALTER TABLE "rfqs" ADD COLUMN "approved_alternates" text;
+ALTER TABLE "rfqs" ADD COLUMN "quantity_context" text;
+ALTER TABLE "rfqs" ADD COLUMN "delivery_zip" text;
+ALTER TABLE "rfqs" ADD COLUMN "delivery_logistics" text;
+ALTER TABLE "rfqs" ADD COLUMN "delivery_window" text;
+ALTER TABLE "rfqs" ADD COLUMN "phased_delivery" text;
+ALTER TABLE "rfqs" ADD COLUMN "submittals_required" text;
+ALTER TABLE "rfqs" ADD COLUMN "lead_time_sensitivity" text;
+ALTER TABLE "rfqs" ADD COLUMN "exclusions" text;
+ALTER TABLE "rfqs" ADD COLUMN "vendor_questions_requested" text;

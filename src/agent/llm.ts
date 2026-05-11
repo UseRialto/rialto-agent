@@ -23,7 +23,7 @@ export interface LlmPlanner {
   plan(request: LlmPlanRequest): Promise<LlmPlanResponse>
 }
 
-function parseJson<T>(text: string): T {
+export function parseJson<T>(text: string): T {
   const trimmed = text.trim()
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
   const raw = fenced?.[1]?.trim() ?? trimmed
@@ -51,29 +51,36 @@ function buildPrompt(request: LlmPlanRequest) {
   ].join('\n')
 }
 
-export class AnthropicPlanner implements LlmPlanner {
-  constructor(private readonly apiKey: string, private readonly model = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-20250514') {}
+export class OpenAIPlanner implements LlmPlanner {
+  constructor(
+    private readonly apiKey: string,
+    private readonly model = process.env.OPENAI_MODEL ?? 'gpt-5-mini',
+  ) {}
 
   async plan(request: LlmPlanRequest): Promise<LlmPlanResponse> {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'x-api-key': this.apiKey,
-        'anthropic-version': '2023-06-01',
+        authorization: `Bearer ${this.apiKey}`,
         'content-type': 'application/json',
       },
       body: JSON.stringify({
         model: this.model,
-        max_tokens: 1600,
-        temperature: 0.1,
-        system: 'Return valid JSON only.',
-        messages: [{ role: 'user', content: buildPrompt(request) }],
+        messages: [
+          { role: 'system', content: 'Return valid JSON only.' },
+          { role: 'user', content: buildPrompt(request) },
+        ],
+        response_format: { type: 'json_object' },
+        max_completion_tokens: 1800,
       }),
     })
-    const json = await response.json() as { content?: Array<{ type?: string; text?: string }>; error?: { message?: string } }
-    if (!response.ok) throw new Error(json.error?.message ?? `Anthropic request failed (${response.status}).`)
-    const text = json.content?.find((part) => part.type === 'text')?.text
-    if (!text) throw new Error('Anthropic returned an empty response.')
+    const json = await response.json() as {
+      choices?: Array<{ message?: { content?: string } }>
+      error?: { message?: string }
+    }
+    if (!response.ok) throw new Error(json.error?.message ?? `OpenAI request failed (${response.status}).`)
+    const text = json.choices?.[0]?.message?.content
+    if (!text) throw new Error('OpenAI returned an empty response.')
     return parseJson<LlmPlanResponse>(text)
   }
 }
@@ -81,6 +88,13 @@ export class AnthropicPlanner implements LlmPlanner {
 export class DeterministicPlanner implements LlmPlanner {
   async plan(request: LlmPlanRequest): Promise<LlmPlanResponse> {
     const last = request.messages.at(-1)?.content.toLowerCase() ?? ''
+    if (/\b(ai|model|llm|api key|openai|running|runtime)\b/.test(last)) {
+      return {
+        reply: 'NO API KEY',
+        plan: [],
+        toolCalls: [],
+      }
+    }
     if (/\b(email|draft|send to vendor|outreach)\b/.test(last)) {
       const quoteRequest = request.userContext.data.quoteRequests[0]
       const vendor = request.userContext.data.vendorDirectory.find((candidate) =>
@@ -149,7 +163,7 @@ export class DeterministicPlanner implements LlmPlanner {
       }
     }
     return {
-      reply: 'I can navigate the site, draft vendor emails, preview comparison-sheet edits, and read PDF, Excel, CSV, DOCX, or text files.',
+      reply: 'NO API KEY',
       plan: [],
       toolCalls: [],
     }
@@ -157,6 +171,6 @@ export class DeterministicPlanner implements LlmPlanner {
 }
 
 export function defaultPlanner(): LlmPlanner {
-  if (process.env.ANTHROPIC_API_KEY) return new AnthropicPlanner(process.env.ANTHROPIC_API_KEY)
+  if (process.env.OPENAI_API_KEY) return new OpenAIPlanner(process.env.OPENAI_API_KEY)
   return new DeterministicPlanner()
 }

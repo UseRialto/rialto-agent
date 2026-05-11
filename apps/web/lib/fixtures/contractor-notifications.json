@@ -1,0 +1,68 @@
+[
+  {
+    "id": "notif-1",
+    "type": "bid_received",
+    "title": "New bid received on Structural Steel Package - Tower A",
+    "body": "Nucor Steel submitted a bid of $1,024,000",
+    "rfq_id": "rfq-c-f001",
+    "project_id": "cp-001",
+    "order_id": null,
+    "read": false,
+    "created_at": "2026-04-14T14:23:00Z"
+  },
+  {
+    "id": "notif-2",
+    "type": "bid_received",
+    "title": "3 new bids on Glass Curtain Wall - Office Towers",
+    "body": "Permasteelisa, Enclos Corp, and 1 more submitted bids",
+    "rfq_id": "rfq-c-f002",
+    "project_id": "cp-001",
+    "order_id": null,
+    "read": false,
+    "created_at": "2026-04-14T11:05:00Z"
+  },
+  {
+    "id": "notif-3",
+    "type": "order_shipped",
+    "title": "Order shipped: Elevator Systems - Tower A & B",
+    "body": "Otis Elevator Co.: Carrier - Estes Express, Tracking #EST-7412309",
+    "rfq_id": "rfq-c-a003",
+    "project_id": "cp-001",
+    "order_id": "co-f003",
+    "read": false,
+    "created_at": "2026-04-13T16:40:00Z"
+  },
+  {
+    "id": "notif-4",
+    "type": "order_delivered",
+    "title": "Order delivered: Foundation Concrete - Phase 1",
+    "body": "Delivered Apr 12. PO-2026-48001 is complete.",
+    "rfq_id": "rfq-c-a001",
+    "project_id": "cp-001",
+    "order_id": "co-f001",
+    "read": true,
+    "created_at": "2026-04-12T09:15:00Z"
+  },
+  {
+    "id": "notif-5",
+    "type": "bid_received",
+    "title": "First bid received on Medical-Grade HVAC Systems",
+    "body": "Carrier Commercial submitted a bid of $312,000",
+    "rfq_id": "rfq-c-f003",
+    "project_id": "cp-002",
+    "order_id": null,
+    "read": true,
+    "created_at": "2026-04-13T08:50:00Z"
+  },
+  {
+    "id": "notif-6",
+    "type": "order_packaged",
+    "title": "Medical Plumbing Rough-In is packaged and ready to ship",
+    "body": "Western Mechanical Supply has marked items as packaged",
+    "rfq_id": "rfq-c-a004",
+    "project_id": "cp-002",
+    "order_id": "co-f004",
+    "read": true,
+    "created_at": "2026-04-13T14:00:00Z"
+  }
+]

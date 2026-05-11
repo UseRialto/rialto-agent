@@ -1,0 +1,601 @@
+{
+  "projects": [
+    {
+      "id": "proj-001",
+      "name": "UCSD Triton Center",
+      "contractor_name": "McCarthy Building Companies",
+      "location": "La Jolla, CA",
+      "total_rfq_count": 87,
+      "relevant_rfq_count": 12,
+      "relevance_score": 0.92,
+      "bid_deadline": "2026-05-01",
+      "status": "active"
+    },
+    {
+      "id": "proj-002",
+      "name": "Cedars-Sinai Medical Pavilion",
+      "contractor_name": "Skanska USA Building",
+      "location": "Los Angeles, CA",
+      "total_rfq_count": 143,
+      "relevant_rfq_count": 19,
+      "relevance_score": 0.88,
+      "bid_deadline": "2026-04-28",
+      "status": "active"
+    },
+    {
+      "id": "proj-003",
+      "name": "Denver Union Station Expansion",
+      "contractor_name": "Hensel Phelps",
+      "location": "Denver, CO",
+      "total_rfq_count": 54,
+      "relevant_rfq_count": 8,
+      "relevance_score": 0.71,
+      "bid_deadline": "2026-05-15",
+      "status": "active"
+    },
+    {
+      "id": "proj-004",
+      "name": "Phoenix Sky Harbor Terminal 4 Renovation",
+      "contractor_name": "Turner Construction Company",
+      "location": "Phoenix, AZ",
+      "total_rfq_count": 201,
+      "relevant_rfq_count": 6,
+      "relevance_score": 0.55,
+      "status": "active"
+    },
+    {
+      "id": "proj-005",
+      "name": "Seattle Mixed-Use Tower - 5th & Pike",
+      "contractor_name": "Mortenson Construction",
+      "location": "Seattle, WA",
+      "total_rfq_count": 66,
+      "relevant_rfq_count": 4,
+      "relevance_score": 0.41,
+      "bid_deadline": "2026-06-10",
+      "status": "active"
+    }
+  ],
+  "vendor": {
+    "id": "vendor-001",
+    "name": "Pacific Coast Steel Distributors",
+    "material_categories": ["steel", "structural_steel", "rebar", "steel_connections"]
+  },
+  "rfqs": {
+    "proj-001": [
+      {
+        "id": "rfq-001",
+        "project_id": "proj-001",
+        "title": "Structural Steel - Wide Flange Beams",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-001a",
+            "sku": "W14x82",
+            "description": "W14x82 Wide Flange Beam, Grade 50",
+            "quantity": 48,
+            "unit": "tons",
+            "standard": "ASTM A992",
+            "notes": "Must be mill certified"
+          },
+          {
+            "id": "li-001b",
+            "sku": "W18x97",
+            "description": "W18x97 Wide Flange Beam, Grade 50",
+            "quantity": 32,
+            "unit": "tons",
+            "standard": "ASTM A992"
+          },
+          {
+            "id": "li-001c",
+            "sku": "W21x111",
+            "description": "W21x111 Wide Flange Beam, Grade 50",
+            "quantity": 20,
+            "unit": "tons",
+            "standard": "ASTM A992"
+          }
+        ],
+        "delivery_date": "2026-06-15",
+        "delivery_location": "9500 Gilman Dr, La Jolla, CA 92093",
+        "certifications_required": ["ASTM A992", "ISO 9001"],
+        "accepts_international": false,
+        "budget_min": 480000,
+        "budget_max": 620000,
+        "specs": "All beams must be new mill stock. No secondary or rerolled material. Mill certs required for each heat number. Delivery in two phases: 60% by June 15, remainder by July 1.",
+        "relevance_score": 0.97,
+        "vendor_response_status": "draft",
+        "created_at": "2026-04-10T09:00:00Z",
+        "bid_deadline": "2026-05-01",
+        "contractor_notes": "Preferred suppliers should have experience with seismic-zone delivery. Coordinate with site super John Kim (619-555-0142) for delivery windows.",
+        "attachments": []
+      },
+      {
+        "id": "rfq-002",
+        "project_id": "proj-001",
+        "title": "Rebar - Seismic Grade",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-002a",
+            "description": "#5 Rebar, Grade 60 Seismic",
+            "quantity": 95,
+            "unit": "tons",
+            "standard": "ASTM A706"
+          },
+          {
+            "id": "li-002b",
+            "description": "#8 Rebar, Grade 60 Seismic",
+            "quantity": 140,
+            "unit": "tons",
+            "standard": "ASTM A706"
+          }
+        ],
+        "delivery_date": "2026-06-01",
+        "delivery_location": "9500 Gilman Dr, La Jolla, CA 92093",
+        "certifications_required": ["ASTM A706"],
+        "accepts_international": true,
+        "relevance_score": 0.93,
+        "vendor_response_status": "submitted",
+        "created_at": "2026-04-08T14:00:00Z",
+        "bid_deadline": "2026-05-01",
+        "contractor_notes": null,
+        "attachments": []
+      },
+      {
+        "id": "rfq-003",
+        "project_id": "proj-001",
+        "title": "Steel Decking - Composite Floor",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-003a",
+            "description": "3\" Composite Deck, 20 gauge, galvanized",
+            "quantity": 28000,
+            "unit": "square_feet",
+            "standard": "ASTM A653"
+          }
+        ],
+        "delivery_date": "2026-07-01",
+        "delivery_location": "9500 Gilman Dr, La Jolla, CA 92093",
+        "certifications_required": ["ASTM A653", "UL Listed"],
+        "accepts_international": false,
+        "relevance_score": 0.84,
+        "vendor_response_status": "not_started",
+        "created_at": "2026-04-12T10:00:00Z",
+        "bid_deadline": "2026-05-01",
+        "contractor_notes": null,
+        "attachments": []
+      },
+      {
+        "id": "rfq-004",
+        "project_id": "proj-001",
+        "title": "Structural Steel Connections & Hardware",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-004a",
+            "description": "A325 High Strength Bolts, 3/4\" diameter",
+            "quantity": 12000,
+            "unit": "each",
+            "standard": "ASTM A325"
+          },
+          {
+            "id": "li-004b",
+            "description": "Shear studs, 3/4\" x 4.5\"",
+            "quantity": 8500,
+            "unit": "each"
+          },
+          {
+            "id": "li-004c",
+            "description": "Base plates, 1\" x 14\" x 14\", A36",
+            "quantity": 48,
+            "unit": "each",
+            "standard": "ASTM A36"
+          }
+        ],
+        "delivery_date": "2026-05-20",
+        "delivery_location": "9500 Gilman Dr, La Jolla, CA 92093",
+        "certifications_required": ["ASTM A325", "ASTM A36"],
+        "accepts_international": false,
+        "relevance_score": 0.79,
+        "vendor_response_status": "not_started",
+        "created_at": "2026-04-11T08:00:00Z",
+        "bid_deadline": "2026-05-01",
+        "contractor_notes": null,
+        "attachments": []
+      },
+      {
+        "id": "rfq-005",
+        "project_id": "proj-001",
+        "title": "Ready-Mix Concrete - Footings & Grade Beams",
+        "category": "concrete",
+        "line_items": [
+          {
+            "id": "li-005a",
+            "description": "5000 PSI concrete with fly ash, pump mix",
+            "quantity": 1200,
+            "unit": "cubic_yards",
+            "standard": "ASTM C150"
+          }
+        ],
+        "delivery_date": "2026-05-10",
+        "delivery_location": "9500 Gilman Dr, La Jolla, CA 92093",
+        "certifications_required": ["ASTM C150"],
+        "accepts_international": false,
+        "relevance_score": 0.08,
+        "vendor_response_status": "not_started",
+        "created_at": "2026-04-09T11:00:00Z",
+        "bid_deadline": "2026-05-01",
+        "contractor_notes": null,
+        "attachments": []
+      }
+    ],
+    "proj-002": [
+      {
+        "id": "rfq-010",
+        "project_id": "proj-002",
+        "title": "Structural Steel - Columns & HSS",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-010a",
+            "sku": "HSS10x10x0.5",
+            "description": "HSS 10x10x1/2 Structural Tube Column, Grade C",
+            "quantity": 85,
+            "unit": "tons",
+            "standard": "ASTM A500",
+            "notes": "Seismic applications - AISC certified fabricator preferred"
+          },
+          {
+            "id": "li-010b",
+            "sku": "HSS8x8x0.375",
+            "description": "HSS 8x8x3/8 Structural Tube Column, Grade C",
+            "quantity": 62,
+            "unit": "tons",
+            "standard": "ASTM A500"
+          },
+          {
+            "id": "li-010c",
+            "sku": "HSS6x6x0.25",
+            "description": "HSS 6x6x1/4 Structural Tube, Grade C",
+            "quantity": 45,
+            "unit": "tons",
+            "standard": "ASTM A500"
+          }
+        ],
+        "delivery_date": "2026-05-20",
+        "delivery_location": "8700 Beverly Blvd, Los Angeles, CA 90048",
+        "certifications_required": ["ASTM A500", "AISC Certified"],
+        "accepts_international": false,
+        "budget_min": 650000,
+        "budget_max": 820000,
+        "specs": "Hospital construction - all material must meet OSHPD requirements. Mill certs and certified test reports mandatory. Phased delivery required: 50% by May 20, balance by June 5.",
+        "relevance_score": 0.95,
+        "vendor_response_status": "submitted",
+        "created_at": "2026-04-01T08:00:00Z",
+        "bid_deadline": "2026-04-28",
+        "contractor_notes": "OSHPD inspection required on-site before placement. Coordinate with PM Sarah Chen (310-555-0180).",
+        "attachments": []
+      },
+      {
+        "id": "rfq-011",
+        "project_id": "proj-002",
+        "title": "Rebar - Slab on Grade",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-011a",
+            "description": "#5 Rebar, Grade 60, Slab on Grade",
+            "quantity": 180,
+            "unit": "tons",
+            "standard": "ASTM A615",
+            "notes": "Epoxy-coated not required. Standard black bar acceptable."
+          }
+        ],
+        "delivery_date": "2026-05-08",
+        "delivery_location": "8700 Beverly Blvd, Los Angeles, CA 90048",
+        "certifications_required": ["ASTM A615"],
+        "accepts_international": true,
+        "budget_min": 200000,
+        "budget_max": 270000,
+        "specs": "Grade 60, ASTM A615. Mill certs required. Bundles to be tagged with heat number.",
+        "relevance_score": 0.89,
+        "vendor_response_status": "submitted",
+        "created_at": "2026-04-01T09:00:00Z",
+        "bid_deadline": "2026-04-28",
+        "contractor_notes": null,
+        "attachments": []
+      },
+      {
+        "id": "rfq-012",
+        "project_id": "proj-002",
+        "title": "MEP Support Steel - Unistrut & Framing",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-012a",
+            "description": "Unistrut P1000 Channel, 12 gauge, pre-galvanized",
+            "quantity": 2400,
+            "unit": "lf"
+          },
+          {
+            "id": "li-012b",
+            "description": "Welded support frame assemblies, 3/8\" plate, A36",
+            "quantity": 120,
+            "unit": "each",
+            "standard": "ASTM A36"
+          }
+        ],
+        "delivery_date": "2026-06-01",
+        "delivery_location": "8700 Beverly Blvd, Los Angeles, CA 90048",
+        "certifications_required": [],
+        "accepts_international": true,
+        "relevance_score": 0.62,
+        "vendor_response_status": "not_started",
+        "created_at": "2026-04-03T11:00:00Z",
+        "bid_deadline": "2026-04-28",
+        "contractor_notes": null,
+        "attachments": []
+      }
+    ],
+    "proj-003": [
+      {
+        "id": "rfq-020",
+        "project_id": "proj-003",
+        "title": "Wide Flange Beams - Long Span",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-020a",
+            "sku": "W33x130",
+            "description": "W33x130 Wide Flange Beam, Grade 50",
+            "quantity": 95,
+            "unit": "tons",
+            "standard": "ASTM A992",
+            "notes": "Long-span beams up to 65 ft - confirm truck accessibility with site team"
+          },
+          {
+            "id": "li-020b",
+            "sku": "W36x150",
+            "description": "W36x150 Wide Flange Beam, Grade 50",
+            "quantity": 75,
+            "unit": "tons",
+            "standard": "ASTM A992"
+          }
+        ],
+        "delivery_date": "2026-06-10",
+        "delivery_location": "1701 Wynkoop St, Denver, CO 80202",
+        "certifications_required": ["ASTM A992", "ISO 9001"],
+        "accepts_international": true,
+        "budget_min": 480000,
+        "budget_max": 640000,
+        "specs": "ASTM A992 Grade 50. New domestic mill stock preferred. Camber may be required on beams > 50 ft - confirm with structural engineer. All material must include MTRs.",
+        "relevance_score": 0.88,
+        "vendor_response_status": "submitted",
+        "created_at": "2026-03-28T10:00:00Z",
+        "bid_deadline": "2026-05-15",
+        "contractor_notes": "Downtown Denver site - restricted delivery hours 6am–10am only. Coordinate with site logistics manager.",
+        "attachments": []
+      },
+      {
+        "id": "rfq-021",
+        "project_id": "proj-003",
+        "title": "Steel Connections & Anchor Bolts",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-021a",
+            "description": "A490 High Strength Bolts, 7/8\" diameter x 2.5\"",
+            "quantity": 18000,
+            "unit": "each",
+            "standard": "ASTM A490"
+          },
+          {
+            "id": "li-021b",
+            "description": "Shear tabs, 3/8\" x 6\", A36",
+            "quantity": 2200,
+            "unit": "each",
+            "standard": "ASTM A36"
+          },
+          {
+            "id": "li-021c",
+            "description": "Threaded anchor rods, 1\" diameter, Grade B7",
+            "quantity": 850,
+            "unit": "each"
+          }
+        ],
+        "delivery_date": "2026-05-25",
+        "delivery_location": "1701 Wynkoop St, Denver, CO 80202",
+        "certifications_required": ["ASTM A490", "ASTM A36"],
+        "accepts_international": false,
+        "relevance_score": 0.75,
+        "vendor_response_status": "submitted",
+        "created_at": "2026-03-28T11:00:00Z",
+        "bid_deadline": "2026-05-15",
+        "contractor_notes": null,
+        "attachments": []
+      },
+      {
+        "id": "rfq-022",
+        "project_id": "proj-003",
+        "title": "Steel Decking - Roof",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-022a",
+            "description": "1.5\" Type B Roof Deck, 22 gauge, galvanized",
+            "quantity": 18500,
+            "unit": "square_feet",
+            "standard": "ASTM A653"
+          }
+        ],
+        "delivery_date": "2026-06-20",
+        "delivery_location": "1701 Wynkoop St, Denver, CO 80202",
+        "certifications_required": ["ASTM A653"],
+        "accepts_international": false,
+        "relevance_score": 0.67,
+        "vendor_response_status": "not_started",
+        "created_at": "2026-03-30T09:00:00Z",
+        "bid_deadline": "2026-05-15",
+        "contractor_notes": null,
+        "attachments": []
+      }
+    ],
+    "proj-004": [
+      {
+        "id": "rfq-030",
+        "project_id": "proj-004",
+        "title": "Post-Tension & Rebar - Parking Structure",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-030a",
+            "description": "PT Monostrand, 1/2\" diameter, low-relaxation",
+            "quantity": 48000,
+            "unit": "lf",
+            "standard": "ASTM A416",
+            "notes": "Must be coated with PE sheathing and grease"
+          },
+          {
+            "id": "li-030b",
+            "description": "#6 Rebar, Grade 60 Seismic",
+            "quantity": 210,
+            "unit": "tons",
+            "standard": "ASTM A706"
+          }
+        ],
+        "delivery_date": "2026-06-15",
+        "delivery_location": "3400 E Sky Harbor Blvd, Phoenix, AZ 85034",
+        "certifications_required": ["ASTM A416", "ASTM A706"],
+        "accepts_international": true,
+        "budget_min": 320000,
+        "budget_max": 450000,
+        "specs": "PT strand must be installed by PTI-certified sub. Rebar must be A706 for seismic continuity. Heat numbers must be recorded and tracked.",
+        "relevance_score": 0.71,
+        "vendor_response_status": "not_started",
+        "created_at": "2026-04-05T09:00:00Z",
+        "bid_deadline": "2026-05-30",
+        "contractor_notes": "Airport site - security clearance required for all delivery drivers. Contact site admin 72 hours before delivery.",
+        "attachments": []
+      },
+      {
+        "id": "rfq-031",
+        "project_id": "proj-004",
+        "title": "Structural Steel - Canopy Framing",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-031a",
+            "sku": "W12x58",
+            "description": "W12x58 Wide Flange Beam, Grade 50",
+            "quantity": 38,
+            "unit": "tons",
+            "standard": "ASTM A992"
+          },
+          {
+            "id": "li-031b",
+            "sku": "WT6x20",
+            "description": "WT6x20 Structural Tee, Grade 50",
+            "quantity": 12,
+            "unit": "tons",
+            "standard": "ASTM A992"
+          },
+          {
+            "id": "li-031c",
+            "description": "4x4x1/4 Structural Steel Tube, Grade B",
+            "quantity": 8,
+            "unit": "tons",
+            "standard": "ASTM A500"
+          }
+        ],
+        "delivery_date": "2026-07-01",
+        "delivery_location": "3400 E Sky Harbor Blvd, Phoenix, AZ 85034",
+        "certifications_required": ["ASTM A992", "ASTM A500"],
+        "accepts_international": false,
+        "relevance_score": 0.58,
+        "vendor_response_status": "not_started",
+        "created_at": "2026-04-05T10:00:00Z",
+        "bid_deadline": "2026-05-30",
+        "contractor_notes": null,
+        "attachments": []
+      }
+    ],
+    "proj-005": [
+      {
+        "id": "rfq-040",
+        "project_id": "proj-005",
+        "title": "HSS Columns & Composite Steel Deck",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-040a",
+            "sku": "HSS12x12x0.625",
+            "description": "HSS 12x12x5/8 Structural Tube Column, Grade C",
+            "quantity": 110,
+            "unit": "tons",
+            "standard": "ASTM A500",
+            "notes": "High-rise seismic application - supplemental testing per AISC 341 required"
+          },
+          {
+            "id": "li-040b",
+            "description": "3\" Composite Deck, 18 gauge, galvanized",
+            "quantity": 45000,
+            "unit": "square_feet",
+            "standard": "ASTM A653"
+          }
+        ],
+        "delivery_date": "2026-07-15",
+        "delivery_location": "300 Pine St, Seattle, WA 98101",
+        "certifications_required": ["ASTM A500", "ASTM A653", "AISC Certified"],
+        "accepts_international": false,
+        "budget_min": 680000,
+        "budget_max": 900000,
+        "specs": "Downtown Seattle high-rise - seismic design category D. All HSS must have supplemental Charpy V-Notch testing. Deck must be UL listed for fire rating.",
+        "relevance_score": 0.61,
+        "vendor_response_status": "not_started",
+        "created_at": "2026-04-08T09:00:00Z",
+        "bid_deadline": "2026-06-10",
+        "contractor_notes": "Congested downtown site - crane picks only. No truck cranes permitted. Coordinate with tower crane operator for delivery sequencing.",
+        "attachments": []
+      },
+      {
+        "id": "rfq-041",
+        "project_id": "proj-005",
+        "title": "Structural Connections - High-Rise",
+        "category": "steel",
+        "line_items": [
+          {
+            "id": "li-041a",
+            "description": "Moment end plates, 1.5\" thick, A36",
+            "quantity": 96,
+            "unit": "each",
+            "standard": "ASTM A36"
+          },
+          {
+            "id": "li-041b",
+            "description": "A325 High Strength Bolts, 1\" diameter",
+            "quantity": 22000,
+            "unit": "each",
+            "standard": "ASTM A325"
+          },
+          {
+            "id": "li-041c",
+            "description": "Erection shims, 2\"x4\", A36",
+            "quantity": 500,
+            "unit": "each",
+            "standard": "ASTM A36"
+          }
+        ],
+        "delivery_date": "2026-07-01",
+        "delivery_location": "300 Pine St, Seattle, WA 98101",
+        "certifications_required": ["ASTM A36", "ASTM A325"],
+        "accepts_international": false,
+        "relevance_score": 0.44,
+        "vendor_response_status": "not_started",
+        "created_at": "2026-04-08T10:00:00Z",
+        "bid_deadline": "2026-06-10",
+        "contractor_notes": null,
+        "attachments": []
+      }
+    ]
+  }
+}
