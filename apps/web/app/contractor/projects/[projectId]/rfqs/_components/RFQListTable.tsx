@@ -6,7 +6,7 @@ import { useState, useTransition } from 'react'
 import { ArrowRight, FilePlus2, Trash2 } from 'lucide-react'
 import { bulkDeleteRFQsAction } from '@/lib/actions/contractor'
 import type { ContractorRFQ } from '@/lib/types/contractor'
-import { CONTRACTOR_RFQ_STATUS_LABELS, CONTRACTOR_RFQ_STATUS_STYLES } from '@/lib/contractor-display'
+import { contractorRFQStatusLabel, contractorRFQStatusStyle } from '@/lib/contractor-display'
 import { formatDate } from '@/lib/utils'
 
 interface Props {
@@ -41,6 +41,7 @@ export function RFQListTable({ rfqs, projectId }: Props) {
         setError(result.error ?? 'Failed to delete selected RFQs.')
         return
       }
+      if (result.error) setError(result.error)
       setSelectedIds([])
       router.refresh()
     })
@@ -137,8 +138,8 @@ export function RFQListTable({ rfqs, projectId }: Props) {
                 </Link>
               </td>
               <td className="px-4 py-4">
-                <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${CONTRACTOR_RFQ_STATUS_STYLES[rfq.status]}`}>
-                  {CONTRACTOR_RFQ_STATUS_LABELS[rfq.status]}
+                <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${contractorRFQStatusStyle(rfq.status)}`}>
+                  {contractorRFQStatusLabel(rfq.status)}
                 </span>
               </td>
               <td className="px-4 py-4 text-xs font-medium" style={{ color: '#8a9e96' }}>{rfq.category ?? <span style={{ color: '#e2d9cf' }}>-</span>}</td>

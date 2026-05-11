@@ -6,7 +6,7 @@ import {
   getContractorRFQBids,
 } from '@/lib/api/contractor'
 import { getSession } from '@/lib/auth/session'
-import { CONTRACTOR_RFQ_STATUS_LABELS, CONTRACTOR_RFQ_STATUS_STYLES } from '@/lib/contractor-display'
+import { contractorRFQStatusLabel, contractorRFQStatusStyle } from '@/lib/contractor-display'
 import { getMailboxSummary } from '@/lib/mail/service'
 import { buildLiveQuoteComparisonSummary } from '@/lib/procurement/quote-comparison'
 import { getNegotiationMessagesForVendor } from '@/lib/store/contractor-store'
@@ -122,8 +122,8 @@ export default async function RFQDetailPage({
               className="text-xl font-semibold tracking-tight"
               style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}
             />
-            <span className={`rounded border px-2 py-0.5 text-xs font-medium ${CONTRACTOR_RFQ_STATUS_STYLES[rfq.status]}`}>
-              {CONTRACTOR_RFQ_STATUS_LABELS[rfq.status]}
+            <span className={`rounded border px-2 py-0.5 text-xs font-medium ${contractorRFQStatusStyle(rfq.status)}`}>
+              {contractorRFQStatusLabel(rfq.status)}
             </span>
             {rfq.bid_deadline && (
               <span className="rounded-full px-2.5 py-1 text-xs font-semibold" style={{ background: '#fff3eb', color: '#fa6b04', border: '1px solid #fdc89a' }}>
@@ -212,8 +212,8 @@ export default async function RFQDetailPage({
             style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}
           />
           <div className="mt-2 flex flex-wrap items-center gap-3">
-            <span className={`rounded border px-2 py-0.5 text-xs font-medium ${CONTRACTOR_RFQ_STATUS_STYLES[rfq.status]}`}>
-              {CONTRACTOR_RFQ_STATUS_LABELS[rfq.status]}
+            <span className={`rounded border px-2 py-0.5 text-xs font-medium ${contractorRFQStatusStyle(rfq.status)}`}>
+              {contractorRFQStatusLabel(rfq.status)}
             </span>
             {rfq.category && (
               <span className="rounded border px-2 py-0.5 text-xs font-medium" style={{ borderColor: '#e2d9cf', background: '#ede8e2', color: '#8a9e96' }}>

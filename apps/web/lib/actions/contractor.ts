@@ -38,6 +38,19 @@ import { createProjectSpecDocument } from '@/lib/spec-compliance/store'
 import { runBidSpecCompliance } from '@/lib/spec-compliance'
 import { contractorCustomizationFromUser, sanitizeContractorCustomization, type ContractorCustomizationSettings } from '@/lib/contractor-customization'
 
+function isForeignKeyDeleteError(error: unknown) {
+  if (!error || typeof error !== 'object') return false
+  const cause = 'cause' in error ? (error as { cause?: unknown }).cause : undefined
+  if (cause && typeof cause === 'object' && 'code' in cause && (cause as { code?: unknown }).code === '23503') {
+    return true
+  }
+  return error instanceof Error && error.message.includes('violates foreign key constraint')
+}
+
+function blockedDeleteMessage(label = 'RFQ') {
+  return `${label} cannot be deleted because it is linked to order or handoff history. Archive it instead, or remove that history first.`
+}
+
 export async function saveContractorCustomizationAction(
   customization: Partial<ContractorCustomizationSettings>,
 ): Promise<{ success: boolean; error?: string; customization?: ContractorCustomizationSettings }> {
@@ -483,7 +496,12 @@ export async function deleteRFQAction(
   if (!rfq) return { success: false, error: 'RFQ not found' }
   if (rfq.status !== 'draft') return { success: false, error: 'Only draft RFQs can be deleted' }
 
-  await deleteRFQ(rfqId)
+  try {
+    await deleteRFQ(rfqId)
+  } catch (error) {
+    if (isForeignKeyDeleteError(error)) return { success: false, error: blockedDeleteMessage('This draft') }
+    throw error
+  }
   revalidatePath(`/contractor/projects/${projectId}`)
 
   return { success: true }
@@ -500,16 +518,33 @@ export async function bulkDeleteRFQsAction(
   if (uniqueIds.length === 0) return { success: false, error: 'Select at least one RFQ to delete.' }
 
   let deletedCount = 0
+  const blockedTitles: string[] = []
   for (const rfqId of uniqueIds) {
     const rfq = await getRFQ(rfqId)
     if (!rfq) continue
     if (rfq.project_id !== projectId) return { success: false, error: 'One selected RFQ does not belong to this project.' }
-    await deleteRFQ(rfqId)
-    deletedCount += 1
+    try {
+      await deleteRFQ(rfqId)
+      deletedCount += 1
+    } catch (error) {
+      if (!isForeignKeyDeleteError(error)) throw error
+      blockedTitles.push(rfq.title)
+    }
   }
 
   revalidatePath(`/contractor/projects/${projectId}`)
   revalidatePath(`/contractor/projects/${projectId}/rfqs`)
+  if (blockedTitles.length > 0) {
+    const label = blockedTitles.length === 1 ? `"${blockedTitles[0]}"` : `${blockedTitles.length} RFQs`
+    const prefix = deletedCount > 0
+      ? `Deleted ${deletedCount} RFQ${deletedCount === 1 ? '' : 's'}, but ${label} could not be deleted.`
+      : `${label} could not be deleted.`
+    return {
+      success: deletedCount > 0,
+      deletedCount,
+      error: `${prefix} ${blockedDeleteMessage()}`,
+    }
+  }
   return { success: true, deletedCount }
 }
 
@@ -528,7 +563,12 @@ export async function retractRFQAction(
     return { success: false, error: 'Only active RFQs can be retracted' }
   }
 
-  await deleteRFQ(rfqId)
+  try {
+    await deleteRFQ(rfqId)
+  } catch (error) {
+    if (isForeignKeyDeleteError(error)) return { success: false, error: blockedDeleteMessage('This RFQ') }
+    throw error
+  }
   revalidatePath(`/contractor/projects/${projectId}`)
 
   return { success: true }
