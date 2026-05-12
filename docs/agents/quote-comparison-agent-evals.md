@@ -2,6 +2,8 @@
 
 Use scenario evals before manual usefulness testing when changing Quote Comparison agent behavior.
 
+Important: the deterministic architecture suite is not proof that the real agent works. See `docs/agents/real-quote-comparison-agent-eval-handoff.md` before claiming Quote Comparison agent usefulness is tested end to end.
+
 The eval seam is `runQuoteComparisonScenarioEvals` in `src/agent/quote-comparison-scenario-evals.ts`.
 
 Each scenario supplies:
@@ -19,7 +21,12 @@ Run the skipped-by-default live smoke eval before browser usefulness testing:
 OPENAI_API_KEY=... npm run test:agent:live
 ```
 
-The live smoke eval uses `quoteComparisonLiveSmokeScenarios()` and checks only coarse behavior: edit prompts should complete with proposal operations, and read-only questions should complete through the sheet question tool without a proposal.
+The live smoke eval has two live-gated layers:
+
+- `quoteComparisonLiveSmokeScenarios()` checks coarse behavior on a tiny fixture: edit prompts should complete with proposal operations, and read-only questions should complete through the sheet question tool without a proposal.
+- `quoteComparisonLiveArchitectureSubsetScenarios()` reuses the architecture fixture and the representative architecture scenario prompts against `OpenAIAgentsProductRuntime`. It verifies the real runtime inspects sheet state first, calls the expected real tool boundary, creates approve-all-or-discard proposals for mutations, avoids proposals for read-only prompts, and returns concise structured clarification for ambiguous prompts.
+
+The architecture subset intentionally maps some deterministic contract tool names to the real runtime's current tool surface, such as `quoteComparison.proposeDerivedColumns` for calculated columns and `quoteComparison.answerSheetQuestion` for read-only analysis. Failing live evals should be fixed in the real agent instructions, tool schemas, backend tools, aggregation, or web adapter. Do not add a local deterministic prompt parser.
 
 Manual browser test checklist:
 

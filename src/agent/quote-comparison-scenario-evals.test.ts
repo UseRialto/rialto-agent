@@ -68,6 +68,10 @@ describe('Quote Comparison scenario evals', () => {
       passed: true,
       status: 'completed',
       operationKinds: ['add-highlight'],
+      toolIds: ['quoteComparison.proposeHighlights'],
+      firstToolId: 'quoteComparison.proposeHighlights',
+      proposalApprovalMode: 'approve-all-or-discard',
+      clarificationQuestion: undefined,
       failures: [],
     }])
   })

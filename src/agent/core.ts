@@ -1,6 +1,7 @@
 import type {
   AgentRequestContext,
   AgentDebugTrace,
+  AgentProgressEvent,
   AgentToolCall,
   AgentTurnRequest,
   AgentTurnResponse,
@@ -17,6 +18,7 @@ export interface ProductAgentRuntimeRequest {
   requestContext?: AgentRequestContext
   messages: AgentTurnRequest['messages']
   debug?: boolean
+  onProgress?: (event: AgentProgressEvent) => void
 }
 
 export type ProductAgentRuntimeResult =
@@ -55,16 +57,20 @@ export class RialtoAgentCore {
     private readonly runtime: ProductAgentRuntime,
   ) {}
 
-  async runTurn(request: AgentTurnRequest): Promise<AgentTurnResponse> {
+  async runTurn(request: AgentTurnRequest, options: { onProgress?: (event: AgentProgressEvent) => void } = {}): Promise<AgentTurnResponse> {
+    options.onProgress?.({ type: 'status', message: 'Core: building User Context.' })
     const userContext = await this.contextProvider.buildForUser(request.user)
     const requestContext = requestContextFromTurn(request)
+    options.onProgress?.({ type: 'status', message: 'Core: invoking Product Agent Runtime.' })
     const result = await this.runtime.runTurn({
       requestId: request.requestId,
       userContext,
       requestContext,
       messages: request.messages,
       debug: request.debug,
+      onProgress: options.onProgress,
     })
+    options.onProgress?.({ type: 'status', message: 'Core: aggregating tool results into the turn response.' })
     const toolCalls = result.toolCalls ?? []
     const toolResults = result.toolResults ?? []
     const fragments = comparisonFragmentsFromToolResults(toolResults)

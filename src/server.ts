@@ -8,6 +8,7 @@ import { RialtoAgentCore, type ProductAgentRuntime } from './agent/core.js'
 import { OpenAIAgentsProductRuntime } from './agent/openai-agents-runtime.js'
 import { evaluateQuoteComparison } from './comparison/evaluate.js'
 import { InMemoryUserContextProvider } from './context/user-context-provider.js'
+import type { AgentProgressEvent } from './domain/types.js'
 import { homePageHtml } from './demo/home-page.js'
 import { sampleComparison } from './demo/sample-comparison.js'
 import { defaultToolRegistry } from './tools/registry.js'
@@ -92,6 +93,45 @@ export function buildServer(options: BuildServerOptions = {}) {
         status: 'tool_error',
         error: agentRuntimeFailureMessage(error),
       })
+    }
+  })
+
+  app.post('/agent/turn/stream', async (request, reply) => {
+    const parsed = turnRequestSchema.safeParse(request.body)
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Invalid agent turn request.', issues: parsed.error.issues })
+    }
+    if (!process.env.OPENAI_API_KEY) {
+      return reply.status(503).send({
+        status: 'blocked',
+        error: 'Rialto Agent requires OPENAI_API_KEY.',
+      })
+    }
+
+    reply.raw.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+    })
+
+    const sendEvent = (event: string, data: unknown) => {
+      reply.raw.write(`event: ${event}\n`)
+      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`)
+    }
+    const sendProgress = (event: AgentProgressEvent) => sendEvent('progress', event)
+
+    try {
+      sendProgress({ type: 'status', message: 'HTTP stream: accepted agent turn request.' })
+      const response = await core.runTurn(parsed.data, { onProgress: sendProgress })
+      sendEvent('final', response)
+    } catch (error) {
+      request.log.error(error)
+      sendEvent('error', {
+        status: 'tool_error',
+        error: agentRuntimeFailureMessage(error),
+      })
+    } finally {
+      reply.raw.end()
     }
   })
 
