@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { submitMagicRFQBidAction, submitMagicRFQMessageAction } from '@/lib/actions/vendor'
 import type { ContractorBid, ContractorRFQ, ContractorRFQLineItem } from '@/lib/types/contractor'
 import type { MagicRFQPreviewInput } from '@/lib/types/magic-rfq'
@@ -14,6 +14,7 @@ interface LineItemBid {
   is_alternate: boolean
   availability: 'in_stock' | 'unavailable'
   quoted_quantity: string
+  quoted_unit: string
   units_available: string
   unit_price: string
   lead_time_days: string
@@ -90,6 +91,7 @@ function defaultBids(rfq: ContractorRFQ, existingBid: ContractorBid | null): Lin
       is_alternate: responseIsAlternate,
       availability: response?.availability === 'unavailable' ? 'unavailable' : 'in_stock',
       quoted_quantity: response?.quoted_quantity?.toString() ?? item.quantity.toString(),
+      quoted_unit: response?.unit && response.unit !== item.unit ? response.unit : '',
       units_available: response?.units_available?.toString() ?? '',
       unit_price: response?.unit_price?.toString() ?? '',
       lead_time_days: response?.lead_time_days?.toString() ?? item.suggested_lead_time_days?.toString() ?? '',
@@ -326,6 +328,105 @@ function VendorResponseFieldInput({
   )
 }
 
+function HorizontalScrollShadow({
+  children,
+  className = '',
+  style,
+}: {
+  children: ReactNode
+  className?: string
+  style?: React.CSSProperties
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [edges, setEdges] = useState({ left: false, right: false })
+
+  useEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+
+    function updateEdges() {
+      const node = scrollRef.current
+      if (!node) return
+      const maxScrollLeft = node.scrollWidth - node.clientWidth
+      setEdges({
+        left: node.scrollLeft > 1,
+        right: node.scrollLeft < maxScrollLeft - 1,
+      })
+    }
+
+    updateEdges()
+    element.addEventListener('scroll', updateEdges, { passive: true })
+    window.addEventListener('resize', updateEdges)
+    return () => {
+      element.removeEventListener('scroll', updateEdges)
+      window.removeEventListener('resize', updateEdges)
+    }
+  }, [])
+
+  return (
+    <div className="relative min-w-0" style={style}>
+      <div ref={scrollRef} className={className}>
+        {children}
+      </div>
+      {edges.left && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 left-0 z-10 w-6"
+          style={{ boxShadow: 'inset 16px 0 16px -18px rgba(30, 58, 47, 0.55)' }}
+        />
+      )}
+      {edges.right && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 right-0 z-10 w-6"
+          style={{ boxShadow: 'inset -16px 0 16px -18px rgba(30, 58, 47, 0.55)' }}
+        />
+      )}
+    </div>
+  )
+}
+
+function SheetHeaderCell({
+  label,
+  resizeKey,
+  onResizeStart,
+  leftResizeKey,
+  onLeftResizeStart,
+  borderColor = '#e2d9cf',
+  background = '#ede8e2',
+}: {
+  label: string
+  resizeKey: string
+  onResizeStart: (key: string, event: React.MouseEvent<HTMLDivElement>) => void
+  leftResizeKey?: string
+  onLeftResizeStart?: (key: string, event: React.MouseEvent<HTMLDivElement>) => void
+  borderColor?: string
+  background?: string
+}) {
+  return (
+    <div
+      className="relative flex h-11 items-center truncate whitespace-nowrap border-r px-3"
+      style={{ borderColor, background }}
+    >
+      {label}
+      {leftResizeKey && onLeftResizeStart && (
+        <div
+          aria-hidden="true"
+          onMouseDown={(event) => onLeftResizeStart(leftResizeKey, event)}
+          className="absolute left-0 top-0 h-full w-2 cursor-col-resize"
+          style={{ transform: 'translateX(-50%)' }}
+        />
+      )}
+      <div
+        aria-hidden="true"
+        onMouseDown={(event) => onResizeStart(resizeKey, event)}
+        className="absolute right-0 top-0 h-full w-2 cursor-col-resize"
+        style={{ transform: 'translateX(50%)' }}
+      />
+    </div>
+  )
+}
+
 function LineItemsWorkbook({
   rfq,
   bids,
@@ -342,28 +443,104 @@ function LineItemsWorkbook({
       attribute.visible !== false && attributes.findIndex((entry) => entry.key === attribute.key) === index
     ))
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-  const requestPinnedColumns = ['#', 'Item Description or SKU', 'Qty', 'Units']
-  const responseColumns = ['Unit Price', 'Total Price', 'Lead Time', ...vendorResponseFields.map((field) => field.label)]
-  const detailColumns = [
-    ...requestAttributeColumns.map((attribute) => attribute.label),
-    'Notes / Specs',
+  const requestPinnedColumns = [
+    { key: 'request:item', label: 'Item Description or SKU', width: 236, minWidth: 24 },
+    { key: 'request:qty', label: 'Qty', width: 72, minWidth: 24 },
+    { key: 'request:unit', label: 'Units', width: 62, minWidth: 24 },
   ]
-  const requestPinnedGridTemplateColumns = [
-    '44px',
-    '260px',
-    '72px',
-    '62px',
-  ].join(' ')
-  const requestDetailsGridTemplateColumns = [
-    ...requestAttributeColumns.map(() => 'minmax(160px, 1fr)'),
-    'minmax(260px, 1.35fr)',
-  ].join(' ')
-  const requestPinnedWidth = 44 + 260 + 72 + 62
-  const requestDetailsWidth = requestAttributeColumns.length * 170 + 280
-  const vendorColumnWidth = 116
-  const vendorGridTemplateColumns = responseColumns.map(() => `${vendorColumnWidth}px`).join(' ')
-  const vendorGridWidth = responseColumns.length * vendorColumnWidth
-  const vendorPaneWidth = Math.min(vendorGridWidth, 620)
+  const detailColumns = [
+    ...requestAttributeColumns.map((attribute) => ({
+      key: `detail:${attribute.key}`,
+      label: attribute.label,
+      width: 170,
+      minWidth: 24,
+      attribute,
+    })),
+    { key: 'detail:notes', label: 'Notes / Specs', width: 280, minWidth: 24 },
+  ]
+  const responseColumns = [
+    { key: 'response:unit-price', label: 'Unit Price', width: 104, minWidth: 24 },
+    { key: 'response:total-price', label: 'Total Price', width: 124, minWidth: 24 },
+    { key: 'response:lead-time', label: 'Lead Time', width: 96, minWidth: 24 },
+    ...vendorResponseFields.map((field) => ({
+      key: `response:${field.key}`,
+      label: field.label,
+      width: 112,
+      minWidth: 24,
+      field,
+    })),
+    { key: 'response:substitution', label: 'Provide Substition', width: 156, minWidth: 24 },
+  ]
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
+  const [vendorPaneWidthOverride, setVendorPaneWidthOverride] = useState<number | null>(null)
+  const columnWidth = (key: string, fallback: number) => columnWidths[key] ?? fallback
+  const requestPinnedGridTemplateColumns = requestPinnedColumns.map((col) => `${columnWidth(col.key, col.width)}px`).join(' ')
+  const requestDetailsGridTemplateColumns = detailColumns.map((col) => `${columnWidth(col.key, col.width)}px`).join(' ')
+  const requestPinnedWidth = requestPinnedColumns.reduce((sum, col) => sum + columnWidth(col.key, col.width), 0)
+  const requestDetailsWidth = detailColumns.reduce((sum, col) => sum + columnWidth(col.key, col.width), 0)
+  const vendorGridTemplateColumns = responseColumns.map((col) => `${columnWidth(col.key, col.width)}px`).join(' ')
+  const vendorGridWidth = responseColumns.reduce((sum, col) => sum + columnWidth(col.key, col.width), 0)
+  const defaultVendorPaneWidth = 104 + 124 + 96
+  const vendorPaneWidth = Math.max(140, Math.min(vendorPaneWidthOverride ?? defaultVendorPaneWidth, Math.max(defaultVendorPaneWidth, vendorGridWidth)))
+
+  function startColumnResize(key: string, event: React.MouseEvent<HTMLDivElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    const allColumns = [...requestPinnedColumns, ...detailColumns, ...responseColumns]
+    const column = allColumns.find((entry) => entry.key === key)
+    if (!column) return
+    const startX = event.clientX
+    const startWidth = columnWidth(key, column.width)
+    const minWidth = column.minWidth
+    function onMove(moveEvent: MouseEvent) {
+      const nextWidth = Math.max(minWidth, startWidth + moveEvent.clientX - startX)
+      setColumnWidths((prev) => ({ ...prev, [key]: nextWidth }))
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  function startColumnResizeFromLeft(key: string, event: React.MouseEvent<HTMLDivElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    const column = responseColumns.find((entry) => entry.key === key)
+    if (!column) return
+    const startX = event.clientX
+    const startWidth = columnWidth(key, column.width)
+    const minWidth = column.minWidth
+    function onMove(moveEvent: MouseEvent) {
+      const nextWidth = Math.max(minWidth, startWidth - (moveEvent.clientX - startX))
+      setColumnWidths((prev) => ({ ...prev, [key]: nextWidth }))
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  function startVendorPaneResize(event: React.MouseEvent<HTMLDivElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    const startX = event.clientX
+    const startWidth = vendorPaneWidth
+    const maxWidth = Math.max(defaultVendorPaneWidth, vendorGridWidth)
+    function onMove(moveEvent: MouseEvent) {
+      const nextWidth = Math.max(140, Math.min(maxWidth, startWidth - (moveEvent.clientX - startX)))
+      setVendorPaneWidthOverride(nextWidth)
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   function formatCurrencyInput(value: string) {
     if (!value) return ''
@@ -418,53 +595,91 @@ function LineItemsWorkbook({
                 className="grid items-center gap-0 border-b text-[11px] font-semibold uppercase tracking-wide"
                 style={{ gridTemplateColumns: requestPinnedGridTemplateColumns, background: '#f5f0eb', borderColor: '#e2d9cf', color: '#4a6358' }}
               >
-                {requestPinnedColumns.map((heading, index) => (
-                  <div
-                    key={`request-pinned-${heading}-${index}`}
-                    className="truncate whitespace-nowrap border-r px-3 py-3"
-                    style={{ borderColor: '#e2d9cf', background: '#ede8e2' }}
-                  >
-                    {heading}
-                  </div>
+                {requestPinnedColumns.map((column) => (
+                  <SheetHeaderCell
+                    key={column.key}
+                    label={column.label}
+                    resizeKey={column.key}
+                    onResizeStart={startColumnResize}
+                  />
                 ))}
               </div>
 
-              {rfq.line_items.map((item, index) => (
-                <div
-                  key={`${item.id}-request-pinned`}
-                  className="grid min-h-16 items-stretch gap-0 border-b last:border-b-0"
-                  style={{ gridTemplateColumns: requestPinnedGridTemplateColumns, borderColor: '#f0ebe6' }}
-                >
-                  <div className="flex items-center border-r px-3 py-2 text-xs font-semibold" style={{ borderColor: '#e2d9cf', color: '#1e3a2f' }}>
-                    {index + 1}
-                  </div>
-                  <div className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
-                    <div className="px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>
-                      <p
-                        className="text-xs"
-                        style={{
-                          display: '-webkit-box',
-                          WebkitBoxOrient: 'vertical',
-                          WebkitLineClamp: 3,
-                          overflow: 'hidden',
-                          wordBreak: 'break-word',
-                        }}
-                      >
-                        {item.sku || item.description || '-'}
-                      </p>
+              {rfq.line_items.map((item, index) => {
+                const bid = bids.find((entry) => entry.line_item_id === item.id) ?? bids[index]!
+                return (
+                  <div key={`${item.id}-request-pinned-rows`}>
+                    <div
+                      className="grid h-16 items-stretch gap-0 border-b"
+                      style={{ gridTemplateColumns: requestPinnedGridTemplateColumns, borderColor: '#f0ebe6' }}
+                    >
+                      <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                        <div className="px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>
+                          <p
+                            className="text-xs"
+                            style={{
+                              display: '-webkit-box',
+                              WebkitBoxOrient: 'vertical',
+                              WebkitLineClamp: 3,
+                              overflow: 'hidden',
+                              wordBreak: 'break-word',
+                            }}
+                          >
+                            {item.sku || item.description || '-'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                        <div className="px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>{item.quantity.toLocaleString()}</div>
+                      </div>
+                      <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                        <div className="px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>{item.unit}</div>
+                      </div>
                     </div>
+
+                    {bid.is_alternate && (
+                      <div
+                        className="grid h-16 items-stretch gap-0 border-b border-t border-dashed"
+                        style={{ gridTemplateColumns: requestPinnedGridTemplateColumns, borderColor: '#fa6b04', background: '#fffaf5' }}
+                      >
+                        <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f2c99d' }}>
+                          <input
+                            type="text"
+                            value={bid.alternate_description}
+                            onChange={(event) => updateBid(item.id, { alternate_description: event.target.value })}
+                            placeholder="Alternative item / SKU"
+                            className="h-full w-full rounded-md px-2 text-sm focus:outline-none"
+                            style={{ background: '#ffffff', border: '1px dashed #fa6b04', color: '#1e3a2f' }}
+                          />
+                        </div>
+                        <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f2c99d' }}>
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={bid.quoted_quantity}
+                            onChange={(event) => updateBid(item.id, { quoted_quantity: event.target.value })}
+                            className="h-full w-full rounded-md px-2 text-sm focus:outline-none"
+                            style={{ background: '#ffffff', border: '1px dashed #fa6b04', color: '#1e3a2f' }}
+                          />
+                        </div>
+                        <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f2c99d' }}>
+                          <input
+                            type="text"
+                            value={bid.quoted_unit || item.unit}
+                            onChange={(event) => updateBid(item.id, { quoted_unit: event.target.value })}
+                            className="h-full w-full rounded-md px-2 text-sm focus:outline-none"
+                            style={{ background: '#ffffff', border: '1px dashed #fa6b04', color: '#1e3a2f' }}
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
-                    <div className="px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>{item.quantity.toLocaleString()}</div>
-                  </div>
-                  <div className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
-                    <div className="px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>{item.unit}</div>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
 
-            <div
+            <HorizontalScrollShadow
               className="overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
               style={{ minWidth: 0 }}
             >
@@ -473,57 +688,101 @@ function LineItemsWorkbook({
                   className="grid items-center gap-0 border-b text-[11px] font-semibold uppercase tracking-wide"
                   style={{ gridTemplateColumns: requestDetailsGridTemplateColumns, background: '#f5f0eb', borderColor: '#e2d9cf', color: '#4a6358' }}
                 >
-                  {detailColumns.map((heading, index) => (
-                    <div
-                      key={`request-detail-${heading}-${index}`}
-                      className="truncate whitespace-nowrap border-r px-3 py-3"
-                      style={{ borderColor: '#e2d9cf', background: '#ede8e2' }}
-                    >
-                      {heading}
-                    </div>
+                  {detailColumns.map((column) => (
+                    <SheetHeaderCell
+                      key={column.key}
+                      label={column.label}
+                      resizeKey={column.key}
+                      onResizeStart={startColumnResize}
+                    />
                   ))}
                 </div>
 
-                {rfq.line_items.map((item) => {
+                {rfq.line_items.map((item, index) => {
+                  const bid = bids.find((entry) => entry.line_item_id === item.id) ?? bids[index]!
                   const attributeByKey = new Map((item.attributes ?? []).map((attribute) => [attribute.key, attribute]))
                   return (
-                    <div
-                      key={`${item.id}-request-details`}
-                      className="grid min-h-16 items-stretch gap-0 border-b last:border-b-0"
-                      style={{ gridTemplateColumns: requestDetailsGridTemplateColumns, borderColor: '#f0ebe6' }}
-                    >
-                      {requestAttributeColumns.map((attribute) => (
-                        <div key={`${item.id}-request-${attribute.key}`} className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                    <div key={`${item.id}-request-detail-rows`}>
+                      <div
+                        className="grid h-16 items-stretch gap-0 border-b"
+                        style={{ gridTemplateColumns: requestDetailsGridTemplateColumns, borderColor: '#f0ebe6' }}
+                      >
+                        {requestAttributeColumns.map((attribute) => (
+                          <div key={`${item.id}-request-${attribute.key}`} className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                            <div className="truncate px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>
+                              {attributeByKey.get(attribute.key)?.value || '-'}
+                            </div>
+                          </div>
+                        ))}
+                        <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
                           <div className="truncate px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>
-                            {attributeByKey.get(attribute.key)?.value || '-'}
+                            {[item.specs, item.notes, item.certifications?.join(', ')].filter(Boolean).join(' · ') || '-'}
                           </div>
                         </div>
-                      ))}
-                      <div className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
-                        <div className="truncate px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>
-                          {[item.specs, item.notes, item.certifications?.join(', ')].filter(Boolean).join(' · ') || '-'}
-                        </div>
                       </div>
+
+                      {bid.is_alternate && (
+                        <div
+                          className="grid h-16 items-stretch gap-0 border-b border-t border-dashed"
+                          style={{ gridTemplateColumns: requestDetailsGridTemplateColumns, borderColor: '#fa6b04', background: '#fffaf5' }}
+                        >
+                          {requestAttributeColumns.map((attribute) => (
+                            <div key={`${item.id}-alternate-${attribute.key}`} className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f2c99d' }}>
+                              <input
+                                type="text"
+                                value={bid.response_attributes[`alternate:${attribute.key}`] ?? ''}
+                                onChange={(event) => updateResponseAttribute(bid, `alternate:${attribute.key}`, event.target.value)}
+                                placeholder={attribute.label}
+                                className="h-full w-full rounded-md px-2 text-sm focus:outline-none"
+                                style={{ background: '#ffffff', border: '1px dashed #fa6b04', color: '#1e3a2f' }}
+                              />
+                            </div>
+                          ))}
+                          <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f2c99d' }}>
+                            <input
+                              type="text"
+                              value={bid.quoted_product_details}
+                              onChange={(event) => updateBid(item.id, { quoted_product_details: event.target.value })}
+                              placeholder="Manufacturer, model, finish, specs..."
+                              className="h-full w-full rounded-md px-2 text-sm focus:outline-none"
+                              style={{ background: '#ffffff', border: '1px dashed #fa6b04', color: '#1e3a2f' }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )
                 })}
               </div>
-            </div>
+            </HorizontalScrollShadow>
           </div>
 
-          <div
+          <HorizontalScrollShadow
             className="overflow-x-auto"
             style={{ background: '#fffaf5' }}
           >
+            <div
+              aria-hidden="true"
+              onMouseDown={startVendorPaneResize}
+              className="absolute left-0 top-0 z-20 h-full w-2 cursor-col-resize"
+              style={{ transform: 'translateX(-50%)' }}
+            />
             <div style={{ width: `${vendorGridWidth}px`, minWidth: '100%' }}>
               <div
                 className="grid items-center gap-0 border-b text-[11px] font-semibold uppercase tracking-wide"
                 style={{ gridTemplateColumns: vendorGridTemplateColumns, borderColor: '#f2c99d', background: '#fff5eb', color: '#8a4615' }}
               >
-                {responseColumns.map((heading) => (
-                  <div key={`response-${heading}`} className="truncate whitespace-nowrap border-r px-3 py-3" style={{ borderColor: '#f2c99d' }}>
-                    {heading}
-                  </div>
+                {responseColumns.map((column, index) => (
+                  <SheetHeaderCell
+                    key={column.key}
+                    label={column.label}
+                    resizeKey={column.key}
+                    onResizeStart={startColumnResize}
+                    leftResizeKey={index > 0 ? responseColumns[index - 1]?.key : column.key}
+                    onLeftResizeStart={index > 0 ? startColumnResize : startColumnResizeFromLeft}
+                    borderColor="#f2c99d"
+                    background="#fff5eb"
+                  />
                 ))}
               </div>
 
@@ -532,58 +791,101 @@ function LineItemsWorkbook({
                 const unitPrice = parseFloat(bid.unit_price) || 0
                 const quotedQuantity = parseFloat(bid.quoted_quantity) || item.quantity || 0
                 const totalPrice = unitPrice * quotedQuantity
-                return (
-                  <div
-                    key={`${item.id}-response`}
-                    className="grid min-h-16 items-stretch gap-0 border-b last:border-b-0"
-                    style={{ gridTemplateColumns: vendorGridTemplateColumns, borderColor: '#f0ebe6' }}
-                  >
-                    <div className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
-                      <label className="sr-only">Unit Price</label>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={formatCurrencyInput(bid.unit_price)}
-                        onChange={(event) => updateBid(item.id, { unit_price: parseCurrencyInput(event.target.value) })}
-                        className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
-                        style={{ background: '#fbf8f5', border: '1px solid #e2d9cf', color: '#1e3a2f' }}
-                      />
-                    </div>
-                    <div className="min-w-0 border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
-                      <div
-                        className="min-w-0 overflow-hidden rounded-md px-2 py-1.5 text-right text-sm font-semibold"
-                        style={{ background: '#fff', border: '1px solid #f2c99d', color: '#8a4615' }}
-                      >
-                        <span className="block truncate">
-                          {bid.unit_price ? `$${totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
-                      <label className="sr-only">Lead Time</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={bid.lead_time_days}
-                        onChange={(event) => updateBid(item.id, { lead_time_days: event.target.value })}
-                        className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
-                        style={{ background: '#fbf8f5', border: '1px solid #e2d9cf', color: '#1e3a2f' }}
-                      />
-                    </div>
-                    {vendorResponseFields.map((field) => (
-                      <div key={`${item.id}-${field.key}`} className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
-                        <VendorResponseFieldInput
-                          field={field}
-                          value={bid.response_attributes[field.key] ?? ''}
-                          onChange={(value) => updateResponseAttribute(bid, field.key, value)}
+                const responseCells = (
+                  <>
+                    <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                        <label className="sr-only">Unit Price</label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={formatCurrencyInput(bid.unit_price)}
+                          onChange={(event) => updateBid(item.id, { unit_price: parseCurrencyInput(event.target.value) })}
+                          className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
+                          style={{ background: '#fbf8f5', border: '1px solid #e2d9cf', color: '#1e3a2f' }}
                         />
                       </div>
-                    ))}
+                      <div className="min-w-0 overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                        <div
+                          className="min-w-0 overflow-hidden rounded-md px-2 py-1.5 text-right text-sm font-semibold"
+                          style={{ background: '#fff', border: '1px solid #f2c99d', color: '#8a4615' }}
+                        >
+                          <span className="block truncate">
+                            {bid.unit_price ? `$${totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                        <label className="sr-only">Lead Time</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={bid.lead_time_days}
+                          onChange={(event) => updateBid(item.id, { lead_time_days: event.target.value })}
+                          className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
+                          style={{ background: '#fbf8f5', border: '1px solid #e2d9cf', color: '#1e3a2f' }}
+                        />
+                      </div>
+                      {vendorResponseFields.map((field) => (
+                        <div key={`${item.id}-${field.key}`} className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                          <VendorResponseFieldInput
+                            field={field}
+                            value={bid.response_attributes[field.key] ?? ''}
+                            onChange={(value) => updateResponseAttribute(bid, field.key, value)}
+                          />
+                        </div>
+                      ))}
+                  </>
+                )
+                return (
+                  <div key={`${item.id}-response-rows`}>
+                    <div
+                      className="grid h-16 items-stretch gap-0 border-b"
+                      style={{ gridTemplateColumns: vendorGridTemplateColumns, borderColor: '#f0ebe6' }}
+                    >
+                      {responseCells}
+                      <div className="flex items-center overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                        <button
+                          type="button"
+                          onClick={() => updateBid(item.id, { is_alternate: true })}
+                          disabled={bid.is_alternate}
+                          className="w-full rounded-md border px-2 py-1.5 text-xs font-semibold leading-tight transition-colors disabled:opacity-60"
+                          style={{ borderColor: '#fdc89a', background: '#fff3eb', color: '#a85c2a' }}
+                        >
+                          {bid.is_alternate ? 'Substitution added' : 'Substitution'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {bid.is_alternate && (
+                      <div
+                        className="grid h-16 items-stretch gap-0 border-b border-t border-dashed"
+                        style={{ gridTemplateColumns: vendorGridTemplateColumns, borderColor: '#fa6b04', background: '#fffaf5' }}
+                      >
+                        {responseCells}
+                        <div className="flex items-center overflow-hidden border-r p-1.5" style={{ borderColor: '#f2c99d' }}>
+                          <button
+                            type="button"
+                            onClick={() => updateBid(item.id, {
+                              is_alternate: false,
+                              alternate_description: '',
+                              quoted_product_details: '',
+                              substitution_notes: '',
+                              vendor_sku: '',
+                              quoted_unit: '',
+                            })}
+                            className="w-full rounded-md border px-2 py-1.5 text-xs font-semibold leading-tight"
+                            style={{ borderColor: '#fdc89a', background: '#ffffff', color: '#a85c2a' }}
+                          >
+                            Remove alternative
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               })}
             </div>
-          </div>
+          </HorizontalScrollShadow>
         </div>
       </div>
     </div>
@@ -678,7 +980,7 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
         sku: isAlternate ? bid.vendor_sku.trim() : item.sku,
         description: isAlternate && bid.alternate_description.trim() ? bid.alternate_description.trim() : item.description,
         quantity: item.quantity,
-        unit: item.unit,
+        unit: isAlternate && bid.quoted_unit.trim() ? bid.quoted_unit.trim() : item.unit,
         unit_price: unitPrice,
         total_price: unitPrice * pricedQuantity,
         quoted_quantity: quotedQuantity,
