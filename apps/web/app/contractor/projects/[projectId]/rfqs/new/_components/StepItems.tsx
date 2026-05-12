@@ -481,7 +481,7 @@ export function StepItems({
 
   const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0]
   const spreadsheetAttributes = items[0]?.attributes ?? (fieldTemplate.length ? fieldsToAttributes(fieldTemplate) : buildLineItemAttributes(category))
-  const vendorResponseColumns = vendorResponseFields.length ? [...CORE_VENDOR_RESPONSE_COLUMNS, ...vendorResponseFields.map((field) => field.label)] : []
+  const vendorResponseColumns = [...CORE_VENDOR_RESPONSE_COLUMNS, ...vendorResponseFields.map((field) => field.label)]
   const spreadsheetColumnWidths = [
     54,
     360,
