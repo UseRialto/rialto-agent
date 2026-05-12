@@ -528,6 +528,7 @@ export function StepItems({
     ...(isVisible('specifications') ? [300] : []),
     ...(isVisible('certifications') ? [260] : []),
     ...vendorResponseColumns.map(() => 150),
+    ...(isCustomizingFields ? [128, 160] : []),
   ]
   const spreadsheetWidth = spreadsheetColumnWidths.reduce((sum, width) => sum + width, 0)
   const spreadsheetColumns = spreadsheetColumnWidths.map((width) => `${width}px`).join(' ')
@@ -865,28 +866,6 @@ export function StepItems({
 
       {materialEntryMode === 'manual' && (
       <div>
-        {isCustomizingFields && (
-          <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
-            <button
-              type="button"
-              onClick={() => onTemplateFieldAddCustom?.()}
-              className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors"
-              style={{ background: '#f5f0eb', border: '1px solid #e2d9cf', color: '#4a6358' }}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add Column
-            </button>
-            <button
-              type="button"
-              onClick={() => onVendorResponseFieldAdd?.()}
-              className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors"
-              style={{ background: '#fff5eb', border: '1px solid #f2c99d', color: '#8a4615' }}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add Vendor Column
-            </button>
-          </div>
-        )}
         <div className="mb-5 overflow-hidden" style={{ background: '#ffffff' }}>
           <div
             ref={spreadsheetViewportRef}
@@ -1080,6 +1059,32 @@ export function StepItems({
                   </div>
                 )
               })}
+              {isCustomizingFields && (
+                <>
+                  <div className="flex items-center justify-center border-r px-2 py-2" style={{ borderColor: '#e2d9cf', background: '#f5f0eb' }}>
+                    <button
+                      type="button"
+                      onClick={() => onTemplateFieldAddCustom?.()}
+                      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold normal-case tracking-normal transition-colors"
+                      style={{ background: '#ffffff', border: '1px solid #d4c7bb', color: '#4a6358' }}
+                    >
+                      <Plus className="h-3 w-3" />
+                      Column
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-center px-2 py-2" style={{ background: '#fff5eb' }}>
+                    <button
+                      type="button"
+                      onClick={() => onVendorResponseFieldAdd?.()}
+                      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold normal-case tracking-normal transition-colors"
+                      style={{ background: '#ffffff', border: '1px solid #f2c99d', color: '#8a4615' }}
+                    >
+                      <Plus className="h-3 w-3" />
+                      Vendor Col
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
 
             {items.map((row, idx) => {
@@ -1305,6 +1310,12 @@ export function StepItems({
                       />
                     </div>
                   ))}
+                  {isCustomizingFields && (
+                    <>
+                      <div className="border-r" style={{ borderColor: '#e2d9cf', background: '#f9f6f2' }} />
+                      <div style={{ background: '#fffcf8' }} />
+                    </>
+                  )}
 
                 </div>
               )
