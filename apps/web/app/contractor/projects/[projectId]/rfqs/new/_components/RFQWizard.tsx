@@ -463,7 +463,7 @@ export function RFQWizard({
           vendor_id: invite.id,
           vendor_email: invite.email,
           vendor_name: invite.name || invite.email || invite.id || '',
-          vendor_first_name: invite.firstName?.trim() || undefined,
+          vendor_first_name: invite.nickname?.trim() || invite.firstName?.trim() || undefined,
           vendor_last_name: invite.lastName?.trim() || undefined,
           on_platform: invite.onPlatform,
         })),

@@ -53,9 +53,9 @@ export function deriveVendorFirstName(vendorName?: string, vendorEmail?: string)
   return cleaned.split(/\s+/)[0] ?? 'Vendor'
 }
 
-export function renderVendorEmailTemplate(body: string, params: { vendorName?: string; vendorEmail?: string }) {
+export function renderVendorEmailTemplate(body: string, params: { vendorName?: string; vendorEmail?: string; vendorFirstName?: string }) {
   const vendorName = (params.vendorName ?? '').trim() || params.vendorEmail?.trim() || 'Vendor'
-  const firstName = deriveVendorFirstName(vendorName, params.vendorEmail)
+  const firstName = params.vendorFirstName?.trim() || deriveVendorFirstName(vendorName, params.vendorEmail)
   return body
     .replaceAll('{{vendor_first_name}}', firstName)
     .replaceAll('{{vendor_name}}', vendorName)
