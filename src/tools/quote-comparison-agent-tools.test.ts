@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  analyzeQuoteComparisonWork,
   answerQuoteComparisonQuestion,
   inspectQuoteComparisonSnapshot,
   proposeQuoteComparisonBulkNumericEdit,
@@ -7,6 +8,7 @@ import {
   proposeQuoteComparisonDeletions,
   proposeQuoteComparisonDerivedColumns,
   proposeQuoteComparisonHighlights,
+  proposeQuoteComparisonLowestTotalPriceColumn,
   proposeQuoteComparisonSelectionState,
   proposeQuoteComparisonSheetStructureEdits,
 } from './quote-comparison-agent-tools.js'
@@ -75,6 +77,27 @@ describe('Quote Comparison agent tools', () => {
     })
   })
 
+  it('classifies broad ambiguous comparison work as needing planning before edits', () => {
+    expect(analyzeQuoteComparisonWork({ snapshot }, { prompt: 'Level this bid and tell me who we should use.' })).toMatchObject({
+      action: 'quote-comparison-work-analysis',
+      complexity: 'needs-planning',
+      ambiguity: 'material-choice',
+      suggestedNextStep: 'Ask one concise clarification before proposing material sheet edits.',
+      recommendedToolFamilies: [
+        'quoteComparison.answerSheetQuestion',
+        'quoteComparison.proposeDerivedColumns',
+        'quoteComparison.proposeHighlights',
+        'quoteComparison.proposeCellEdits',
+      ],
+      sheetSignals: {
+        rowCount: 2,
+        columnCount: 5,
+        vendorColumnCount: 3,
+        unresolvedCellCount: 1,
+      },
+    })
+  })
+
   it('proposes bulk numeric edits with dependent total recalculation', () => {
     expect(proposeQuoteComparisonBulkNumericEdit({ snapshot }, {
       colKey: 'acme-unit',
@@ -137,6 +160,39 @@ describe('Quote Comparison agent tools', () => {
         { kind: 'insert-column', colKey: 'manual-qty-hundreds-lf', label: 'Qty in hundreds linear ft', afterColKey: '__qty_unit' },
         { kind: 'set-cell', rowKey: 'line-1', colKey: 'manual-qty-hundreds-lf', value: '24.2' },
         { kind: 'set-cell', rowKey: 'line-2', colKey: 'manual-qty-hundreds-lf', value: '4.58' },
+      ],
+    })
+  })
+
+  it('proposes a lowest total price column filled from visible vendor totals', () => {
+    const comparisonSnapshot = {
+      columns: [
+        { key: '__item', label: 'Item' },
+        { key: '__qty_unit', label: 'Qty' },
+        { key: 'lnw-total', label: 'L n W Total Price', metric: 'total', vendorName: 'L n W Supply' },
+        { key: 'acme-total', label: 'Acme Total Price', metric: 'total', vendorName: 'Acme Drywall' },
+        { key: 'build-total', label: 'BuildCo Total Price', metric: 'total', vendorName: 'BuildCo' },
+      ],
+      rows: [
+        {
+          id: 'fasteners',
+          description: '1 1/4 drywall screws',
+          values: { 'lnw-total': '$1,575', 'acme-total': '$1,685', 'build-total': '' },
+        },
+        {
+          id: 'lockset',
+          description: 'Classroom lockset',
+          values: { 'lnw-total': '$8,143', 'acme-total': '$8,713', 'build-total': '$7,817' },
+        },
+      ],
+    }
+
+    expect(proposeQuoteComparisonLowestTotalPriceColumn({ snapshot: comparisonSnapshot }, {})).toMatchObject({
+      summary: 'Added Lowest Total Price and filled 2 row values.',
+      operations: [
+        { kind: 'insert-column', colKey: 'lowest-total-price', label: 'Lowest Total Price', afterColKey: '__qty_unit' },
+        { kind: 'set-cell', rowKey: 'fasteners', colKey: 'lowest-total-price', value: '$1,575' },
+        { kind: 'set-cell', rowKey: 'lockset', colKey: 'lowest-total-price', value: '$7,817' },
       ],
     })
   })

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { X } from 'lucide-react'
+import { Paperclip, X } from 'lucide-react'
 import type { ComparisonSheetView, ComparisonViewPatch } from './comparison-sheet-view'
 import type { ComparisonSheetSnapshot } from '@/lib/procurement/comparison-sheet-snapshot'
 import {
@@ -54,6 +54,12 @@ interface PatchChip {
   label: string
   tone: 'add' | 'remove' | 'highlight'
   onDismiss: () => void
+}
+
+interface AssistantAttachment {
+  sourceId: string
+  filename: string
+  text: string
 }
 
 function describePatch(patch: ComparisonViewPatch | null, schema: BidComparisonAssistantProps['sheetSchema']): PatchChip[] {
@@ -138,12 +144,15 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
   const [error, setError] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [isApplying, setIsApplying] = useState(false)
+  const [attachments, setAttachments] = useState<AssistantAttachment[]>([])
+  const [isExtractingFile, setIsExtractingFile] = useState(false)
   const [debugMode, setDebugMode] = useState(true)
   const [debugSteps, setDebugSteps] = useState<string[]>([])
   const [startedAt, setStartedAt] = useState<number | null>(null)
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const applyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     if (isOpen && !isClosing) {
@@ -172,6 +181,39 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
 
   if (!isOpen) return null
 
+  async function attachFiles(files: FileList | File[]) {
+    const selected = Array.from(files)
+    if (selected.length === 0 || isExtractingFile) return
+    setError('')
+    setIsExtractingFile(true)
+    try {
+      const extracted: AssistantAttachment[] = []
+      for (const file of selected) {
+        const formData = new FormData()
+        formData.append('file', file)
+        const response = await fetch('/api/rialto-agent/document-extract', { method: 'POST', body: formData })
+        const json = await response.json() as {
+          error?: string
+          data?: { filename?: string; text?: string }
+        }
+        if (!response.ok) throw new Error(json.error ?? `Could not read ${file.name}.`)
+        const text = json.data?.text?.trim()
+        if (!text) throw new Error(`No readable text was found in ${file.name}.`)
+        extracted.push({
+          sourceId: `${file.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          filename: json.data?.filename ?? file.name,
+          text,
+        })
+      }
+      setAttachments((current) => [...current, ...extracted])
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not read the uploaded file.')
+    } finally {
+      setIsExtractingFile(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
   async function askAssistant() {
     const message = draft.trim()
     if (!message || isSending) return
@@ -188,26 +230,28 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
       const response = await fetch('/api/bid-comparison/ai-propose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, currentView, sheetSchema, snapshot, debug: debugMode, stream: debugMode }),
+        body: JSON.stringify({ message, currentView, sheetSchema, snapshot, attachments, debug: debugMode, stream: debugMode }),
         signal: controller.signal,
       })
       if (debugMode && response.body && response.headers.get('content-type')?.includes('text/event-stream')) {
         const json = await readAgentProgressStream(response)
-        if (!response.ok || !json.patch) throw new Error(json.error ?? 'Could not generate a change.')
-        setSummary(json.patch.summary)
-        setProposal(json.patch)
-        onPreviewChange?.(json.patch)
+        if (!response.ok || (!json.patch && !json.answer)) throw new Error(json.error ?? 'Could not generate a response.')
+        setSummary(json.patch?.summary ?? json.answer ?? '')
+        setProposal(json.patch ?? null)
+        onPreviewChange?.(json.patch ?? null)
+        if (json.patch) setAttachments([])
         return
       }
-      const json = (await response.json()) as { patch?: ComparisonViewPatch; error?: string } & ComparisonAgentDebugResponse
+      const json = (await response.json()) as { patch?: ComparisonViewPatch; answer?: string; error?: string } & ComparisonAgentDebugResponse
       if (debugMode) {
         const returnedSteps = debugStepsFromAgentResponse(json)
         if (returnedSteps.length) setDebugSteps(returnedSteps)
       }
-      if (!response.ok || !json.patch) throw new Error(json.error ?? 'Could not generate a change.')
-      setSummary(json.patch.summary)
-      setProposal(json.patch)
-      onPreviewChange?.(json.patch)
+      if (!response.ok || (!json.patch && !json.answer)) throw new Error(json.error ?? 'Could not generate a response.')
+      setSummary(json.patch?.summary ?? json.answer ?? '')
+      setProposal(json.patch ?? null)
+      onPreviewChange?.(json.patch ?? null)
+      if (json.patch) setAttachments([])
     } catch (caught) {
       const message = caught instanceof DOMException && caught.name === 'AbortError'
         ? 'Rialto Agent timed out after 90 seconds before returning changes.'
@@ -227,7 +271,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
 
     const decoder = new TextDecoder()
     let buffer = ''
-    let finalPayload: ({ patch?: ComparisonViewPatch; error?: string } & ComparisonAgentDebugResponse) | null = null
+    let finalPayload: ({ patch?: ComparisonViewPatch; answer?: string; error?: string } & ComparisonAgentDebugResponse) | null = null
 
     while (true) {
       const { value, done } = await reader.read()
@@ -242,7 +286,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
           const step = debugStepFromProgressEvent(event.data as ComparisonAgentProgressEvent)
           setDebugSteps((steps) => [...steps, step])
         } else if (event.event === 'final') {
-          finalPayload = event.data as { patch?: ComparisonViewPatch; error?: string } & ComparisonAgentDebugResponse
+          finalPayload = event.data as { patch?: ComparisonViewPatch; answer?: string; error?: string } & ComparisonAgentDebugResponse
           const returnedSteps = debugStepsFromAgentResponse(finalPayload)
           if (returnedSteps.length) setDebugSteps((steps) => [...steps, ...returnedSteps])
         } else if (event.event === 'error') {
@@ -254,7 +298,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
 
     if (buffer.trim()) {
       const event = parseAgentSseEvent(buffer)
-      if (event?.event === 'final') finalPayload = event.data as { patch?: ComparisonViewPatch; error?: string } & ComparisonAgentDebugResponse
+      if (event?.event === 'final') finalPayload = event.data as { patch?: ComparisonViewPatch; answer?: string; error?: string } & ComparisonAgentDebugResponse
     }
     if (!finalPayload) throw new Error('Rialto Agent stream ended before returning changes.')
     return finalPayload
@@ -354,15 +398,47 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
           />
           <span aria-hidden="true" className="h-12 w-12 shrink-0" />
           <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            accept=".csv,.tsv,.txt,.pdf,.xlsx,.xls,.docx"
+            onChange={(event) => {
+              if (event.currentTarget.files) void attachFiles(event.currentTarget.files)
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isSending || isExtractingFile}
+            className={cn(
+              'relative z-10 ml-3 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition disabled:opacity-50',
+              isClosing ? 'animate-[bid-ai-content-hide_160ms_ease-in_forwards]' : 'animate-[bid-ai-content-fade_360ms_ease-out_760ms_both]',
+            )}
+            aria-label="Attach file"
+            title={isExtractingFile ? 'Reading file...' : 'Attach PDF, CSV, Excel, Word, or text file'}
+            style={{ color: '#60746b', background: attachments.length ? '#fef3c7' : '#f6f8fa' }}
+          >
+            <Paperclip className="h-4 w-4" />
+          </button>
+          <input
             ref={inputRef}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             className={cn(
-              'relative z-10 ml-3 min-w-0 flex-1 bg-transparent py-3.5 pl-4 pr-3 text-sm outline-none',
+              'relative z-10 min-w-0 flex-1 bg-transparent py-3.5 pl-3 pr-3 text-sm outline-none',
               isClosing ? 'animate-[bid-ai-content-hide_160ms_ease-in_forwards]' : 'animate-[bid-ai-content-fade_260ms_ease-out_800ms_both]',
             )}
             style={{ color: '#1e3a2f' }}
             placeholder='Try: "highlight the fastest lead time per row" or "hide total price for Acme"'
+            onDragOver={(event) => {
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'copy'
+            }}
+            onDrop={(event) => {
+              event.preventDefault()
+              if (event.dataTransfer.files.length) void attachFiles(event.dataTransfer.files)
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter') { event.preventDefault(); void askAssistant() }
               if (event.key === 'Escape') { event.preventDefault(); onDismiss() }
@@ -427,6 +503,25 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
                 </li>
               ))}
             </ol>
+          </div>
+        )}
+        {(attachments.length > 0 || isExtractingFile) && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-2xl bg-white px-3 py-2 text-xs shadow" style={{ border: '1px solid #e2d9cf', color: '#4a6358' }}>
+            {attachments.map((attachment) => (
+              <span key={attachment.sourceId} className="inline-flex max-w-[15rem] items-center gap-1.5 rounded-full px-2.5 py-1 font-semibold" style={{ background: '#fef3c7', color: '#7c3f12' }}>
+                <Paperclip className="h-3 w-3 shrink-0" />
+                <span className="truncate">{attachment.filename}</span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${attachment.filename}`}
+                  onClick={() => setAttachments((current) => current.filter((item) => item.sourceId !== attachment.sourceId))}
+                  className="rounded-full p-0.5"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+            {isExtractingFile && <span>Reading file...</span>}
           </div>
         )}
         {error && <p className="mt-2 rounded-full bg-white px-4 py-2 text-xs shadow" style={{ color: '#a85c2a' }}>{error}</p>}

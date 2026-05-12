@@ -6,6 +6,7 @@ import type { ProductAgentRuntime, ProductAgentRuntimeRequest, ProductAgentRunti
 import type { AgentToolCall, ComparisonPatchFragment, ToolResult } from '../domain/types.js'
 import { createOpenAIResilientFetch } from './openai-resilient-fetch.js'
 import {
+  analyzeQuoteComparisonWork,
   answerQuoteComparisonQuestion,
   inspectQuoteComparisonSnapshot,
   proposeQuoteComparisonBulkNumericEdit,
@@ -14,6 +15,7 @@ import {
   proposeQuoteComparisonDeletions,
   proposeQuoteComparisonDerivedColumns,
   proposeQuoteComparisonHighlights,
+  proposeQuoteComparisonLowestTotalPriceColumn,
   proposeQuoteComparisonSelectionState,
   proposeQuoteComparisonSheetStructureEdits,
 } from '../tools/quote-comparison-agent-tools.js'
@@ -63,9 +65,11 @@ export class OpenAIAgentsProductRuntime implements ProductAgentRuntime {
         'For sheet mutations, call one or more quoteComparison proposal tools. The runtime will aggregate their patch fragments into one Comparison Patch Proposal.',
         'For read-only sheet questions, call quoteComparison_answerSheetQuestion when the answer depends on sheet state.',
         'When sheet state matters, inspect it first with quoteComparison_inspectSnapshot before calling a proposal or answer tool.',
+        'For broad, ambiguous, multi-step, recommendation, cleanup, leveling, or best-choice requests, inspect the sheet and call quoteComparison_analyzeWork before choosing whether to answer, ask for clarification, or propose edits.',
         'Use quoteComparison_proposeDeletions for delete row, delete column, and delete selected cell contents requests.',
         'Use bulk, derived-column, structure, and selection-state tools when those operations match the request instead of emitting many tiny unrelated edits.',
         'Use quoteComparison_proposeConvertedQuantityColumn for requests to add a Qty/quantity column converted into hundreds or thousands of linear feet, hLF, kLF, or similar visible quantity unit conversions. Use divisor 100 for hundreds and 1000 for thousands.',
+        'Use quoteComparison_proposeLowestTotalPriceColumn for requests that ask for the lowest total price data to be added, filled, copied, or placed into the sheet.',
         'Use quoteComparison_proposeDerivedColumns for requests to add calculated columns such as normalized price, unit price per 1k, recommendation, or summary columns.',
         'Use quoteComparison_proposeHighlights with lowest-price-per-row for cheapest-valid quote highlighting and missing-lead-times for missing lead time review.',
         'For missing lead time requests that also ask for notes, combine quoteComparison_proposeHighlights with quoteComparison_proposeCellEdits for the note cells.',
@@ -160,6 +164,15 @@ function quoteComparisonTools() {
       execute(input, context, details) {
         const runContext = rialtoContext(context)
         return recordTool(runContext, details, 'quoteComparison.answerSheetQuestion', input, answerQuoteComparisonQuestion(quoteComparisonToolContext(runContext?.context), input.question))
+      },
+    }),
+    tool({
+      name: 'quoteComparison_analyzeWork',
+      description: 'Read-only planning aid for Quote Comparison requests. Classifies whether the current prompt is simple or needs planning, summarizes sheet risk signals, and recommends next tool families before broad or ambiguous work.',
+      parameters: z.object({ prompt: z.string() }),
+      execute(input, context, details) {
+        const runContext = rialtoContext(context)
+        return recordTool(runContext, details, 'quoteComparison.analyzeWork', input, analyzeQuoteComparisonWork(quoteComparisonToolContext(runContext?.context), input))
       },
     }),
     tool({
@@ -263,6 +276,25 @@ function quoteComparisonTools() {
           'quoteComparison.proposeConvertedQuantityColumn',
           input,
           proposeQuoteComparisonConvertedQuantityColumn(quoteComparisonToolContext(rialtoContext(context)?.context), input),
+        )
+      },
+    }),
+    tool({
+      name: 'quoteComparison_proposeLowestTotalPriceColumn',
+      description: 'Return a patch fragment that inserts a Lowest Total Price column and fills each visible row with the lowest visible vendor total. Use when the user asks to add lowest total price data into the sheet. Does not commit changes.',
+      parameters: z.object({
+        colKey: z.string().optional(),
+        label: z.string().optional(),
+        afterColKey: z.string().optional(),
+        summary: z.string().optional(),
+      }),
+      execute(input, context, details) {
+        return recordPatchFragmentTool(
+          rialtoContext(context),
+          details,
+          'quoteComparison.proposeLowestTotalPriceColumn',
+          input,
+          proposeQuoteComparisonLowestTotalPriceColumn(quoteComparisonToolContext(rialtoContext(context)?.context), input),
         )
       },
     }),

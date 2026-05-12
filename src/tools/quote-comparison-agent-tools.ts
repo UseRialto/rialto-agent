@@ -61,6 +61,17 @@ export interface DeletionsInput {
   summary?: string
 }
 
+export interface LowestTotalPriceColumnInput {
+  colKey?: string
+  label?: string
+  afterColKey?: string
+  summary?: string
+}
+
+export interface PlanningAnalysisInput {
+  prompt: string
+}
+
 export function inspectQuoteComparisonSnapshot(context: QuoteComparisonToolContext) {
   const sheet = sheetData(context)
   return {
@@ -68,6 +79,65 @@ export function inspectQuoteComparisonSnapshot(context: QuoteComparisonToolConte
     columns: sheet.columns.map(labelFor),
     rowCount: sheet.rows.length,
     vendors: sheet.vendors.map(labelFor),
+  }
+}
+
+export function analyzeQuoteComparisonWork(
+  context: QuoteComparisonToolContext,
+  input: PlanningAnalysisInput,
+) {
+  const sheet = sheetData(context)
+  const lower = input.prompt.toLowerCase()
+  const broadPlanningSignals = [
+    /\blevel\b/,
+    /\bclean(?:er)?\b/,
+    /\bbest\b/,
+    /\brecommend\b/,
+    /\bcompare\b/,
+    /\banaly[sz]e\b/,
+    /\bsummary\b/,
+    /\bwhat should\b/,
+  ]
+  const simpleEditSignals = [
+    /\bhighlight\b/,
+    /\bdelete\b/,
+    /\badd (?:a |an |new )?(?:column|row)\b/,
+    /\bset\b/,
+    /\bfill\b/,
+  ]
+  const matchingBroadSignals = broadPlanningSignals
+    .filter((signal) => signal.test(lower))
+    .map((signal) => signal.source.replaceAll('\\b', '').replaceAll('(?:er)?', 'er').replaceAll('(?:a |an |new )?', ''))
+  const matchingSimpleSignals = simpleEditSignals
+    .filter((signal) => signal.test(lower))
+    .map((signal) => signal.source.replaceAll('\\b', '').replaceAll('(?:a |an |new )?', ''))
+  const vendorColumns = sheet.columns.filter((column) => asRecord(column)?.vendorId || /vendor|price|total|cost|lead|quote/i.test(`${keyFor(column)} ${labelFor(column)}`))
+  const unresolvedCells = numericReviewCells(sheet.rows, sheet.columns).filter((cell) => cell.reason !== 'numeric')
+  const complexity = matchingBroadSignals.length || lower.split(/\s+/).length > 8 ? 'needs-planning' : 'simple'
+  const ambiguity = /\bbest\b|\bclean(?:er)?\b|\blevel\b/.test(lower)
+
+  return {
+    action: 'quote-comparison-work-analysis',
+    complexity,
+    ambiguity: ambiguity ? 'material-choice' : 'low',
+    suggestedNextStep: ambiguity
+      ? 'Ask one concise clarification before proposing material sheet edits.'
+      : complexity === 'needs-planning'
+        ? 'Create a short plan, then use read-only analysis or proposal tools that match each step.'
+        : 'Use the narrowest matching proposal or answer tool.',
+    recommendedToolFamilies: complexity === 'needs-planning'
+      ? ['quoteComparison.answerSheetQuestion', 'quoteComparison.proposeDerivedColumns', 'quoteComparison.proposeHighlights', 'quoteComparison.proposeCellEdits']
+      : ['quoteComparison.proposeHighlights', 'quoteComparison.proposeCellEdits', 'quoteComparison.proposeSheetStructureEdits'],
+    sheetSignals: {
+      rowCount: sheet.rows.length,
+      columnCount: sheet.columns.length,
+      vendorColumnCount: vendorColumns.length,
+      unresolvedCellCount: unresolvedCells.length,
+    },
+    promptSignals: {
+      broad: matchingBroadSignals,
+      simple: matchingSimpleSignals,
+    },
   }
 }
 
@@ -266,6 +336,45 @@ export function proposeQuoteComparisonConvertedQuantityColumn(
   }
 }
 
+export function proposeQuoteComparisonLowestTotalPriceColumn(
+  context: QuoteComparisonToolContext,
+  input: LowestTotalPriceColumnInput,
+): ComparisonPatchFragment {
+  const sheet = sheetData(context)
+  const colKey = input.colKey ?? 'lowest-total-price'
+  const label = input.label ?? 'Lowest Total Price'
+  const totalColumns = sheet.columns.filter(isTotalPriceColumn)
+  const operations: ComparisonOperation[] = [{
+    kind: 'insert-column',
+    colKey,
+    label,
+    afterColKey: input.afterColKey ?? quantityColumnKey(sheet.columns) ?? keyFor(sheet.columns[0]),
+  }]
+
+  for (const row of sheet.rows) {
+    const values = valuesFor(row)
+    const totals = totalColumns
+      .map((column) => ({ column, value: parseNumber(values[keyFor(column)]) }))
+      .filter((candidate): candidate is { column: unknown; value: number } => candidate.value != null)
+    if (!totals.length) continue
+    const lowest = totals.reduce((best, candidate) => candidate.value < best.value ? candidate : best)
+    operations.push({
+      kind: 'set-cell',
+      rowKey: keyFor(row),
+      colKey,
+      value: formatMoney(lowest.value),
+      note: `Lowest visible total price from ${labelFor(lowest.column)}.`,
+    })
+  }
+
+  const filled = operations.filter((operation) => operation.kind === 'set-cell').length
+  return {
+    summary: input.summary ?? `Added ${label} and filled ${filled} row value${filled === 1 ? '' : 's'}.`,
+    operations,
+    warnings: filled ? [] : ['No visible total price values were found.'],
+  }
+}
+
 export function proposeQuoteComparisonDerivedColumns(input: DerivedColumnsInput): ComparisonPatchFragment {
   return {
     summary: input.summary ?? `Prepared ${input.columns.length} derived column${input.columns.length === 1 ? '' : 's'}.`,
@@ -304,6 +413,27 @@ function numericCells(rows: unknown[], columns: unknown[], columnPredicate: (col
   return matches
 }
 
+function numericReviewCells(rows: unknown[], columns: unknown[]) {
+  const matches: Array<{ row: unknown; column: unknown; reason: 'blank' | 'tbd' | 'numeric' }> = []
+  for (const row of rows) {
+    const values = valuesFor(row)
+    for (const column of columns) {
+      if (!/price|lead|total|cost/i.test(`${keyFor(column)} ${labelFor(column)} ${String(asRecord(column)?.metric ?? '')}`)) continue
+      const raw = values[keyFor(column)]
+      if (raw == null || String(raw).trim() === '') matches.push({ row, column, reason: 'blank' })
+      else if (/^(?:tbd|n\/a)$/i.test(String(raw).trim())) matches.push({ row, column, reason: 'tbd' })
+      else if (parseNumber(raw) != null) matches.push({ row, column, reason: 'numeric' })
+    }
+  }
+  return matches
+}
+
+function isTotalPriceColumn(column: unknown) {
+  const record = asRecord(column)
+  const text = `${keyFor(column)} ${labelFor(column)} ${String(record?.metric ?? '')}`.toLowerCase()
+  return /\btotal\b/.test(text) && !/\bunit\b/.test(text)
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' ? value as Record<string, unknown> : undefined
 }
@@ -330,7 +460,9 @@ function valuesFor(row: unknown): Record<string, unknown> {
 function parseNumber(value: unknown) {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value !== 'string') return null
-  const parsed = Number(value.replace(/[$,\sA-Za-z]/g, ''))
+  const normalized = value.replace(/[$,\sA-Za-z]/g, '')
+  if (!normalized) return null
+  const parsed = Number(normalized)
   return Number.isFinite(parsed) ? parsed : null
 }
 

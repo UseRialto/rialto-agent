@@ -119,8 +119,8 @@ export function quoteComparisonArchitectureScenarios(): QuoteComparisonArchitect
     scenario('mark missing lead yellow notes', 'Mark all rows with missing lead time in yellow and add a note.', ['quoteComparison.inspectSnapshot', 'quoteComparison.proposeMissingLeadTimeReview'], ['add-highlight', 'set-cell'], ['missing lead time']),
     scenario('recommendation column', 'Add a recommendation column and fill it with Buy / Review / Exclude.', ['quoteComparison.inspectSnapshot', 'quoteComparison.proposeRecommendationColumn'], ['insert-column', 'set-cell'], ['Buy', 'Review', 'Exclude']),
     scenario('undo last ai change', 'Undo the last AI change.', ['quoteComparison.inspectSnapshot', 'quoteComparison.proposeUndoLastAgentChange'], ['set-cell'], ['Undo']),
-    clarificationScenario('make cleaner', 'Make this cleaner.', ['quoteComparison.inspectSnapshot'], ['normalize headers', 'format prices', 'highlight missing']),
-    clarificationScenario('pick best quote', 'Pick the best quote.', ['quoteComparison.inspectSnapshot'], ['best']),
+    clarificationScenario('make cleaner', 'Make this cleaner.', ['quoteComparison.inspectSnapshot', 'quoteComparison.analyzeWork'], ['normalize headers', 'format prices', 'highlight missing']),
+    clarificationScenario('pick best quote', 'Pick the best quote.', ['quoteComparison.inspectSnapshot', 'quoteComparison.analyzeWork'], ['best']),
     answerScenario('compare quotes', 'Compare the quotes.', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['summary', 'ranking']),
     answerScenario('mixed lf units', 'Compare unit prices across LF, linear ft, and feet.', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['LF', 'linear ft', 'ft', 'incompatible']),
     answerScenario('ignore total bids', 'Ignore total bids and compare itemized prices only.', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['excluded', 'lump sum']),
@@ -157,6 +157,7 @@ function extraArchitectureScenarios(): QuoteComparisonArchitectureScenario[] {
     answerScenario('scope exclusions summary', 'Summarize scope exclusions by vendor.', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['scope exclusions']),
     scenario('highlight missing comparable rows', 'Highlight rows that are not comparable across all vendors.', ['quoteComparison.inspectSnapshot', 'quoteComparison.proposeComparableRowHighlights'], ['add-highlight'], ['not comparable']),
     answerScenario('recommend next action', 'What should I ask vendors to clarify next?', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['clarify']),
+    clarificationScenario('level the bid', 'Level this bid and tell me who we should use.', ['quoteComparison.inspectSnapshot', 'quoteComparison.analyzeWork'], ['level', 'lowest price', 'lead time']),
   ]
 }
 
@@ -183,6 +184,7 @@ export class QuoteComparisonArchitectureRuntime implements ProductAgentRuntime {
     record(calls, results, 'quoteComparison.inspectSnapshot', {}, inspect)
 
     if (/\bmake this cleaner\b/.test(lower)) {
+      record(calls, results, 'quoteComparison.analyzeWork', { prompt }, planningAnalysis(snapshot, prompt))
       return {
         status: 'needs_clarification',
         reply: 'I can make this cleaner by proposing a non-destructive plan: normalize headers, format prices, highlight missing values, and add a summary. Which of those should I prepare?',
@@ -192,10 +194,21 @@ export class QuoteComparisonArchitectureRuntime implements ProductAgentRuntime {
       }
     }
     if (/\bpick the best quote\b/.test(lower)) {
+      record(calls, results, 'quoteComparison.analyzeWork', { prompt }, planningAnalysis(snapshot, prompt))
       return {
         status: 'needs_clarification',
         reply: '“Best” is ambiguous. Do you want lowest price, fastest lead time, cleanest scope, or a weighted score?',
         clarification: { question: 'What should “best” optimize for?' },
+        toolCalls: calls,
+        toolResults: results,
+      }
+    }
+    if (/\blevel this bid\b/.test(lower)) {
+      record(calls, results, 'quoteComparison.analyzeWork', { prompt }, planningAnalysis(snapshot, prompt))
+      return {
+        status: 'needs_clarification',
+        reply: 'Bid leveling needs a decision rule before I change the sheet. Should I optimize for lowest price, lead time, clean scope, or a weighted score?',
+        clarification: { question: 'What should bid leveling optimize for?' },
         toolCalls: calls,
         toolResults: results,
       }
@@ -339,6 +352,22 @@ function inspectSnapshot(snapshot: Snapshot) {
     columns: snapshot.columns.map((column) => column.label),
     rowCount: snapshot.rows.length,
     vendors: snapshot.vendors.map((vendor) => vendor.name),
+  }
+}
+
+function planningAnalysis(snapshot: Snapshot, prompt: string) {
+  return {
+    action: 'quote-comparison-work-analysis',
+    complexity: 'needs-planning',
+    ambiguity: 'material-choice',
+    suggestedNextStep: 'Ask one concise clarification before proposing material sheet edits.',
+    recommendedToolFamilies: ['quoteComparison.answerSheetQuestion', 'quoteComparison.proposeDerivedColumns', 'quoteComparison.proposeHighlights', 'quoteComparison.proposeCellEdits'],
+    sheetSignals: {
+      rowCount: snapshot.rows.length,
+      columnCount: snapshot.columns.length,
+      vendorColumnCount: snapshot.columns.filter((column) => column.vendorId).length,
+    },
+    prompt,
   }
 }
 
