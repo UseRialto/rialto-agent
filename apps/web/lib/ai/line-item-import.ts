@@ -138,15 +138,33 @@ function normalizeHeader(value: string) {
 function countDelimiters(line: string, delimiter: string) {
   let count = 0
   let inQuotes = false
+  let atFieldStart = true
   for (let i = 0; i < line.length; i += 1) {
     const char = line[i]
     const next = line[i + 1]
     if (char === '"' && inQuotes && next === '"') {
       i += 1
+      atFieldStart = false
       continue
     }
-    if (char === '"') inQuotes = !inQuotes
-    if (!inQuotes && char === delimiter) count += 1
+    if (char === '"' && inQuotes) {
+      inQuotes = false
+      atFieldStart = false
+      continue
+    }
+    // Only enter quoted mode when the quote appears at the start of a field.
+    // Mid-field quotes (e.g. 3/4" conduit) are treated as literal characters.
+    if (char === '"' && atFieldStart) {
+      inQuotes = true
+      atFieldStart = false
+      continue
+    }
+    if (!inQuotes && char === delimiter) {
+      count += 1
+      atFieldStart = true
+      continue
+    }
+    atFieldStart = false
   }
   return count
 }
@@ -165,24 +183,36 @@ function parseDelimitedLine(line: string, delimiter: string) {
   const cells: string[] = []
   let current = ''
   let inQuotes = false
+  let atFieldStart = true
   for (let i = 0; i < line.length; i += 1) {
     const char = line[i]
     const next = line[i + 1]
     if (char === '"' && inQuotes && next === '"') {
       current += '"'
       i += 1
+      atFieldStart = false
       continue
     }
-    if (char === '"') {
-      inQuotes = !inQuotes
+    if (char === '"' && inQuotes) {
+      inQuotes = false
+      atFieldStart = false
+      continue
+    }
+    // Only enter quoted mode when the quote appears at the start of a field.
+    // Mid-field quotes (e.g. 3/4" conduit) are treated as literal characters.
+    if (char === '"' && atFieldStart) {
+      inQuotes = true
+      atFieldStart = false
       continue
     }
     if (!inQuotes && char === delimiter) {
       cells.push(current.trim())
       current = ''
+      atFieldStart = true
       continue
     }
     current += char
+    atFieldStart = false
   }
   cells.push(current.trim())
   return cells
