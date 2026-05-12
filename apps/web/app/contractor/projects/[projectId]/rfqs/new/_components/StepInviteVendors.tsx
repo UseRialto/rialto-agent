@@ -452,20 +452,22 @@ export function StepInviteVendors({
           </div>
         ) : (
           <>
-            <div className="mb-2 flex items-center gap-2">
-              <span className="text-[11px]" style={{ color: '#8a9e96' }}>Insert token:</span>
-              <button
-                type="button"
-                onClick={() => emailEditorRef.current?.insertFirstNameChip()}
-                className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition-opacity hover:opacity-70"
-                style={{ borderColor: '#fdc89a', background: '#fff3eb', color: '#fa6b04' }}
-              >
-                <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM2 14s-1 0-1-1 1-4 7-4 7 3 7 4-1 1-1 1H2Z" />
-                </svg>
-                First Name
-              </button>
-            </div>
+            {!emailBody.includes('{{vendor_first_name}}') && (
+              <div className="mb-2 flex items-center gap-2">
+                <span className="text-[11px]" style={{ color: '#8a9e96' }}>Insert token:</span>
+                <button
+                  type="button"
+                  onClick={() => emailEditorRef.current?.insertFirstNameChip()}
+                  className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition-opacity hover:opacity-70"
+                  style={{ borderColor: '#fdc89a', background: '#fff3eb', color: '#fa6b04' }}
+                >
+                  <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM2 14s-1 0-1-1 1-4 7-4 7 3 7 4-1 1-1 1H2Z" />
+                  </svg>
+                  First Name
+                </button>
+              </div>
+            )}
             <div className="rounded-xl px-6 py-5" style={{ border: '1px solid #e2d9cf', background: '#ede8e2' }}>
               <EditableEmailBody ref={emailEditorRef} value={emailBody} onChange={onEmailBodyChange} initKey={initKey} />
             </div>
