@@ -84,7 +84,7 @@ export function PDFPreview({ documentBytes }: Props) {
 
   if (loading) {
     return (
-      <div className="flex h-[28rem] items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50 text-sm text-gray-500">
+      <div className="flex h-72 items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50 text-sm text-gray-500">
         Rendering PDF pages…
       </div>
     )
@@ -100,31 +100,38 @@ export function PDFPreview({ documentBytes }: Props) {
 
   if (pages.length === 0) {
     return (
-      <div className="flex h-[28rem] items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50 text-sm text-gray-500">
+      <div className="flex h-72 items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50 text-sm text-gray-500">
         Add at least one line item to generate a preview.
       </div>
     )
   }
 
   return (
-    <div className="space-y-4">
-      <p className="text-xs font-medium text-gray-500">
-        {pages.length} page{pages.length === 1 ? '' : 's'} rendered from the live request PDF
-      </p>
-      {pages.map((page) => (
-        <div
-          key={page.pageNumber}
-          className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm"
-        >
-          <img
-            src={page.dataUrl}
-            alt={`Request PDF page ${page.pageNumber}`}
-            width={page.width}
-            height={page.height}
-            className="h-auto w-full"
-          />
+    <div className="overflow-hidden rounded-xl border border-gray-200 bg-gray-100">
+      <div className="flex items-center justify-between border-b border-gray-200 bg-white px-3 py-2">
+        <p className="text-xs font-medium text-gray-500">
+          {pages.length} page{pages.length === 1 ? '' : 's'} rendered from the live request PDF
+        </p>
+        <span className="text-[11px] font-medium text-gray-400">Scroll preview</span>
+      </div>
+      <div className="h-80 overflow-y-auto px-4 py-3">
+        <div className="mx-auto max-w-md space-y-3">
+          {pages.map((page) => (
+            <div
+              key={page.pageNumber}
+              className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm"
+            >
+              <img
+                src={page.dataUrl}
+                alt={`Request PDF page ${page.pageNumber}`}
+                width={page.width}
+                height={page.height}
+                className="h-auto w-full"
+              />
+            </div>
+          ))}
         </div>
-      ))}
+      </div>
     </div>
   )
 }

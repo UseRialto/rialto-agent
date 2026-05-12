@@ -1,7 +1,7 @@
 'use client'
 
 import { useActionState, useEffect, useMemo, useState } from 'react'
-import { Bot, Check, Paperclip, Send } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bot, Check, Paperclip, Plus, Send, X } from 'lucide-react'
 import {
   saveContractorOnboardingAction,
   skipContractorOnboardingAction,
@@ -11,6 +11,9 @@ import {
   CONTRACTOR_CUSTOMIZATION_VERSION,
   DEFAULT_RFQ_CREATION_FIELD_VISIBILITY_SETTINGS,
   inferRFQCreationFieldVisibilityChanges,
+  isCoreLineItemFieldLike,
+  makeFieldDefinition,
+  normalizeFieldKey,
   sanitizeLineItemFields,
   sanitizeVendorResponseFields,
   type ContractorCustomizationSettings,
@@ -63,6 +66,22 @@ function exampleFieldValue(field: CustomLineItemFieldDefinition, rowIndex: numbe
   return '...'
 }
 
+function titleCaseColumnLabel(value: string) {
+  const acronyms = new Set(['sku', 'rfq', 'uom', 'hvac', 'mep', 'astm', 'ul', 'psi', 'pdf', 'csv', 'bom'])
+  return value
+    .replace(/[_/-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .map((word) => {
+      const lower = word.toLowerCase()
+      if (acronyms.has(lower)) return lower.toUpperCase()
+      if (/^[A-Z0-9]+$/.test(word) && /[A-Z]/.test(word)) return word
+      return lower.replace(/[a-z]/, (letter) => letter.toUpperCase())
+    })
+    .join(' ')
+}
+
 export function ContractorOnboardingForm({
   initialCompanyName,
   initialTrade,
@@ -79,6 +98,7 @@ export function ContractorOnboardingForm({
   const [template, setTemplate] = useState<ContractorCustomizationSettings>(() => emptyTemplate(initialTrade))
   const [inferError, setInferError] = useState('')
   const [aiDraft, setAiDraft] = useState('')
+  const [newColumnLabel, setNewColumnLabel] = useState('')
   const [isAiThinking, setIsAiThinking] = useState(false)
   const [hasTemplateSource, setHasTemplateSource] = useState(false)
 
@@ -113,6 +133,51 @@ export function ContractorOnboardingForm({
 
   function goNext() {
     if (accountType === 'subcontractor' && step === 0) setStep(1)
+  }
+
+  function updateLineItemFields(nextFields: CustomLineItemFieldDefinition[]) {
+    setTemplate((current) => ({
+      ...current,
+      trade: trade || current.trade,
+      lineItemFields: sanitizeLineItemFields(nextFields).map((field, index) => ({ ...field, order: index })),
+      inferenceSource: 'user',
+      updatedAt: new Date().toISOString(),
+    }))
+    setHasTemplateSource(true)
+  }
+
+  function moveLineItemField(key: string, direction: -1 | 1) {
+    const fields = [...template.lineItemFields]
+    const index = fields.findIndex((field) => field.key === key)
+    const targetIndex = index + direction
+    if (index < 0 || targetIndex < 0 || targetIndex >= fields.length) return
+    const [field] = fields.splice(index, 1)
+    fields.splice(targetIndex, 0, field)
+    updateLineItemFields(fields)
+  }
+
+  function removeLineItemField(key: string) {
+    updateLineItemFields(template.lineItemFields.filter((field) => field.key !== key))
+  }
+
+  function addLineItemField() {
+    const label = titleCaseColumnLabel(newColumnLabel)
+    if (!label) return
+    const key = normalizeFieldKey(label)
+    if (isCoreLineItemFieldLike(key) || template.lineItemFields.some((field) => field.key === key)) {
+      setInferError('That column already exists in the spreadsheet.')
+      return
+    }
+    updateLineItemFields([
+      ...template.lineItemFields,
+      makeFieldDefinition(label, template.lineItemFields.length, 'user', {
+        key,
+        label,
+        group: 'From onboarding setup',
+      }),
+    ])
+    setNewColumnLabel('')
+    setInferError('')
   }
 
   async function inferTemplate(file?: File) {
@@ -215,6 +280,93 @@ export function ContractorOnboardingForm({
         <input type="hidden" name="request_style" value={aiDraft} />
         <input type="hidden" name="template_json" value={JSON.stringify(activeTemplate)} />
       </>
+    )
+  }
+
+  function ColumnCustomizationControls() {
+    const editableFields = hasTemplateSource ? template.lineItemFields : []
+    return (
+      <div className="mx-auto max-w-5xl rounded-2xl border bg-white px-4 py-3" style={{ borderColor: '#e2d9cf' }}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.14em]" style={{ color: '#4a6358' }}>Customize columns</p>
+            <p className="mt-1 text-xs" style={{ color: '#8a9e96' }}>Move, remove, or add the columns you want vendors to see on future requests.</p>
+          </div>
+          <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+            <input
+              value={newColumnLabel}
+              onChange={(event) => setNewColumnLabel(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  addLineItemField()
+                }
+              }}
+              className="min-w-0 rounded-xl px-3 py-2 text-sm outline-none"
+              style={{ background: '#f5f0eb', border: '1px solid #e2d9cf', color: '#1e3a2f' }}
+              placeholder="Add column..."
+            />
+            <button
+              type="button"
+              onClick={addLineItemField}
+              disabled={!newColumnLabel.trim()}
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold text-white transition-opacity disabled:opacity-45"
+              style={{ background: '#2d6a4f' }}
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              Add
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          {editableFields.length > 0 ? editableFields.map((field, index) => (
+            <div
+              key={field.key}
+              className="inline-flex max-w-full items-center gap-1.5 rounded-full py-1 pl-3 pr-1.5 text-xs font-semibold"
+              style={{ background: '#f5f0eb', border: '1px solid #e2d9cf', color: '#1e3a2f' }}
+            >
+              <span className="max-w-[12rem] truncate">{field.label}</span>
+              <button
+                type="button"
+                onClick={() => moveLineItemField(field.key, -1)}
+                disabled={index === 0}
+                className="flex h-6 w-6 items-center justify-center rounded-full transition-colors disabled:opacity-30"
+                style={{ color: '#4a6358' }}
+                title={`Move ${field.label} left`}
+                aria-label={`Move ${field.label} left`}
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => moveLineItemField(field.key, 1)}
+                disabled={index === editableFields.length - 1}
+                className="flex h-6 w-6 items-center justify-center rounded-full transition-colors disabled:opacity-30"
+                style={{ color: '#4a6358' }}
+                title={`Move ${field.label} right`}
+                aria-label={`Move ${field.label} right`}
+              >
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => removeLineItemField(field.key)}
+                className="flex h-6 w-6 items-center justify-center rounded-full transition-colors"
+                style={{ color: '#8f3d22' }}
+                title={`Remove ${field.label}`}
+                aria-label={`Remove ${field.label}`}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )) : (
+            <span className="rounded-full px-3 py-1.5 text-xs font-semibold" style={{ background: '#f5f0eb', border: '1px solid #e2d9cf', color: '#8a9e96' }}>
+              Upload a file or add your first custom column.
+            </span>
+          )}
+        </div>
+      </div>
     )
   }
 
@@ -367,6 +519,8 @@ export function ContractorOnboardingForm({
                     </div>
                   </div>
                 </div>
+
+                <ColumnCustomizationControls />
 
                 <div className="relative mx-auto flex max-w-5xl items-center">
                   <div className="absolute inset-y-0 left-[3.75rem] right-0 rounded-full border bg-white shadow-xl" style={{ borderColor: '#e2d9cf' }} />

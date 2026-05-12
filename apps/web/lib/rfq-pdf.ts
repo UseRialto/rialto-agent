@@ -2,7 +2,7 @@ import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf
 import { findUserById } from '@/lib/auth/users'
 import { getRFQById, getProject } from '@/lib/store/contractor-store'
 import type { ContractorRFQLineItem } from '@/lib/types/contractor'
-import type { RFPDetails, RequestType } from '@/lib/types/procurement'
+import type { CommodityWatch, ProcurementRequirement, RFPDetails, RequestType } from '@/lib/types/procurement'
 
 const MARGIN = 42
 const PAGE_W = 612
@@ -32,6 +32,9 @@ type RFQPdfData = {
   bidDeadline?: string
   publishedAt?: string
   rfpDetails?: RFPDetails
+  attachmentUrls?: string[]
+  procurementRequirements?: ProcurementRequirement[]
+  commodityWatch?: CommodityWatch[]
   lineItems: ContractorRFQLineItem[]
 }
 
@@ -239,8 +242,10 @@ function itemDetailLines(item: ContractorRFQLineItem, font: PDFFont) {
     .join('; ')
   if (customFields) lines.push(...wrapText(`Fields: ${customFields}`, font, 7.2, 136))
   if (item.specs?.trim()) lines.push(...wrapText(`Specs: ${item.specs.trim()}`, font, 7.2, 136))
+  if (item.constraints?.trim()) lines.push(...wrapText(`Constraints: ${item.constraints.trim()}`, font, 7.2, 136))
   if (item.certifications?.length) lines.push(...wrapText(`Certs: ${item.certifications.join(', ')}`, font, 7.2, 136))
   if (item.notes?.trim()) lines.push(...wrapText(`Notes: ${item.notes.trim()}`, font, 7.2, 136))
+  if (item.suggested_lead_time_days != null) lines.push(...wrapText(`Target lead time: ${item.suggested_lead_time_days} days`, font, 7.2, 136))
   return lines.slice(0, 8)
 }
 
@@ -322,11 +327,19 @@ function drawRfpBriefSection(ctx: PdfContext, page: PDFPage, y: number, details?
   const rows = [
     ['Objective', details.procurement_objective],
     ['Scope', details.scope_summary],
+    ['Desired Outcome', details.desired_outcome],
     ['Performance', details.performance_requirements],
     ['Alternates', details.approved_alternates],
+    ['Quantity / Budget', details.quantity_context],
+    ['Site Conditions', details.site_conditions],
+    ['Delivery ZIP', details.delivery_zip],
     ['Logistics', details.delivery_logistics],
     ['Delivery Window', details.delivery_window],
+    ['Phased Delivery', details.phased_delivery],
     ['Submittals', details.submittals_required],
+    ['Lead Time Sensitivity', details.lead_time_sensitivity],
+    ['Exclusions', details.exclusions],
+    ['Unknowns / Questions', details.unknowns_or_questions],
     ['Vendor Questions', details.vendor_questions_requested],
     ['Vendor Guidance', details.vendor_guidance_requested],
     ['Attachments Summary', details.attachments_summary],
@@ -350,28 +363,39 @@ function drawRfpBriefSection(ctx: PdfContext, page: PDFPage, y: number, details?
   return y - 6
 }
 
-function drawVendorResponseSection(ctx: PdfContext, page: PDFPage, y: number) {
-  const { drawText, drawLine, drawRect } = makeDrawers(page)
-  drawRect(MARGIN, y - 18, CONTENT_W, 18, { fill: rgb(0.93, 0.95, 0.98) })
-  drawText('VENDOR RESPONSE', MARGIN + 6, y - 12, {
-    font: ctx.fontBold,
-    size: 9,
-    color: rgb(0.16, 0.2, 0.28),
-  })
+function attachmentLabel(url: string) {
+  const filename = url.split('/').pop() ?? url
+  return decodeURIComponent(filename).replace(/^\d+-/, '')
+}
 
-  let fieldY = y - 34
-  for (const field of ['Company Name', 'Contact Name', 'Phone', 'Email', 'Quoted Lead Time', 'Signature / Date']) {
-    drawText(`${field}:`, MARGIN, fieldY, { font: ctx.fontBold, size: 8.5, color: rgb(0.28, 0.28, 0.28) })
-    drawLine(MARGIN + 118, fieldY - 1, PAGE_W - MARGIN, fieldY - 1, { color: rgb(0.42, 0.42, 0.42) })
-    fieldY -= 22
+function drawContextSection(ctx: PdfContext, page: PDFPage, y: number, data: RFQPdfData) {
+  const rows: [string, string][] = [
+    ...(data.procurementRequirements ?? []).map((requirement): [string, string] => [
+      'Supplier Requirement',
+      `${requirement.label}${requirement.note ? ` - ${requirement.note}` : ''}`,
+    ]),
+    ...(data.commodityWatch ?? []).map((watch): [string, string] => [
+      'Commodity Watch',
+      `${watch.category} (${watch.risk_level}): ${watch.summary}`,
+    ]),
+    ...(data.attachmentUrls ?? []).map((url): [string, string] => ['Reference File', attachmentLabel(url)]),
+  ]
+
+  if (rows.length === 0) return y
+
+  const { drawRect, drawText } = makeDrawers(page)
+  drawRect(MARGIN, y - 18, CONTENT_W, 18, { fill: rgb(0.94, 0.94, 0.94) })
+  drawText('REQUEST CONTEXT', MARGIN + 6, y - 12, { font: ctx.fontBold, size: 8.5 })
+  y -= 28
+
+  for (const [label, value] of rows) {
+    for (const line of wrapText(`${label}: ${value}`, ctx.fontReg, 8, CONTENT_W - 8)) {
+      drawText(line, MARGIN + 4, y, { font: ctx.fontReg, size: 8, color: rgb(0.3, 0.3, 0.3) })
+      y -= 11
+    }
   }
 
-  drawText('Notes / exceptions:', MARGIN, fieldY, { font: ctx.fontBold, size: 8.5, color: rgb(0.28, 0.28, 0.28) })
-  fieldY -= 8
-  for (let i = 0; i < 4; i += 1) {
-    drawLine(MARGIN, fieldY, PAGE_W - MARGIN, fieldY, { color: rgb(0.42, 0.42, 0.42) })
-    fieldY -= 16
-  }
+  return y - 6
 }
 
 async function buildRFQPdfBytesForData(data: RFQPdfData): Promise<Buffer> {
@@ -387,6 +411,8 @@ async function buildRFQPdfBytesForData(data: RFQPdfData): Promise<Buffer> {
   if (data.requestType === 'rfp') {
     y = drawRfpBriefSection(ctx, page, y, data.rfpDetails)
   }
+
+  y = drawContextSection(ctx, page, y, data)
 
   const summaryLines = [
     ...new Set(
@@ -435,16 +461,6 @@ async function buildRFQPdfBytesForData(data: RFQPdfData): Promise<Buffer> {
     y -= usedHeight
   }
 
-  y -= 10
-
-  const responseBlockHeight = 170
-  if (y - responseBlockHeight < MARGIN + FOOTER_H) {
-    pageState = drawHeader(ctx, data, 'Vendor Response', false)
-    page = pageState.page
-    y = pageState.y
-  }
-  drawVendorResponseSection(ctx, page, y)
-
   drawFooter(ctx, data)
   return Buffer.from(await pdfDoc.save())
 }
@@ -468,6 +484,9 @@ export async function buildRFQPdfBytes(rfqId: string): Promise<Buffer> {
     bidDeadline: rfq.bid_deadline,
     publishedAt: rfq.published_at,
     rfpDetails: rfq.rfp_details,
+    attachmentUrls: rfq.attachment_urls,
+    procurementRequirements: rfq.procurement_requirements,
+    commodityWatch: rfq.commodity_watch,
     lineItems: rfq.line_items,
   })
 }
@@ -480,6 +499,9 @@ export async function buildRFQPreviewPdfBytes(input: {
   contractorName?: string
   requestType?: RequestType
   rfpDetails?: RFPDetails
+  attachmentUrls?: string[]
+  procurementRequirements?: ProcurementRequirement[]
+  commodityWatch?: CommodityWatch[]
   title: string
   bidDeadline?: string
   lineItems: ContractorRFQLineItem[]
@@ -495,6 +517,9 @@ export async function buildRFQPreviewPdfBytes(input: {
     status: input.rfqId ? 'draft' : 'preview',
     bidDeadline: input.bidDeadline,
     rfpDetails: input.rfpDetails,
+    attachmentUrls: input.attachmentUrls,
+    procurementRequirements: input.procurementRequirements,
+    commodityWatch: input.commodityWatch,
     lineItems: input.lineItems,
   })
 }

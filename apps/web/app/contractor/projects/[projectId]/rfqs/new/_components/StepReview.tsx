@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { buildMagicFormPreviewUrl } from '@/lib/mail/rfq-email-draft'
 import { MagicRFQFormClient } from '@/app/vendor/magic-rfq/[token]/_components/MagicRFQFormClient'
 import type { ContractorRFQ } from '@/lib/types/contractor'
-import type { ItemRow } from './StepItems'
+import type { ItemRow, RFQCreationFieldVisibility } from './StepItems'
 import type { VendorInvite } from './StepInviteVendors'
 import { PDFPreview } from './PDFPreview'
 import type { CommodityWatch, ProcurementRequirement, RequestType, RFPDetails } from '@/lib/types/procurement'
@@ -26,6 +26,7 @@ interface Props {
   procurementRequirements: ProcurementRequirement[]
   commodityWatch: CommodityWatch[]
   rfpDetails: RFPDetails
+  fieldVisibility: RFQCreationFieldVisibility
   items: ItemRow[]
   invites: VendorInvite[]
   emailSubject: string
@@ -50,6 +51,7 @@ export function StepReview({
   procurementRequirements,
   commodityWatch,
   rfpDetails,
+  fieldVisibility,
   items,
   invites,
   emailSubject,
@@ -104,6 +106,98 @@ export function StepReview({
     return decodeURIComponent(filename).replace(/^\d+-/, '')
   }
 
+  function formatCellValue(value: string | number | string[] | null | undefined) {
+    if (Array.isArray(value)) return value.filter(Boolean).join(', ') || '-'
+    if (value === null || value === undefined || value === '') return '-'
+    return String(value)
+  }
+
+  const attributeColumns = items
+    .flatMap((item) => item.attributes ?? [])
+    .filter((attribute) => attribute.visible !== false && attribute.label)
+    .filter((attribute, index, attributes) => attributes.findIndex((candidate) => candidate.key === attribute.key) === index)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+
+  const expandedLineItemColumns = [
+    {
+      key: 'sku',
+      label: 'SKU',
+      minWidth: '10rem',
+      getValue: (item: ItemRow) => item.sku,
+      className: 'font-mono text-xs',
+    },
+    ...(fieldVisibility.description ? [{
+      key: 'description',
+      label: 'Description',
+      minWidth: '20rem',
+      getValue: (item: ItemRow) => item.description,
+      className: 'text-sm',
+    }] : []),
+    ...(fieldVisibility.quantity ? [{
+      key: 'quantity',
+      label: 'Qty',
+      minWidth: '5rem',
+      getValue: (item: ItemRow) => item.quantity,
+      className: 'text-right font-semibold',
+    }] : []),
+    ...(fieldVisibility.unit ? [{
+      key: 'unit',
+      label: 'Unit',
+      minWidth: '6rem',
+      getValue: (item: ItemRow) => item.unit,
+      className: '',
+    }] : []),
+    ...attributeColumns.map((attribute) => ({
+      key: `attribute-${attribute.key}`,
+      label: attribute.label,
+      minWidth: '14rem',
+      getValue: (item: ItemRow) => item.attributes?.find((candidate) => candidate.key === attribute.key)?.value,
+      className: 'text-xs',
+    })),
+    ...(fieldVisibility.specifications ? [{
+      key: 'specs',
+      label: 'Specs',
+      minWidth: '22rem',
+      getValue: (item: ItemRow) => item.specs,
+      className: 'text-xs',
+    }] : []),
+    ...(fieldVisibility.constraints ? [{
+      key: 'constraints',
+      label: 'Constraints',
+      minWidth: '18rem',
+      getValue: (item: ItemRow) => item.constraints,
+      className: 'text-xs',
+    }] : []),
+    ...(fieldVisibility.certifications ? [{
+      key: 'certifications',
+      label: 'Certifications',
+      minWidth: '14rem',
+      getValue: (item: ItemRow) => item.certifications,
+      className: 'text-xs',
+    }] : []),
+    ...(fieldVisibility.notes ? [{
+      key: 'notes',
+      label: 'Notes',
+      minWidth: '18rem',
+      getValue: (item: ItemRow) => item.notes,
+      className: 'text-xs',
+    }] : []),
+    ...(fieldVisibility.targetBudget ? [{
+      key: 'budget',
+      label: 'Budget',
+      minWidth: '8rem',
+      getValue: (item: ItemRow) => item.contractor_budget != null ? `$${item.contractor_budget.toLocaleString()}` : '',
+      className: 'text-right font-semibold',
+    }] : []),
+    ...(fieldVisibility.suggestedLeadTime ? [{
+      key: 'leadTime',
+      label: 'Lead Time',
+      minWidth: '8rem',
+      getValue: (item: ItemRow) => item.suggested_lead_time_days != null ? `${item.suggested_lead_time_days} days` : '',
+      className: '',
+    }] : []),
+  ]
+
   function renderEmailPreviewLine(line: string, lineIndex: number) {
     const normalizedLine = line.replaceAll('{{vendor_name}}', '{{vendor_first_name}}')
     const parts = normalizedLine.split('{{vendor_first_name}}')
@@ -147,6 +241,9 @@ export function StepReview({
             projectLocation,
             requestType,
             rfpDetails,
+            attachmentUrls,
+            procurementRequirements,
+            commodityWatch,
             title,
             bidDeadline: bidDeadline || undefined,
             lineItems: items
@@ -194,7 +291,7 @@ export function StepReview({
       active = false
       if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl)
     }
-  }, [bidDeadline, contractorName, items, projectId, projectLocation, projectName, requestType, rfpDetails, rfqId, title])
+  }, [attachmentUrls, bidDeadline, commodityWatch, contractorName, items, procurementRequirements, projectId, projectLocation, projectName, requestType, rfpDetails, rfqId, title])
 
   async function handleSave() {
     setSaving(true)
@@ -251,28 +348,40 @@ export function StepReview({
             </button>
           </div>
           <div className="overflow-hidden rounded-2xl" style={{ background: '#ffffff', border: '1px solid #e2d9cf' }}>
-            <table className="w-full text-sm">
-              <thead className="text-xs font-semibold uppercase tracking-wider" style={{ background: '#ede8e2', color: '#8a9e96' }}>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-max table-fixed text-sm">
+                <colgroup>
+                  {expandedLineItemColumns.map((column) => (
+                    <col key={column.key} style={{ width: column.minWidth }} />
+                  ))}
+                </colgroup>
+                <thead className="text-xs font-semibold uppercase tracking-wider" style={{ background: '#ede8e2', color: '#8a9e96' }}>
                 <tr>
-                  <th className="px-3 py-2 text-left">SKU</th>
-                  <th className="px-3 py-2 text-left">Description</th>
-                  <th className="px-3 py-2 text-right">Qty</th>
-                  <th className="px-3 py-2 text-left">Unit</th>
-                  <th className="px-3 py-2 text-left">Specs</th>
+                  {expandedLineItemColumns.map((column) => (
+                    <th key={column.key} className={`px-3 py-2 text-left ${column.className.includes('text-right') ? 'text-right' : ''}`}>{column.label}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody style={{ borderTop: '1px solid #e2d9cf' }}>
                 {items.map((item, idx) => (
                   <tr key={item._key} style={{ borderTop: idx > 0 ? '1px solid #e2d9cf' : undefined }}>
-                    <td className="px-3 py-2 text-xs" style={{ fontFamily: 'var(--font-dm-mono, monospace)', color: '#4a6358' }}>{item.sku || '-'}</td>
-                    <td className="px-3 py-2" style={{ color: '#4a6358' }}>{item.description || '-'}</td>
-                    <td className="px-3 py-2 text-right" style={{ color: '#1e3a2f' }}>{item.quantity}</td>
-                    <td className="px-3 py-2" style={{ color: '#8a9e96' }}>{item.unit}</td>
-                    <td className="px-3 py-2 text-xs" style={{ color: '#8a9e96' }}>{item.specs || '-'}</td>
+                    {expandedLineItemColumns.map((column) => (
+                      <td
+                        key={`${item._key}-${column.key}`}
+                        className={`px-3 py-3 align-top leading-5 ${column.className}`}
+                        style={{
+                          color: column.key === 'quantity' || column.key === 'budget' ? '#1e3a2f' : '#4a6358',
+                          fontFamily: column.key === 'sku' ? 'var(--font-dm-mono, monospace)' : undefined,
+                        }}
+                      >
+                        <span className="line-clamp-3">{formatCellValue(column.getValue(item))}</span>
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </div>
       </div>
@@ -426,7 +535,7 @@ export function StepReview({
         </div>
 
         {previewLoading ? (
-          <div className="flex h-[28rem] items-center justify-center rounded-xl border-dashed text-sm" style={{ background: '#ede8e2', border: '2px dashed #e2d9cf', color: '#8a9e96' }}>
+          <div className="flex h-72 items-center justify-center rounded-xl border-dashed text-sm" style={{ background: '#ede8e2', border: '2px dashed #e2d9cf', color: '#8a9e96' }}>
             Generating preview…
           </div>
         ) : previewError ? (

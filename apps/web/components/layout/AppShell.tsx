@@ -19,7 +19,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex flex-1 flex-col overflow-hidden">
         <header className="relative z-50 flex h-16 items-center px-6 backdrop-blur" style={{ background: 'rgba(255,255,255,0.85)', borderBottom: '1px solid #e2d9cf' }}>
           <Link href={isVendor ? '/vendor/projects' : '/contractor/projects'}>
-            <Image src="/Rialto_Full_Logo_CLEAR.png" alt="Rialto" height={36} width={120} className="object-contain" />
+            <Image src="/Rialto_Full_Logo_CLEAR.png" alt="Rialto" height={36} width={185} className="h-9 w-auto object-contain" priority />
           </Link>
           <div className="flex-1" />
           <div className="flex items-center gap-3">
