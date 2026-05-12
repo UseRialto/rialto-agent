@@ -1,6 +1,9 @@
-import { neon } from '@neondatabase/serverless'
+import { neon, neonConfig } from '@neondatabase/serverless'
 import { drizzle } from 'drizzle-orm/neon-http'
 import * as schema from './schema'
+import { createRetryingFetch } from './retrying-fetch'
+
+neonConfig.fetchFunction = createRetryingFetch()
 
 const sql = process.env.DATABASE_URL
   ? neon(process.env.DATABASE_URL)

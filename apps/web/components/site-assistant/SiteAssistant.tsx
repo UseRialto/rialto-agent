@@ -52,8 +52,10 @@ interface AgentToolResult {
 }
 
 interface AgentTurnResponse {
+  status?: string
   reply?: string
   toolResults?: AgentToolResult[]
+  debugTrace?: unknown
   error?: string
 }
 
@@ -86,6 +88,23 @@ function makeId(): string {
 
 function cn(...parts: Array<string | false | undefined>) {
   return parts.filter(Boolean).join(' ')
+}
+
+function agentDebugEnabled() {
+  try {
+    return localStorage.getItem('rialto:agent-debug') === 'true'
+  } catch {
+    return false
+  }
+}
+
+function debugTraceMessage(data: AgentTurnResponse): ChatMessage | null {
+  if (!data.debugTrace) return null
+  return {
+    id: makeId(),
+    role: 'assistant',
+    content: `Agent trace\n${JSON.stringify(data.debugTrace, null, 2)}`,
+  }
 }
 
 export function SiteAssistant({ storageScope }: SiteAssistantProps) {
@@ -313,10 +332,12 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
         body: JSON.stringify({
           messages: nextMessages.map(({ role, content: text }) => ({ role, content: text })),
           currentPage: { path: window.location.pathname, title: document.title },
+          debug: agentDebugEnabled(),
         }),
       })
       const data = await response.json() as AgentTurnResponse
       if (!response.ok) throw new Error(data.error ?? 'The assistant could not respond.')
+      const traceMessage = debugTraceMessage(data)
       setMessages((current) => [
         ...current,
         {
@@ -324,6 +345,7 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
           role: 'assistant',
           content: data.reply ?? 'I could not find an answer from the current workspace context.',
         },
+        ...(traceMessage ? [traceMessage] : []),
       ])
       handleAgentToolResults(data.toolResults)
     } catch (err) {
@@ -350,10 +372,12 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
         body: JSON.stringify({
           messages: allMessages.map(({ role, content: text }) => ({ role, content: text })),
           currentPage: { path: window.location.pathname, title: document.title },
+          debug: agentDebugEnabled(),
         }),
       })
       const data = await response.json() as AgentTurnResponse
       if (!response.ok) throw new Error(data.error ?? 'The assistant could not respond.')
+      const traceMessage = debugTraceMessage(data)
       setMessages((current) => [
         ...current,
         {
@@ -361,6 +385,7 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
           role: 'assistant',
           content: data.reply ?? '',
         },
+        ...(traceMessage ? [traceMessage] : []),
       ])
       handleAgentToolResults(data.toolResults)
     } catch (err) {

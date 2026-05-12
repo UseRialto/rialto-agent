@@ -1,80 +1,23 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  DEFAULT_COMPARISON_SHEET_VIEW,
+  normalizeComparisonSheetView,
+  type ChartConfig,
+  type ChartMetric,
+  type ComparisonHighlight,
+  type ComparisonSheetView,
+  type DerivedColumn,
+  type ManualColumn,
+  type ManualLineItem,
+  type WorkbookVersionSummary,
+} from '@/lib/procurement/comparison-sheet-state'
+import type { WorkbookVersionMetadata } from '@/lib/procurement/comparison-sheet-state'
 
-export type ChartMetric = 'price' | 'lead'
+export type { ChartConfig, ChartMetric, ComparisonHighlight, ComparisonSheetView, DerivedColumn, ManualColumn, ManualLineItem, WorkbookVersionSummary }
 
-export interface ComparisonHighlight {
-  id: string
-  // Either a literal cell reference or a semantic rule the client evaluates.
-  selector:
-    | { kind: 'cell'; rowKey: string; colKey: string }
-    | { kind: 'rule'; rule: 'fastest-lead-per-row' | 'lowest-price-per-row' | 'highest-coverage-overall' }
-  color: string
-  note?: string
-}
-
-export interface DerivedColumn {
-  key: string
-  label: string
-  // Tiny DSL: 'min(vendor.lead_time)', 'min(vendor.unit_price)', 'max(vendor.unit_price)',
-  // 'spread(vendor.unit_price)', 'avg(vendor.unit_price)'.
-  formula: string
-  insertAfterColKey?: string
-}
-
-export interface ManualColumn {
-  key: string
-  label: string
-  insertAfterColKey?: string
-}
-
-export interface ManualLineItem {
-  id: string
-  sku: string
-  description: string
-  quantity: number
-  unit: string
-  insertAfterLineItemId?: string
-}
-
-export interface ChartConfig {
-  slot: 'left' | 'right'
-  metric: ChartMetric
-  title: string
-  // If set, the chart shows data for a single line item only (else "all items").
-  lineItemId?: string | null
-}
-
-export interface ComparisonSheetView {
-  hiddenColumnKeys: string[]
-  hiddenLineItemIds: string[]
-  highlights: ComparisonHighlight[]
-  derivedColumns: DerivedColumn[]
-  manualColumns: ManualColumn[]
-  manualLineItems: ManualLineItem[]
-  cellOverrides: Record<string, string>
-  columnLabelOverrides: Record<string, string>
-  charts: ChartConfig[]
-  columnOrder?: string[]
-  lineItemOrder?: string[]
-  columnWidths?: Record<string, number>
-}
-
-export const DEFAULT_VIEW: ComparisonSheetView = {
-  hiddenColumnKeys: [],
-  hiddenLineItemIds: [],
-  highlights: [],
-  derivedColumns: [],
-  manualColumns: [],
-  manualLineItems: [],
-  cellOverrides: {},
-  columnLabelOverrides: {},
-  charts: [
-    { slot: 'left', metric: 'price', title: 'Total Price' },
-    { slot: 'right', metric: 'lead', title: 'Lead Time' },
-  ],
-}
+export const DEFAULT_VIEW = DEFAULT_COMPARISON_SHEET_VIEW
 
 function storageKey(userKey: string, rfqId: string) {
   return `rialto:comparison-view:${userKey}:${rfqId}`
@@ -82,30 +25,103 @@ function storageKey(userKey: string, rfqId: string) {
 
 export function useComparisonSheetView(userKey: string, rfqId: string) {
   const [view, setView] = useState<ComparisonSheetView>(DEFAULT_VIEW)
+  const [versions, setVersions] = useState<WorkbookVersionSummary[]>([])
   const [hydrated, setHydrated] = useState(false)
+  const pendingVersionMetadataRef = useRef<WorkbookVersionMetadata | null>(null)
+  const saveView = useCallback(async (viewToSave: ComparisonSheetView, metadata: WorkbookVersionMetadata) => {
+    try {
+      window.localStorage.setItem(storageKey(userKey, rfqId), JSON.stringify(viewToSave))
+    } catch {
+      // localStorage may be full or disabled; server persistence is still attempted.
+    }
+    const response = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/comparison-sheet-view`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ view: viewToSave, metadata }),
+    })
+    if (!response.ok) return
+    const body = await response.json() as { createdVersion?: WorkbookVersionSummary }
+    if (body.createdVersion) {
+      setVersions((prev) => [body.createdVersion!, ...prev.filter((version) => version.id !== body.createdVersion!.id)].slice(0, 25))
+    }
+  }, [rfqId, userKey])
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    try {
-      const raw = window.localStorage.getItem(storageKey(userKey, rfqId))
-      if (raw) {
-        const parsed = JSON.parse(raw) as Partial<ComparisonSheetView>
-        setView({ ...DEFAULT_VIEW, ...parsed })
+    let cancelled = false
+    async function hydrate() {
+      let localView = DEFAULT_VIEW
+      if (typeof window !== 'undefined') {
+        try {
+          const raw = window.localStorage.getItem(storageKey(userKey, rfqId))
+          if (raw) localView = normalizeComparisonSheetView(JSON.parse(raw))
+        } catch {
+          // ignore corrupt cache
+        }
       }
-    } catch {
-      // ignore corrupt cache
+
+      try {
+        const response = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/comparison-sheet-view`, { cache: 'no-store' })
+        if (response.ok) {
+          const body = await response.json() as { view?: unknown; persisted?: boolean; versions?: WorkbookVersionSummary[] }
+          if (!cancelled) setView(body.persisted ? normalizeComparisonSheetView(body.view) : localView)
+          if (!cancelled && Array.isArray(body.versions)) setVersions(body.versions)
+        } else if (!cancelled) {
+          setView(localView)
+        }
+      } catch {
+        if (!cancelled) setView(localView)
+      } finally {
+        if (!cancelled) setHydrated(true)
+      }
     }
-    setHydrated(true)
+    hydrate()
+    return () => {
+      cancelled = true
+    }
   }, [userKey, rfqId])
 
   useEffect(() => {
-    if (!hydrated || typeof window === 'undefined') return
+    if (!hydrated) return
     try {
       window.localStorage.setItem(storageKey(userKey, rfqId), JSON.stringify(view))
     } catch {
-      // localStorage may be full or disabled — silent fail is fine
+      // localStorage may be full or disabled; server persistence is still attempted.
     }
-  }, [view, userKey, rfqId, hydrated])
+
+    const timeout = window.setTimeout(() => {
+      saveView(view, pendingVersionMetadataRef.current ?? { source: 'estimator-edit' }).catch(() => {
+        // The local cache keeps the current browser usable if the save fails.
+      }).finally(() => {
+        pendingVersionMetadataRef.current = null
+      })
+    }, 300)
+    return () => window.clearTimeout(timeout)
+  }, [view, userKey, rfqId, hydrated, saveView])
+
+  const markNextSave = useCallback((metadata: WorkbookVersionMetadata) => {
+    pendingVersionMetadataRef.current = metadata
+  }, [])
+
+  const replaceView = useCallback((nextView: ComparisonSheetView, metadata: WorkbookVersionMetadata) => {
+    const normalized = normalizeComparisonSheetView(nextView)
+    pendingVersionMetadataRef.current = null
+    setView(normalized)
+    void saveView(normalized, metadata)
+  }, [saveView])
+
+  const restoreVersion = useCallback(async (versionId: number) => {
+    const response = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/comparison-sheet-view`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ restoreVersionId: versionId }),
+    })
+    if (!response.ok) throw new Error('Could not restore workbook version.')
+    const body = await response.json() as { view?: unknown; createdVersion?: WorkbookVersionSummary }
+    setView(normalizeComparisonSheetView(body.view))
+    if (body.createdVersion) {
+      setVersions((prev) => [body.createdVersion!, ...prev.filter((version) => version.id !== body.createdVersion!.id)].slice(0, 25))
+    }
+  }, [rfqId])
 
   const merge = useCallback((patch: Partial<ComparisonSheetView>) => {
     setView((prev) => ({ ...prev, ...patch }))
@@ -115,12 +131,28 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
     setView((prev) => ({ ...prev, hiddenColumnKeys: Array.from(new Set([...prev.hiddenColumnKeys, ...keys])) }))
   }, [])
 
+  const deleteColumns = useCallback((keys: string[]) => {
+    setView((prev) => ({
+      ...prev,
+      deletedColumnKeys: Array.from(new Set([...(prev.deletedColumnKeys ?? []), ...keys])),
+      hiddenColumnKeys: prev.hiddenColumnKeys.filter((key) => !keys.includes(key)),
+    }))
+  }, [])
+
   const showColumns = useCallback((keys: string[]) => {
     setView((prev) => ({ ...prev, hiddenColumnKeys: prev.hiddenColumnKeys.filter((k) => !keys.includes(k)) }))
   }, [])
 
   const hideLineItems = useCallback((ids: string[]) => {
     setView((prev) => ({ ...prev, hiddenLineItemIds: Array.from(new Set([...prev.hiddenLineItemIds, ...ids])) }))
+  }, [])
+
+  const deleteLineItems = useCallback((ids: string[]) => {
+    setView((prev) => ({
+      ...prev,
+      deletedLineItemIds: Array.from(new Set([...(prev.deletedLineItemIds ?? []), ...ids])),
+      hiddenLineItemIds: prev.hiddenLineItemIds.filter((id) => !ids.includes(id)),
+    }))
   }, [])
 
   const showLineItems = useCallback((ids: string[]) => {
@@ -194,10 +226,14 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
 
   return {
     view,
+    versions,
     hydrated,
     merge,
+    replaceView,
+    deleteColumns,
     hideColumns,
     showColumns,
+    deleteLineItems,
     hideLineItems,
     showLineItems,
     addHighlights,
@@ -212,6 +248,8 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
     setCellOverride,
     setColumnLabel,
     setLineItemOrder,
+    markNextSave,
+    restoreVersion,
     reset,
   }
 }
@@ -219,6 +257,7 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
 // AI patch shape returned by /api/bid-comparison/ai-propose
 export interface ComparisonViewPatch {
   summary: string
+  agentProposal?: unknown
   deleteColumnKeys?: string[]
   hideColumnKeys?: string[]
   showColumnKeys?: string[]
@@ -243,7 +282,11 @@ export interface ComparisonViewPatch {
 export function applyPatch(view: ComparisonSheetView, patch: ComparisonViewPatch): ComparisonSheetView {
   let next = { ...view }
   if (patch.deleteColumnKeys?.length) {
-    next = { ...next, hiddenColumnKeys: Array.from(new Set([...next.hiddenColumnKeys, ...patch.deleteColumnKeys])) }
+    next = {
+      ...next,
+      deletedColumnKeys: Array.from(new Set([...(next.deletedColumnKeys ?? []), ...patch.deleteColumnKeys])),
+      hiddenColumnKeys: next.hiddenColumnKeys.filter((key) => !patch.deleteColumnKeys!.includes(key)),
+    }
   }
   if (patch.hideColumnKeys?.length) {
     next = { ...next, hiddenColumnKeys: Array.from(new Set([...next.hiddenColumnKeys, ...patch.hideColumnKeys])) }
@@ -252,7 +295,11 @@ export function applyPatch(view: ComparisonSheetView, patch: ComparisonViewPatch
     next = { ...next, hiddenColumnKeys: next.hiddenColumnKeys.filter((k) => !patch.showColumnKeys!.includes(k)) }
   }
   if (patch.deleteLineItemIds?.length) {
-    next = { ...next, hiddenLineItemIds: Array.from(new Set([...next.hiddenLineItemIds, ...patch.deleteLineItemIds])) }
+    next = {
+      ...next,
+      deletedLineItemIds: Array.from(new Set([...(next.deletedLineItemIds ?? []), ...patch.deleteLineItemIds])),
+      hiddenLineItemIds: next.hiddenLineItemIds.filter((id) => !patch.deleteLineItemIds!.includes(id)),
+    }
   }
   if (patch.hideLineItemIds?.length) {
     next = { ...next, hiddenLineItemIds: Array.from(new Set([...next.hiddenLineItemIds, ...patch.hideLineItemIds])) }

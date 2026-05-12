@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { RialtoAgentCore } from './core.js'
-import type { LlmPlanner } from './llm.js'
+import { RialtoAgentCore, type ProductAgentRuntime } from './core.js'
 import { InMemoryUserContextProvider } from '../context/user-context-provider.js'
-import { defaultToolRegistry } from '../tools/registry.js'
 import type { AgentTurnRequest } from '../domain/types.js'
 
 const user = {
@@ -22,47 +20,105 @@ function request(content: string): AgentTurnRequest {
 }
 
 describe('RialtoAgentCore', () => {
-  it('executes visible email draft tools without sending', async () => {
-    const planner: LlmPlanner = {
-      async plan() {
+  it('aggregates Quote Comparison patch fragments into one proposal for the turn', async () => {
+    const runtime: ProductAgentRuntime = {
+      async runTurn() {
         return {
-          reply: 'Draft ready.',
-          toolCalls: [{
-            id: 'call-1',
-            toolId: 'email.draft_vendor_outreach',
-            input: {
-              to: ['vendor@example.com'],
-              subject: 'RFQ: Doors',
-              body: 'Please quote.',
+          status: 'completed',
+          reply: 'I prepared the comparison changes.',
+          plan: ['Find missing lead times.', 'Highlight the affected cells.'],
+          toolCalls: [{ id: 'call-1', toolId: 'quoteComparison.proposeHighlights', input: { rule: 'missing-lead-times' } }],
+          toolResults: [{
+            callId: 'call-1',
+            toolId: 'quoteComparison.proposeHighlights',
+            status: 'ok',
+            summary: 'Prepared highlight patch fragment.',
+            data: {
+              action: 'comparison-patch-fragment',
+              fragment: {
+                summary: 'Highlight missing lead times.',
+                operations: [{
+                  kind: 'add-highlight',
+                  id: 'hl-1',
+                  selector: { kind: 'cell', rowKey: 'line-1', colKey: 'vendor-acme:lead' },
+                  color: 'red',
+                  note: 'Missing lead time.',
+                }],
+                warnings: ['1 missing lead time found.'],
+              },
             },
           }],
         }
       },
     }
-    const core = new RialtoAgentCore(new InMemoryUserContextProvider(), planner, defaultToolRegistry)
-    const response = await core.runTurn(request('draft an email'))
-    expect(response.toolResults[0]?.status).toBe('needs-user-action')
-    expect(response.toolResults[0]?.data).toMatchObject({
-      action: 'show-email-draft',
-      sendPolicy: 'user-must-send',
+    const core = new RialtoAgentCore(new InMemoryUserContextProvider(), runtime)
+
+    const response = await core.runTurn({
+      ...request('highlight missing lead times'),
+      currentPage: { path: '/contractor/quote-comparison', title: 'Quote Comparison' },
+      quoteComparison: {
+        currentView: { hiddenColumnKeys: [] },
+        sheetSchema: { columns: [{ key: 'vendor-acme:lead', label: 'Acme Lead Time' }] },
+      },
+    })
+
+    expect(response).toMatchObject({
+      status: 'completed',
+      reply: 'I prepared the comparison changes.',
+      proposal: {
+        kind: 'comparison-patch-proposal',
+        summary: 'Highlight missing lead times.',
+        approvalMode: 'approve-all-or-discard',
+        operations: [{
+          kind: 'add-highlight',
+          id: 'hl-1',
+          selector: { kind: 'cell', rowKey: 'line-1', colKey: 'vendor-acme:lead' },
+        }],
+        warnings: ['1 missing lead time found.'],
+      },
     })
   })
 
-  it('returns an error result for unknown tools instead of crashing', async () => {
-    const planner: LlmPlanner = {
-      async plan() {
+  it('includes an ephemeral debug trace when requested', async () => {
+    const runtime: ProductAgentRuntime = {
+      async runTurn() {
         return {
-          reply: 'Trying a tool.',
-          toolCalls: [{ id: 'call-1', toolId: 'unknown.tool', input: {} }],
+          status: 'completed',
+          reply: 'Ready.',
+          plan: ['Prepare highlights.'],
+          toolCalls: [{ id: 'call-1', toolId: 'quoteComparison.proposeHighlights', input: {} }],
+          toolResults: [{
+            callId: 'call-1',
+            toolId: 'quoteComparison.proposeHighlights',
+            status: 'ok',
+            summary: 'Prepared fragment.',
+            data: {
+              action: 'comparison-patch-fragment',
+              fragment: {
+                summary: 'Highlight missing lead times.',
+                operations: [{
+                  kind: 'add-highlight',
+                  id: 'hl-1',
+                  selector: { kind: 'cell', rowKey: 'line-1', colKey: 'lead' },
+                  color: 'red',
+                }],
+              },
+            },
+          }],
         }
       },
     }
-    const core = new RialtoAgentCore(new InMemoryUserContextProvider(), planner, defaultToolRegistry)
-    const response = await core.runTurn(request('do something'))
-    expect(response.toolResults[0]).toMatchObject({
-      status: 'error',
-      summary: 'Unknown tool: unknown.tool',
+    const core = new RialtoAgentCore(new InMemoryUserContextProvider(), runtime)
+
+    const response = await core.runTurn({ ...request('highlight missing lead times'), debug: true })
+
+    expect(response.debugTrace).toMatchObject({
+      responseState: 'completed',
+      plan: ['Prepare highlights.'],
+      toolCalls: [{ id: 'call-1' }],
+      toolResults: [{ callId: 'call-1' }],
+      patchFragments: [{ summary: 'Highlight missing lead times.' }],
+      proposal: { kind: 'comparison-patch-proposal' },
     })
   })
 })
-

@@ -38,6 +38,7 @@ export interface ComparisonAgentToolPatch {
 
 export interface ComparisonViewPatch {
   summary: string
+  agentProposal?: unknown
   deleteColumnKeys?: string[]
   hideColumnKeys?: string[]
   showColumnKeys?: string[]
@@ -61,17 +62,67 @@ export interface ComparisonViewPatch {
   filterBlankRowsByColumnKey?: string
 }
 
+export interface ApprovedComparisonPatchVersionMetadata {
+  source: 'agent-proposal'
+  summary: string
+  actorUserId?: string
+  proposal: unknown
+}
+
+export type ComparisonProposalOperation =
+  | { kind: 'set-cell'; rowKey: string; colKey: string; value: string | number | boolean | null }
+  | {
+      kind: 'add-highlight'
+      id: string
+      selector:
+        | { kind: 'cell'; rowKey: string; colKey: string }
+        | { kind: 'rule'; rule: 'fastest-lead-per-row' | 'lowest-price-per-row' | 'highest-coverage-overall' }
+      color: string
+      note?: string
+    }
+  | { kind: 'hide-column' | 'delete-column' | 'show-column'; colKey: string }
+  | { kind: 'hide-row' | 'delete-row' | 'show-row'; rowKey: string }
+  | { kind: 'set-column-label'; colKey: string; label: string }
+  | { kind: 'insert-column'; colKey: string; label: string; afterColKey?: string; beforeColKey?: string }
+  | { kind: 'insert-row'; rowKey: string; afterRowKey?: string; beforeRowKey?: string; initialValues?: Record<string, string | number | boolean | null> }
+  | { kind: 'add-derived-column'; colKey: string; label: string; formula: string; afterColKey?: string; beforeColKey?: string }
+  | { kind: 'sort-rows'; colKey: string; direction: 'asc' | 'desc' }
+  | { kind: 'filter-blank-rows'; colKey: string }
+  | { kind: 'set-selection-state'; rowKey: string; state: string; vendorId?: string; reason?: string }
+
+export interface ComparisonPatchProposal {
+  kind: 'comparison-patch-proposal'
+  summary: string
+  operations: ComparisonProposalOperation[]
+}
+
+const HL_PALETTE = {
+  yellow: '#fef3c7',
+  green: '#bbf7d0',
+  red: '#fecaca',
+  sky: '#bae6fd',
+  violet: '#e9d5ff',
+}
+
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
+function normalizeColumnPhrase(value: string) {
+  return normalize(value)
+    .replace(/\b(this|that|the|a|an)\b/g, ' ')
+    .replace(/\b(coumn|col|cols|column|columns)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function findColumnKey(schema: ComparisonAgentToolSchema, columnId: string) {
-  const target = normalize(columnId)
+  const target = normalizeColumnPhrase(columnId)
   const columns = schema.columns ?? []
-  return columns.find((column) => normalize(column.key) === target)?.key
-    ?? columns.find((column) => normalize(column.label) === target)?.key
-    ?? columns.find((column) => normalize(column.label).includes(target))?.key
-    ?? columns.find((column) => normalize(column.key).includes(target))?.key
+  return columns.find((column) => normalizeColumnPhrase(column.key) === target)?.key
+    ?? columns.find((column) => normalizeColumnPhrase(column.label) === target)?.key
+    ?? columns.find((column) => normalizeColumnPhrase(column.label).includes(target))?.key
+    ?? columns.find((column) => normalizeColumnPhrase(column.key).includes(target))?.key
     ?? columnId
 }
 
@@ -87,6 +138,16 @@ function findLineItemId(schema: ComparisonAgentToolSchema, rowId: string) {
 
 function append<T>(items: T[] | undefined, item: T) {
   return [...(items ?? []), item]
+}
+
+function proposalColor(color: string) {
+  if (/^#[0-9a-fA-F]{6}$/.test(color)) return color
+  if (color === 'green') return HL_PALETTE.green
+  if (color === 'red') return HL_PALETTE.red
+  if (color === 'blue') return HL_PALETTE.sky
+  if (color === 'yellow') return HL_PALETTE.yellow
+  if (color === 'violet' || color === 'purple') return HL_PALETTE.violet
+  return HL_PALETTE.yellow
 }
 
 function parseNumber(value: string | undefined) {
@@ -210,4 +271,89 @@ export function comparisonViewPatchFromAgentToolPatch(
     }
   }
   return patch
+}
+
+export function comparisonViewPatchFromProposal(proposal: ComparisonPatchProposal): ComparisonViewPatch {
+  let patch: ComparisonViewPatch = {
+    summary: proposal.summary || 'Prepared comparison changes.',
+    agentProposal: proposal,
+  }
+  for (const operation of proposal.operations ?? []) {
+    if (operation.kind === 'set-cell') {
+      patch = {
+        ...patch,
+        setCells: append(patch.setCells, {
+          rowKey: operation.rowKey,
+          colKey: operation.colKey,
+          value: operation.value == null ? '' : String(operation.value),
+        }),
+      }
+    } else if (operation.kind === 'add-highlight') {
+      patch = {
+        ...patch,
+        addHighlights: append(patch.addHighlights, {
+          id: operation.id,
+          selector: operation.selector,
+          color: proposalColor(operation.color),
+          note: operation.note,
+        }),
+      }
+    } else if (operation.kind === 'hide-column') patch = { ...patch, hideColumnKeys: append(patch.hideColumnKeys, operation.colKey) }
+    else if (operation.kind === 'delete-column') patch = { ...patch, deleteColumnKeys: append(patch.deleteColumnKeys, operation.colKey) }
+    else if (operation.kind === 'show-column') patch = { ...patch, showColumnKeys: append(patch.showColumnKeys, operation.colKey) }
+    else if (operation.kind === 'hide-row') patch = { ...patch, hideLineItemIds: append(patch.hideLineItemIds, operation.rowKey) }
+    else if (operation.kind === 'delete-row') patch = { ...patch, deleteLineItemIds: append(patch.deleteLineItemIds, operation.rowKey) }
+    else if (operation.kind === 'show-row') patch = { ...patch, showLineItemIds: append(patch.showLineItemIds, operation.rowKey) }
+    else if (operation.kind === 'set-column-label') {
+      patch = { ...patch, setColumnLabels: append(patch.setColumnLabels, { colKey: operation.colKey, label: operation.label }) }
+    } else if (operation.kind === 'insert-column') {
+      patch = {
+        ...patch,
+        addManualColumns: append(patch.addManualColumns, {
+          key: operation.colKey,
+          label: operation.label,
+          insertAfterColKey: operation.afterColKey,
+        }),
+      }
+    } else if (operation.kind === 'insert-row') {
+      patch = {
+        ...patch,
+        addManualLineItems: append(patch.addManualLineItems, {
+          id: operation.rowKey,
+          sku: '',
+          description: '',
+          quantity: 0,
+          unit: '',
+          insertAfterLineItemId: operation.afterRowKey,
+        }),
+      }
+    } else if (operation.kind === 'add-derived-column') {
+      patch = {
+        ...patch,
+        addDerivedColumns: append(patch.addDerivedColumns, {
+          key: operation.colKey,
+          label: operation.label,
+          formula: operation.formula,
+          insertAfterColKey: operation.afterColKey,
+        }),
+      }
+    } else if (operation.kind === 'sort-rows') {
+      patch = { ...patch, sortRowsByColumn: { colKey: operation.colKey, direction: operation.direction } }
+    } else if (operation.kind === 'filter-blank-rows') {
+      patch = { ...patch, filterBlankRowsByColumnKey: operation.colKey }
+    }
+  }
+  return patch
+}
+
+export function workbookVersionMetadataFromApprovedComparisonPatch(
+  patch: ComparisonViewPatch,
+  actorUserId?: string,
+): ApprovedComparisonPatchVersionMetadata {
+  return {
+    source: 'agent-proposal',
+    summary: patch.summary,
+    actorUserId,
+    proposal: patch.agentProposal ?? patch,
+  }
 }

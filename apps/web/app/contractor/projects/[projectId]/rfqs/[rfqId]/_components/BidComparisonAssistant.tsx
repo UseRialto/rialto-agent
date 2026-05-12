@@ -3,6 +3,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import type { ComparisonSheetView, ComparisonViewPatch } from './comparison-sheet-view'
+import type { ComparisonSheetSnapshot } from '@/lib/procurement/comparison-sheet-snapshot'
+import {
+  debugStepsFromAgentResponse,
+  initialAgentProgressSteps,
+  type ComparisonAgentDebugResponse,
+} from '@/lib/procurement/comparison-agent-debug'
 
 interface SheetSchemaColumn {
   key: string
@@ -22,12 +28,22 @@ export interface BidComparisonAssistantProps {
     lineItems: Array<{ id: string; description: string; values?: Record<string, string> }>
     vendors: Array<{ id: string; name: string }>
   }
+  snapshot?: ComparisonSheetSnapshot
   onApply: (patch: ComparisonViewPatch) => void
   onDismiss: () => void
 }
 
 function cn(...parts: Array<string | false | undefined>) {
   return parts.filter(Boolean).join(' ')
+}
+
+function agentDebugEnabled() {
+  try {
+    const stored = localStorage.getItem('rialto:agent-debug')
+    return stored == null ? true : stored === 'true'
+  } catch {
+    return true
+  }
 }
 
 interface PatchChip {
@@ -97,13 +113,17 @@ const TONE_STYLES: Record<PatchChip['tone'], React.CSSProperties> = {
   highlight: { background: '#fef3c7', border: '1px solid #fcd34d', color: '#92400e' },
 }
 
-export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSchema, onApply, onDismiss }: BidComparisonAssistantProps) {
+export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSchema, snapshot, onApply, onDismiss }: BidComparisonAssistantProps) {
   const [draft, setDraft] = useState('')
   const [proposal, setProposal] = useState<ComparisonViewPatch | null>(null)
   const [summary, setSummary] = useState('')
   const [error, setError] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [isApplying, setIsApplying] = useState(false)
+  const [debugMode, setDebugMode] = useState(true)
+  const [debugSteps, setDebugSteps] = useState<string[]>([])
+  const [startedAt, setStartedAt] = useState<number | null>(null)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const applyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
@@ -117,6 +137,21 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
 
   useEffect(() => () => { if (applyTimerRef.current) clearTimeout(applyTimerRef.current) }, [])
 
+  useEffect(() => {
+    setDebugMode(agentDebugEnabled())
+  }, [])
+
+  useEffect(() => {
+    if (!startedAt) {
+      setElapsedSeconds(0)
+      return
+    }
+    const interval = setInterval(() => {
+      setElapsedSeconds(Math.max(0, Math.round((Date.now() - startedAt) / 1000)))
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [startedAt])
+
   if (!isOpen) return null
 
   async function askAssistant() {
@@ -126,20 +161,35 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
     setError('')
     setSummary('')
     setProposal(null)
+    if (debugMode) setDebugSteps(initialAgentProgressSteps(message))
+    setStartedAt(Date.now())
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 90_000)
     try {
       const response = await fetch('/api/bid-comparison/ai-propose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, currentView, sheetSchema }),
+        body: JSON.stringify({ message, currentView, sheetSchema, snapshot, debug: debugMode }),
+        signal: controller.signal,
       })
-      const json = (await response.json()) as { patch?: ComparisonViewPatch; error?: string }
+      const json = (await response.json()) as { patch?: ComparisonViewPatch; error?: string } & ComparisonAgentDebugResponse
+      if (debugMode) {
+        const returnedSteps = debugStepsFromAgentResponse(json)
+        if (returnedSteps.length) setDebugSteps(returnedSteps)
+      }
       if (!response.ok || !json.patch) throw new Error(json.error ?? 'Could not generate a change.')
       setSummary(json.patch.summary)
       setProposal(json.patch)
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not generate a change.')
+      const message = caught instanceof DOMException && caught.name === 'AbortError'
+        ? 'Rialto Agent timed out after 90 seconds before returning a preview.'
+        : caught instanceof Error ? caught.message : 'Could not generate a change.'
+      setError(message)
+      if (debugMode) setDebugSteps((steps) => [...steps, `Error: ${message}`])
     } finally {
+      clearTimeout(timeout)
       setIsSending(false)
+      setStartedAt(null)
     }
   }
 
@@ -257,6 +307,26 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
           </button>
           <button
             type="button"
+            onClick={() => {
+              const next = !debugMode
+              setDebugMode(next)
+              try { localStorage.setItem('rialto:agent-debug', String(next)) } catch {}
+              if (!next) setDebugSteps([])
+            }}
+            className={cn(
+              'relative z-10 ml-1 shrink-0 rounded-full border px-3 py-2 text-xs font-semibold transition',
+              isClosing ? 'animate-[bid-ai-content-hide_160ms_ease-in_forwards]' : 'animate-[bid-ai-content-fade_360ms_ease-out_760ms_both]',
+            )}
+            style={{
+              borderColor: debugMode ? '#fa6b04' : '#d5ded9',
+              color: debugMode ? '#fa6b04' : '#60746b',
+              background: '#ffffff',
+            }}
+          >
+            Debug {debugMode ? 'on' : 'off'}
+          </button>
+          <button
+            type="button"
             onClick={onDismiss}
             className={cn(
               'relative z-10 ml-1 mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition',
@@ -268,6 +338,22 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
             <X className="h-4 w-4" />
           </button>
         </div>
+        {debugMode && (isSending || debugSteps.length > 0) && (
+          <div className="mt-2 rounded-2xl bg-white px-4 py-3 text-xs shadow" style={{ border: '1px solid #e2d9cf', color: '#4a6358' }}>
+            <div className="mb-2 flex items-center justify-between gap-3 font-semibold" style={{ color: '#1e3a2f' }}>
+              <span>Agent debug</span>
+              <span>{isSending ? `working ${elapsedSeconds}s` : 'ready'}</span>
+            </div>
+            <ol className="space-y-1">
+              {debugSteps.map((step, index) => (
+                <li key={`${index}-${step}`} className="flex gap-2">
+                  <span style={{ color: '#fa6b04' }}>{index + 1}.</span>
+                  <span>{step}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
         {error && <p className="mt-2 rounded-full bg-white px-4 py-2 text-xs shadow" style={{ color: '#a85c2a' }}>{error}</p>}
         {summary && !proposal && <p className="mt-2 rounded-full bg-white px-4 py-2 text-xs shadow" style={{ color: '#4a6358' }}>{summary}</p>}
       </section>

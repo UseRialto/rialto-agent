@@ -1,5 +1,5 @@
 export { RialtoAgentCore } from './agent/core.js'
-export { DeterministicPlanner, OpenAIPlanner, defaultPlanner } from './agent/llm.js'
+export { OpenAIAgentsProductRuntime } from './agent/openai-agents-runtime.js'
 export { InMemoryUserContextProvider } from './context/user-context-provider.js'
 export { defaultToolRegistry, ToolRegistry } from './tools/registry.js'
 export type * from './domain/types.js'

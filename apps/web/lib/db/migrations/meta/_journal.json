@@ -85,6 +85,20 @@
       "when": 1778274000000,
       "tag": "0010_user_onboarding_completed",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1778542496202,
+      "tag": "0011_comparison_sheet_views",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1778555200000,
+      "tag": "0012_comparison_sheet_versions",
+      "breakpoints": true
     }
   ]
 }

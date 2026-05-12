@@ -17,13 +17,18 @@ This module owns the External Quote Import and Comparison Sheet path for Rialto 
 - `apps/web/app/contractor/projects/[projectId]/rfqs/[rfqId]/_components/BidDashboard.tsx` renders the Google-Sheets-style Comparison Sheet and exports the visible view as CSV, Excel, or PDF.
 - `apps/web/app/contractor/projects/[projectId]/rfqs/[rfqId]/_components/comparison-sheet-view.ts` owns the browser workbook view state: hidden rows/columns, row order, highlights, derived columns, manual rows/columns, column label overrides, and cell overrides.
 - `src/tools/spreadsheet-edit.ts` is the Quote Comparison Agent Tools schema for backend-callable visible workbook operations. Keep user UI operations and agent operations aligned: cell edits, bulk numeric edits with dependent total recomputation, row/column deletion, row/column hiding and showing, row/column insertion, column rename, sorting, filtering, derived columns, highlights, and sheet rename should all be available as visible patches before persistent automation is added.
+- `src/tools/quote-comparison-agent-tools.ts` owns the testable Quote Comparison agent tool contract used by the OpenAI Agents SDK runtime.
+- `src/agent/quote-comparison-scenario-evals.ts` provides prompt + snapshot scenario evals through the `RialtoAgentCore` seam.
 - `apps/web/lib/procurement/comparison-agent-tools.ts` adapts backend Rialto Agent tool patches into browser `ComparisonViewPatch` objects for preview and apply in the Comparison Sheet.
 - `apps/web/lib/procurement/quote-request.ts`, `vendor-response-intake.ts`, and `quote-comparison.ts` define the workbook handoff and quote comparison evaluation.
 
 ## Test Surface
 
 - `apps/web/lib/procurement/external-quote-import.test.ts` covers the single-vendor client quote import behavior.
-- `apps/web/lib/procurement/comparison-command-fallback.test.ts` covers deterministic fallback parsing for workbook edit commands when the external comparison patch backend is unavailable.
+- `src/tools/quote-comparison-agent-tools.test.ts` covers Quote Comparison agent tool behavior against fixed visible sheet snapshots.
+- `src/agent/quote-comparison-scenario-evals.test.ts` covers the reusable scenario eval harness.
+- `apps/web/lib/procurement/comparison-agent-tools-proposal.test.ts` covers adapting one aggregated Comparison Patch Proposal into the browser overlay patch.
+- `apps/web/lib/procurement/comparison-agent-approval-version.test.ts` covers approved agent proposals becoming durable workbook-version provenance.
 - `apps/web/lib/procurement/quote-workflow.test.ts` covers the Quote Request -> Vendor Response Workbook -> Quote Comparison handoff.
 
 ## Agent Behavior

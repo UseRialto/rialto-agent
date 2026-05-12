@@ -177,6 +177,33 @@ export const rfqLineItems = pgTable('rfq_line_items', {
 })
 
 // ---------------------------------------------------------------------------
+// Comparison Sheet View - live mutable working workbook state
+// ---------------------------------------------------------------------------
+export const comparisonSheetViews = pgTable('comparison_sheet_views', {
+  rfq_id: text('rfq_id').primaryKey().references(() => rfqs.id, { onDelete: 'cascade' }),
+  view_json: text('view_json').notNull().default('{}'),
+  current_version_id: integer('current_version_id'),
+  created_at: text('created_at').notNull(),
+  updated_at: text('updated_at').notNull(),
+})
+
+export const comparisonSheetVersions = pgTable('comparison_sheet_versions', {
+  id: serial('id').primaryKey(),
+  rfq_id: text('rfq_id').notNull().references(() => rfqs.id, { onDelete: 'cascade' }),
+  version_number: integer('version_number').notNull(),
+  parent_version_id: integer('parent_version_id'),
+  view_json: text('view_json').notNull().default('{}'),
+  source: text('source', { enum: ['estimator-edit', 'agent-proposal', 'import', 'vendor-merge', 'restore', 'system'] }).notNull().default('estimator-edit'),
+  summary: text('summary').notNull().default('Saved estimator workbook edit.'),
+  actor_user_id: text('actor_user_id'),
+  proposal_json: text('proposal_json'),
+  created_at: text('created_at').notNull(),
+}, (table) => ({
+  rfqVersionUnique: uniqueIndex('comparison_sheet_versions_rfq_version_unique').on(table.rfq_id, table.version_number),
+  rfqCreatedIdx: index('idx_comparison_sheet_versions_rfq_created').on(table.rfq_id, table.created_at),
+}))
+
+// ---------------------------------------------------------------------------
 // RFQ Invites (vendors explicitly invited to an RFQ)
 // ---------------------------------------------------------------------------
 export const rfqInvites = pgTable('rfq_invites', {

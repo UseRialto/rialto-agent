@@ -7,13 +7,16 @@ import { Columns3, Eraser, FileSpreadsheet, RefreshCw, Rows3 } from 'lucide-reac
 import type { ContractorBid, ContractorRFQ } from '@/lib/types/contractor'
 import type { BidSpecComplianceItem } from '@/lib/types/procurement'
 import { buildLiveQuoteComparisonSummary } from '@/lib/procurement/quote-comparison'
+import { submitComparisonExport, type ComparisonExportFormat } from '@/lib/procurement/comparison-export-client'
+import { workbookVersionMetadataFromApprovedComparisonPatch } from '@/lib/procurement/comparison-agent-tools'
+import { buildComparisonSheetSnapshot } from '@/lib/procurement/comparison-sheet-snapshot'
 import {
   addNegotiationMessageAction,
   createRemainderRFQAction,
   rerunBidSpecComplianceAction,
   updateBidDecisionAction,
 } from '@/lib/actions/contractor'
-import { useComparisonSheetView, type ComparisonViewPatch, type ManualColumn, type ManualLineItem } from './comparison-sheet-view'
+import { applyPatch, useComparisonSheetView, type ComparisonViewPatch, type ManualColumn, type ManualLineItem } from './comparison-sheet-view'
 import { BidComparisonAssistant } from './BidComparisonAssistant'
 
 function fmt(n: number): string {
@@ -1378,7 +1381,7 @@ function vendorCellState(item: ContractorRFQ['line_items'][number], bid: Contrac
 function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRFQ; bids: ContractorBid[]; vendorColors: Record<string, string>; userKey: string }) {
   const baseItems = rfq.line_items
 
-  const { view, hideColumns, showColumns, hideLineItems, showLineItems, addHighlights, removeHighlights, clearHighlights, addDerivedColumns, removeDerivedColumns, setColumnWidth, addManualColumns, addManualLineItems, setCellOverride, setColumnLabel, setLineItemOrder } = useComparisonSheetView(userKey, rfq.id)
+  const { view, versions, replaceView, deleteColumns, hideColumns, showColumns, deleteLineItems, hideLineItems, showLineItems, addHighlights, removeHighlights, clearHighlights, addDerivedColumns, removeDerivedColumns, setColumnWidth, addManualColumns, addManualLineItems, setCellOverride, setColumnLabel, setLineItemOrder, restoreVersion } = useComparisonSheetView(userKey, rfq.id)
 
   const items = useMemo(() => {
     let next = [...baseItems]
@@ -1399,7 +1402,8 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     const cols = buildColumns(rfq, bids, view.derivedColumns, view.manualColumns)
     return cols.map((col) => ({ ...col, label: view.columnLabelOverrides?.[col.key] ?? col.label }))
   }, [rfq, bids, view.derivedColumns, view.manualColumns, view.columnLabelOverrides])
-  const visibleCols = useMemo(() => allCols.filter((c) => !view.hiddenColumnKeys.includes(c.key)), [allCols, view.hiddenColumnKeys])
+  const activeCols = useMemo(() => allCols.filter((c) => !(view.deletedColumnKeys ?? []).includes(c.key)), [allCols, view.deletedColumnKeys])
+  const visibleCols = useMemo(() => activeCols.filter((c) => !view.hiddenColumnKeys.includes(c.key)), [activeCols, view.hiddenColumnKeys])
   const visibleItems = useMemo(() => {
     const ordered = view.lineItemOrder?.length
       ? [
@@ -1407,8 +1411,8 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
           ...items.filter((item) => !view.lineItemOrder!.includes(item.id)),
         ]
       : items
-    return ordered.filter((it) => !view.hiddenLineItemIds.includes(it.id))
-  }, [items, view.hiddenLineItemIds, view.lineItemOrder])
+    return ordered.filter((it) => !(view.deletedLineItemIds ?? []).includes(it.id) && !view.hiddenLineItemIds.includes(it.id))
+  }, [items, view.deletedLineItemIds, view.hiddenLineItemIds, view.lineItemOrder])
   const comparisonSummary = useMemo(() => buildLiveQuoteComparisonSummary(rfq, bids), [rfq, bids])
   const fullQuoteCount = comparisonSummary.fullQuoteCount
   const lowestBid = comparisonSummary.lowestCompleteBid
@@ -1493,6 +1497,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
   const [draftValue, setDraftValue] = useState('')
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; rowKey?: string; colKey?: string } | null>(null)
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const [historyMenuOpen, setHistoryMenuOpen] = useState(false)
   const [rangeStart, setRangeStart] = useState<{ r: number; c: number } | null>(null)
   const [isDraggingRange, setIsDraggingRange] = useState(false)
 
@@ -1555,6 +1560,27 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
 
   function clearCell(rowKey: string | undefined, colKey: string | undefined) {
     if (rowKey && colKey) setCellOverride(rowKey, colKey, '')
+    setContextMenu(null)
+  }
+
+  function deleteContextColumn(colKey: string | undefined) {
+    if (colKey) deleteColumns([colKey])
+    setContextMenu(null)
+  }
+
+  function deleteContextRow(rowKey: string | undefined) {
+    if (rowKey) deleteLineItems([rowKey])
+    setContextMenu(null)
+  }
+
+  function deleteContextCells(rowKey: string | undefined, colKey: string | undefined) {
+    const cells = selectedDataCells()
+    const clickedCellIsSelected = cells.some((cell) => cell.item.id === rowKey && cell.col.key === colKey)
+    if (cells.length > 1 && clickedCellIsSelected) {
+      for (const cell of cells) setCellOverride(cell.item.id, cell.col.key, '')
+    } else if (rowKey && colKey) {
+      setCellOverride(rowKey, colKey, '')
+    }
     setContextMenu(null)
   }
 
@@ -1688,8 +1714,17 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     ]
   }
 
-  function exportViaServer(format: 'csv' | 'xlsx' | 'pdf') {
-    window.location.href = `/api/comparison-export?rfqId=${encodeURIComponent(rfq.id)}&format=${format}`
+  function exportViaServer(format: ComparisonExportFormat) {
+    submitComparisonExport({
+      format,
+      title: rfq.title,
+      rows: exportRows(),
+    })
+  }
+
+  async function restoreWorkbookVersion(versionId: number) {
+    await restoreVersion(versionId)
+    setHistoryMenuOpen(false)
   }
 
   // Layout constants
@@ -1750,6 +1785,13 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     window.addEventListener('click', close)
     return () => window.removeEventListener('click', close)
   }, [exportMenuOpen])
+
+  useEffect(() => {
+    if (!historyMenuOpen) return
+    const close = () => setHistoryMenuOpen(false)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [historyMenuOpen])
 
   useEffect(() => {
     if (!isDraggingRange) return
@@ -1914,28 +1956,34 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
   }
 
   function applyPatchToView(patch: ComparisonViewPatch) {
-    if (patch.deleteColumnKeys?.length) hideColumns(patch.deleteColumnKeys)
-    if (patch.hideColumnKeys?.length) hideColumns(patch.hideColumnKeys)
-    if (patch.showColumnKeys?.length) showColumns(patch.showColumnKeys)
-    if (patch.deleteLineItemIds?.length) hideLineItems(patch.deleteLineItemIds)
-    if (patch.hideLineItemIds?.length) hideLineItems(patch.hideLineItemIds)
-    if (patch.showLineItemIds?.length) showLineItems(patch.showLineItemIds)
-    if (patch.clearHighlights) clearHighlights()
-    if (patch.removeHighlightIds?.length) removeHighlights(patch.removeHighlightIds)
-    if (patch.addHighlights?.length) addHighlights(patch.addHighlights)
-    if (patch.addDerivedColumns?.length) addDerivedColumns(patch.addDerivedColumns)
-    if (patch.removeDerivedColumnKeys?.length) removeDerivedColumns(patch.removeDerivedColumnKeys)
-    if (patch.addManualColumns?.length) addManualColumns(patch.addManualColumns)
-    if (patch.addManualLineItems?.length) addManualLineItems(patch.addManualLineItems)
-    if (patch.setCells?.length) {
-      for (const cell of patch.setCells) setCellOverride(cell.rowKey, cell.colKey, cell.value)
+    let nextView = applyPatch(view, patch)
+    if (patch.sortRowsByColumn) {
+      const col = allCols.find((entry) => entry.key === patch.sortRowsByColumn!.colKey)
+      if (col) {
+        const sorted = [...items].sort((a, b) => {
+          const av = getCellText(a, col)
+          const bv = getCellText(b, col)
+          const an = Number(av.replace(/[$,\sA-Za-z]/g, ''))
+          const bn = Number(bv.replace(/[$,\sA-Za-z]/g, ''))
+          const result = Number.isFinite(an) && Number.isFinite(bn)
+            ? an - bn
+            : av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' })
+          return patch.sortRowsByColumn!.direction === 'asc' ? result : -result
+        })
+        nextView = { ...nextView, lineItemOrder: sorted.map((item) => item.id) }
+      }
     }
-    if (patch.setColumnLabels?.length) {
-      for (const col of patch.setColumnLabels) setColumnLabel(col.colKey, col.label)
+    if (patch.filterBlankRowsByColumnKey) {
+      const col = allCols.find((entry) => entry.key === patch.filterBlankRowsByColumnKey)
+      if (col) {
+        const blankIds = visibleItems.filter((item) => getCellText(item, col).trim() === '').map((item) => item.id)
+        nextView = {
+          ...nextView,
+          hiddenLineItemIds: Array.from(new Set([...nextView.hiddenLineItemIds, ...blankIds])),
+        }
+      }
     }
-    if (patch.setLineItemOrder?.length) setLineItemOrder(patch.setLineItemOrder)
-    if (patch.sortRowsByColumn) sortRowsByColumn(patch.sortRowsByColumn.colKey, patch.sortRowsByColumn.direction)
-    if (patch.filterBlankRowsByColumnKey) hideBlankRowsForColumn(patch.filterBlankRowsByColumnKey)
+    replaceView(nextView, workbookVersionMetadataFromApprovedComparisonPatch(patch))
     dispatchAssistant(false)
   }
 
@@ -1943,15 +1991,15 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
   // Mark each column "empty" if no visible item supplies a value — lets the AI hide empties.
   const emptyColumnKeys = useMemo(() => {
     const set = new Set<string>()
-    for (const col of allCols) {
+    for (const col of activeCols) {
       const anyValue = visibleItems.some((it) => getCellText(it, col).trim().length > 0)
       if (!anyValue) set.add(col.key)
     }
     return set
-  }, [allCols, visibleItems, view.cellOverrides, bids])
+  }, [activeCols, visibleItems, view.cellOverrides, bids])
 
   const sheetSchema = useMemo(() => ({
-    columns: allCols.map((c) => ({
+    columns: activeCols.map((c) => ({
       key: c.key,
       label: c.label,
       kind: c.kind,
@@ -1963,10 +2011,19 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     lineItems: items.map((i) => ({
       id: i.id,
       description: i.description,
-      values: Object.fromEntries(allCols.map((col) => [col.key, getCellText(i, col)])),
+      values: Object.fromEntries(activeCols.map((col) => [col.key, getCellText(i, col)])),
     })),
     vendors: bids.map((b) => ({ id: b.id, name: b.vendor_name })),
-  }), [allCols, items, bids, emptyColumnKeys])
+  }), [activeCols, items, bids, emptyColumnKeys])
+
+  const comparisonSheetSnapshot = useMemo(() => buildComparisonSheetSnapshot({
+    sheetId: `sheet:${rfq.id}`,
+    quoteRequestId: rfq.id,
+    columns: sheetSchema.columns,
+    rows: sheetSchema.lineItems,
+    vendors: sheetSchema.vendors,
+    view,
+  }), [rfq.id, sheetSchema, view])
 
   // Visual constants
   const baseBorder = '1px solid #d9e0dc'
@@ -1987,7 +2044,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
 
   // Hidden columns chip tray
   const hiddenColEntries = view.hiddenColumnKeys
-    .map((key) => allCols.find((c) => c.key === key))
+    .map((key) => activeCols.find((c) => c.key === key))
     .filter((c): c is SheetColumn => Boolean(c))
 
   return (
@@ -2012,6 +2069,36 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
             <span className="rounded-md border bg-white px-2.5 py-1 text-xs font-semibold" style={{ borderColor: '#d9e0dc', color: '#1e3a2f' }}>
               Fastest: {fastestBid ? `${fastestBid.vendor_name} ${fastestBid.lead_time_days}d` : 'None'}
             </span>
+            <div className="relative" onClick={(event) => event.stopPropagation()}>
+              <button
+                type="button"
+                onClick={() => setHistoryMenuOpen((open) => !open)}
+                className="rounded-md border bg-white px-3 py-1.5 text-xs font-bold transition"
+                style={{ borderColor: '#d9e0dc', color: '#4a6358' }}
+              >
+                History
+              </button>
+              {historyMenuOpen && (
+                <div className="absolute right-0 top-[calc(100%+6px)] z-30 max-h-80 w-72 overflow-auto rounded-md border bg-white p-1 shadow-xl" style={{ borderColor: '#d9e0dc' }}>
+                  {versions.length === 0 ? (
+                    <div className="px-3 py-2 text-xs font-medium" style={{ color: '#8a9e96' }}>No saved versions yet.</div>
+                  ) : versions.map((version) => (
+                    <button
+                      key={version.id}
+                      type="button"
+                      onClick={() => void restoreWorkbookVersion(version.id)}
+                      className="block w-full rounded px-3 py-2 text-left hover:bg-[#edf3f0]"
+                    >
+                      <span className="block text-xs font-bold" style={{ color: '#1e3a2f' }}>
+                        Version {version.versionNumber} · {version.source.replace(/-/g, ' ')}
+                      </span>
+                      <span className="block truncate text-[11px]" style={{ color: '#587067' }}>{version.summary}</span>
+                      <span className="block text-[10px]" style={{ color: '#8a9e96' }}>{new Date(version.createdAt).toLocaleString()}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <div className="relative" onClick={(event) => event.stopPropagation()}>
               <button
                 type="button"
@@ -2047,11 +2134,11 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
           <div className="hidden items-center gap-2 px-3 lg:flex" style={{ borderLeft: baseBorder }}>
             <span className="inline-flex items-center gap-1 text-[11px] font-semibold" style={{ color: '#587067' }}>
               <Columns3 className="h-3.5 w-3.5" />
-              {visibleCols.length}/{allCols.length} columns
+              {visibleCols.length}/{activeCols.length} columns
             </span>
             <span className="inline-flex items-center gap-1 text-[11px] font-semibold" style={{ color: '#587067' }}>
               <Rows3 className="h-3.5 w-3.5" />
-              {visibleItems.length}/{items.length} rows
+              {visibleItems.length}/{items.filter((item) => !(view.deletedLineItemIds ?? []).includes(item.id)).length} rows
             </span>
             {view.highlights.length > 0 && (
               <button type="button" onClick={() => clearHighlights()} className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold" style={{ borderColor: '#fcd34d', color: '#92400e', background: '#fef3c7' }}>
@@ -2488,6 +2575,16 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
           <button type="button" role="menuitem" onClick={() => contextMenu.rowKey ? hideLineItems([contextMenu.rowKey]) : setContextMenu(null)} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
             Hide row
           </button>
+          <button type="button" role="menuitem" onClick={() => deleteContextColumn(contextMenu.colKey)} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#fff7ed]" style={{ color: '#a85c2a' }}>
+            Delete column
+          </button>
+          <button type="button" role="menuitem" onClick={() => deleteContextRow(contextMenu.rowKey)} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#fff7ed]" style={{ color: '#a85c2a' }}>
+            Delete row
+          </button>
+          <button type="button" role="menuitem" onClick={() => deleteContextCells(contextMenu.rowKey, contextMenu.colKey)} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#fff7ed]" style={{ color: '#a85c2a' }}>
+            Delete cells
+          </button>
+          <div style={{ margin: '4px 0', borderTop: '1px solid #edf3f0' }} />
           <button type="button" role="menuitem" onClick={() => sortRowsByColumn(contextMenu.colKey, 'asc')} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
             Sort A to Z
           </button>
@@ -2506,7 +2603,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
 
       {/* Status bar */}
       <div className="flex items-center justify-between shrink-0" style={{ borderTop: baseBorder, background: '#f6f8fa', padding: '4px 10px', fontSize: 11, color: '#57606a' }}>
-        <span>{visibleItems.length} of {items.length} items · {bids.length} vendors · {visibleCols.length} of {allCols.length} columns · {selectedRange.r2 - selectedRange.r1 + 1}x{selectedRange.c2 - selectedRange.c1 + 1} selected</span>
+        <span>{visibleItems.length} of {items.filter((item) => !(view.deletedLineItemIds ?? []).includes(item.id)).length} items · {bids.length} vendors · {visibleCols.length} of {activeCols.length} columns · {selectedRange.r2 - selectedRange.r1 + 1}x{selectedRange.c2 - selectedRange.c1 + 1} selected</span>
         <span>Double-click or Enter to edit · Drag to select · Right-click rows/columns · ⌘K for AI</span>
       </div>
 
@@ -2515,6 +2612,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
         isClosing={assistantClosing}
         currentView={view}
         sheetSchema={sheetSchema}
+        snapshot={comparisonSheetSnapshot}
         onApply={applyPatchToView}
         onDismiss={() => dispatchAssistant(false)}
       />

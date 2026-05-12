@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolExecutionContext, ToolResult } from '../domain/types.js'
+import { z } from 'zod'
 import { documentReadTool } from './document-read.js'
 import { emailDraftTool } from './email-draft.js'
 import { navigateTool } from './navigation.js'
@@ -17,6 +18,7 @@ export class ToolRegistry {
       productModule: tool.productModule,
       surface: tool.surface,
       description: tool.description,
+      inputSchema: toJsonSchema(tool.inputSchema),
       visibleToUser: tool.visibleToUser,
       mutatesPersistentData: tool.mutatesPersistentData,
       requiresUserApproval: tool.requiresUserApproval,
@@ -49,6 +51,14 @@ export class ToolRegistry {
         summary: error instanceof Error ? error.message : 'Tool execution failed.',
       }
     }
+  }
+}
+
+function toJsonSchema(schema: unknown) {
+  try {
+    return z.toJSONSchema(schema as never)
+  } catch {
+    return undefined
   }
 }
 

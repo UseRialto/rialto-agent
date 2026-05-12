@@ -4,10 +4,9 @@ import Fastify from 'fastify'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { RialtoAgentCore } from './agent/core.js'
-import { defaultPlanner } from './agent/llm.js'
+import { RialtoAgentCore, type ProductAgentRuntime } from './agent/core.js'
+import { OpenAIAgentsProductRuntime } from './agent/openai-agents-runtime.js'
 import { evaluateQuoteComparison } from './comparison/evaluate.js'
-import { fallbackComparisonPatch, proposeComparisonPatch } from './comparison/patch-planner.js'
 import { InMemoryUserContextProvider } from './context/user-context-provider.js'
 import { homePageHtml } from './demo/home-page.js'
 import { sampleComparison } from './demo/sample-comparison.js'
@@ -31,42 +30,27 @@ const turnRequestSchema = z.object({
     role: z.enum(['user', 'assistant']),
     content: z.string(),
   })).min(1),
+  debug: z.boolean().optional(),
   currentPage: z.object({
     path: z.string(),
     title: z.string().optional(),
   }).optional(),
-})
-
-const comparisonPatchRequestSchema = z.object({
-  message: z.string().min(1),
-  currentView: z.unknown().optional(),
-  sheetSchema: z.object({
-    columns: z.array(z.object({
-      key: z.string(),
-      label: z.string(),
-      kind: z.enum(['rfq-core', 'rfq-attribute', 'rfq-standard', 'vendor', 'derived', 'manual']),
-      vendorId: z.string().optional(),
-      vendorName: z.string().optional(),
-      metric: z.enum(['unit_price', 'total', 'lead', 'alternate', 'response_attr']).optional(),
-      isEmpty: z.boolean().optional(),
-    })).optional(),
-    lineItems: z.array(z.object({
-      id: z.string(),
-      description: z.string(),
-    })).optional(),
-    vendors: z.array(z.object({
-      id: z.string(),
-      name: z.string(),
-    })).optional(),
+  quoteComparison: z.object({
+    currentView: z.unknown().optional(),
+    sheetSchema: z.unknown().optional(),
+    snapshot: z.unknown().optional(),
   }).optional(),
 })
 
-export function buildServer() {
+export interface BuildServerOptions {
+  runtime?: ProductAgentRuntime
+}
+
+export function buildServer(options: BuildServerOptions = {}) {
   const app = Fastify({ logger: true })
   const core = new RialtoAgentCore(
     new InMemoryUserContextProvider(),
-    defaultPlanner(),
-    defaultToolRegistry,
+    options.runtime ?? new OpenAIAgentsProductRuntime(),
   )
 
   app.register(cors, { origin: true })
@@ -94,25 +78,28 @@ export function buildServer() {
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Invalid agent turn request.', issues: parsed.error.issues })
     }
-    return core.runTurn(parsed.data)
+    if (!process.env.OPENAI_API_KEY) {
+      return reply.status(503).send({
+        status: 'blocked',
+        error: 'Rialto Agent requires OPENAI_API_KEY.',
+      })
+    }
+    try {
+      return await core.runTurn(parsed.data)
+    } catch (error) {
+      request.log.error(error)
+      return reply.status(502).send({
+        status: 'tool_error',
+        error: agentRuntimeFailureMessage(error),
+      })
+    }
   })
 
   app.post('/comparison/propose-patch', async (request, reply) => {
-    const parsed = comparisonPatchRequestSchema.safeParse(request.body)
-    if (!parsed.success) {
-      return reply.status(400).send({ error: 'Invalid comparison patch request.', issues: parsed.error.issues })
-    }
-
-    try {
-      return await proposeComparisonPatch(parsed.data)
-    } catch (error) {
-      request.log.warn({ error }, 'OpenAI comparison patch failed; using deterministic fallback.')
-      return {
-        patch: fallbackComparisonPatch(parsed.data),
-        usedFallback: true,
-        fallbackReason: error instanceof Error ? error.message : 'Comparison patch planner failed.',
-      }
-    }
+    return reply.status(410).send({
+      status: 'blocked',
+      error: 'Use /agent/turn for Quote Comparison proposals.',
+    })
   })
 
   app.post('/tools/document/extract', async (request, reply) => {
@@ -140,6 +127,14 @@ export function buildServer() {
   })
 
   return app
+}
+
+function agentRuntimeFailureMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  if (/connection error|fetch failed|getaddrinfo|enotfound|api\.openai\.com/i.test(message)) {
+    return 'Rialto Agent could not reach the OpenAI model API. Check network/DNS and retry.'
+  }
+  return 'Rialto Agent model request failed while preparing the response.'
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

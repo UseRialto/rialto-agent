@@ -41,7 +41,7 @@ node scripts/seed.js
 
 AI request authoring lives in `lib/ai/request-authoring.ts`.
 
-- AI features use the single Rialto Agent OpenAI core and require `OPENAI_API_KEY` when deterministic fallback is not enough.
+- Quote Comparison agent editing uses the single Rialto Agent OpenAI core and requires `OPENAI_API_KEY`; do not add deterministic spreadsheet-edit fallbacks.
 - Optional selector: `OPENAI_MODEL` defaults to `gpt-5-mini`.
 - Vendor outreach email generation can fall back to a deterministic template if no LLM key is configured.
 

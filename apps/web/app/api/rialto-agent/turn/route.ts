@@ -15,6 +15,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json() as {
       messages?: Array<{ role?: string; content?: string }>
       currentPage?: { path?: string; title?: string }
+      debug?: boolean
     }
 
     const messages = Array.isArray(body.messages)
@@ -41,6 +42,7 @@ export async function POST(request: NextRequest) {
         user: DEMO_USER,
         messages,
         currentPage: body.currentPage,
+        debug: body.debug,
       }),
     })
 
