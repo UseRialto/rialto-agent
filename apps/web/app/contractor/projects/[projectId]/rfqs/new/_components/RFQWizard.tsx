@@ -707,6 +707,7 @@ export function RFQWizard({
             procurementRequirements={procurementRequirements}
             commodityWatch={commodityWatch}
             rfpDetails={rfpDetails}
+            fieldVisibility={fieldVisibility}
             items={items}
             invites={invites}
             emailSubject={emailSubject}
