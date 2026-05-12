@@ -1,5 +1,4 @@
 import mammoth from 'mammoth'
-import { PDFParse } from 'pdf-parse'
 import ExcelJS from 'exceljs'
 import { z } from 'zod'
 import type { ToolDefinition } from '../domain/types.js'
@@ -62,10 +61,29 @@ async function extractSpreadsheet(buffer: Buffer) {
   return { text: parts.join('\n\n'), warnings }
 }
 
+let pdfRuntimeReady: Promise<void> | undefined
+
+async function ensurePdfRuntime() {
+  pdfRuntimeReady ??= (async () => {
+    const canvas = await import('@napi-rs/canvas')
+    const globalWithCanvas = globalThis as Record<string, unknown>
+
+    globalWithCanvas.DOMMatrix ??= canvas.DOMMatrix
+    globalWithCanvas.DOMPoint ??= canvas.DOMPoint
+    globalWithCanvas.DOMRect ??= canvas.DOMRect
+    globalWithCanvas.ImageData ??= canvas.ImageData
+    globalWithCanvas.Path2D ??= canvas.Path2D
+  })()
+
+  await pdfRuntimeReady
+}
+
 async function extractText(input: DocumentReadInput): Promise<Omit<DocumentReadOutput, 'action' | 'filename'>> {
   const kind = sourceKind(input.filename, input.mimeType)
   const buffer = Buffer.from(input.bytesBase64, 'base64')
   if (kind === 'pdf') {
+    await ensurePdfRuntime()
+    const { PDFParse } = await import('pdf-parse')
     const parser = new PDFParse({ data: buffer })
     try {
       const result = await parser.getText()
