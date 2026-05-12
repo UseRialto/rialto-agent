@@ -494,7 +494,7 @@ export function StepItems({
     ...(isVisible('specifications') ? [300] : []),
     ...(isVisible('certifications') ? [260] : []),
     ...vendorResponseColumns.map(() => 150),
-    ...(items.length > 1 ? [76] : []),
+    76,
   ]
   const spreadsheetWidth = spreadsheetColumnWidths.reduce((sum, width) => sum + width, 0)
   const spreadsheetColumns = spreadsheetColumnWidths.map((width) => `${width}px`).join(' ')
@@ -953,7 +953,7 @@ export function StepItems({
                   {heading}
                 </div>
               ))}
-              {items.length > 1 && <div className="border-r px-3 py-3" style={{ borderColor: '#e2d9cf' }} />}
+              <div className="border-r px-3 py-3" style={{ borderColor: '#e2d9cf' }} />
             </div>
 
             {items.map((row, idx) => {
@@ -1161,18 +1161,19 @@ export function StepItems({
                     </div>
                   ))}
 
-                  {items.length > 1 && (
-                    <div className="flex items-center justify-center p-1.5">
-                      <button
-                        type="button"
-                        onClick={() => onItemsChange(items.filter((entry) => entry._key !== row._key))}
-                        className="rounded-md px-2 py-1 text-[11px] font-semibold"
-                        style={{ background: '#fff1e8', border: '1px solid #f2b38f', color: '#a85c2a' }}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  )}
+                  <div className="flex items-center justify-center p-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const filtered = items.filter((entry) => entry._key !== row._key)
+                        onItemsChange(filtered.length > 0 ? filtered : [newRow(category, fieldTemplate)])
+                      }}
+                      className="rounded-md px-2 py-1 text-[11px] font-semibold"
+                      style={{ background: '#fff1e8', border: '1px solid #f2b38f', color: '#a85c2a' }}
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </div>
               )
             })}
