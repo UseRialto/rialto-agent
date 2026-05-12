@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useImperativeHandle, type Ref } from 'react'
 import { uploadRequestAttachmentFile } from '@/lib/files/blob-client-upload'
 import type { ItemRow } from './StepItems'
 
@@ -10,6 +10,7 @@ export interface VendorInvite {
   email: string
   firstName?: string
   lastName?: string
+  nickname?: string
   onPlatform: boolean
 }
 
@@ -95,34 +96,67 @@ function extractText(el: HTMLElement): string {
 
 // --- Editable email body ----------------------------------------------------
 
+interface EditableEmailBodyHandle {
+  insertFirstNameChip: () => void
+}
+
 function EditableEmailBody({
   value,
   onChange,
   initKey,
+  ref,
 }: {
   value: string
   onChange: (v: string) => void
   initKey: number
+  ref?: Ref<EditableEmailBodyHandle>
 }) {
-  const ref = useRef<HTMLDivElement>(null)
+  const divRef = useRef<HTMLDivElement>(null)
   const lastInitKey = useRef(-1)
 
   useEffect(() => {
-    if (!ref.current) return
+    if (!divRef.current) return
     if (lastInitKey.current !== initKey) {
-      setEditableContent(ref.current, value)
+      setEditableContent(divRef.current, value)
       lastInitKey.current = initKey
     }
   }, [initKey, value])
 
   const handleInput = useCallback(() => {
-    if (!ref.current) return
-    onChange(extractText(ref.current))
+    if (!divRef.current) return
+    onChange(extractText(divRef.current))
   }, [onChange])
+
+  useImperativeHandle(ref, () => ({
+    insertFirstNameChip() {
+      const el = divRef.current
+      if (!el) return
+      el.focus()
+      const chip = document.createElement('span')
+      chip.setAttribute('contenteditable', 'false')
+      chip.setAttribute('data-chip', 'vendor_first_name')
+      chip.className = 'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-semibold align-middle mx-0.5 select-none cursor-default'
+      chip.style.cssText = 'border-color: #fdc89a; background: #fff3eb; color: #fa6b04;'
+      chip.innerHTML = `<svg class="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM2 14s-1 0-1-1 1-4 7-4 7 3 7 4-1 1-1 1H2Z"/></svg>First Name`
+      const sel = window.getSelection()
+      if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+        const range = sel.getRangeAt(0)
+        range.deleteContents()
+        range.insertNode(chip)
+        range.setStartAfter(chip)
+        range.collapse(true)
+        sel.removeAllRanges()
+        sel.addRange(range)
+      } else {
+        el.appendChild(chip)
+      }
+      onChange(extractText(el))
+    },
+  }))
 
   return (
     <div
-      ref={ref}
+      ref={divRef}
       contentEditable
       suppressContentEditableWarning
       onInput={handleInput}
@@ -159,6 +193,7 @@ export function StepInviteVendors({
   const [attachmentError, setAttachmentError] = useState('')
   const [attachmentUploadFolder] = useState(() => `request-attachments/${crypto.randomUUID().slice(0, 8)}`)
   const hasGeneratedRef = useRef(false)
+  const emailEditorRef = useRef<EditableEmailBodyHandle>(null)
 
   useEffect(() => {
     if (hasGeneratedRef.current || emailBody) return
@@ -352,23 +387,35 @@ export function StepInviteVendors({
                     <p className="text-sm font-semibold" style={{ color: '#1e3a2f' }}>{inv.name}</p>
                     <p className="text-xs" style={{ color: '#8a9e96' }}>{inv.email}</p>
                     {!inv.onPlatform && (
-                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <div className="mt-3 space-y-2">
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <input
+                            type="text"
+                            value={inv.firstName ?? ''}
+                            onChange={(e) => updateInvite(inv.email, { firstName: e.target.value })}
+                            placeholder="First name"
+                            className="rounded-xl px-2.5 py-1.5 text-xs focus:outline-none transition-colors"
+                            style={{ border: '1px solid #e2d9cf', background: '#ffffff', color: '#1e3a2f', fontFamily: 'inherit' }}
+                            onFocus={(e) => (e.target.style.borderColor = '#fa6b04')}
+                            onBlur={(e) => (e.target.style.borderColor = '#e2d9cf')}
+                          />
+                          <input
+                            type="text"
+                            value={inv.lastName ?? ''}
+                            onChange={(e) => updateInvite(inv.email, { lastName: e.target.value })}
+                            placeholder="Last name"
+                            className="rounded-xl px-2.5 py-1.5 text-xs focus:outline-none transition-colors"
+                            style={{ border: '1px solid #e2d9cf', background: '#ffffff', color: '#1e3a2f', fontFamily: 'inherit' }}
+                            onFocus={(e) => (e.target.style.borderColor = '#fa6b04')}
+                            onBlur={(e) => (e.target.style.borderColor = '#e2d9cf')}
+                          />
+                        </div>
                         <input
                           type="text"
-                          value={inv.firstName ?? ''}
-                          onChange={(e) => updateInvite(inv.email, { firstName: e.target.value })}
-                          placeholder="First name"
-                          className="rounded-xl px-2.5 py-1.5 text-xs focus:outline-none transition-colors"
-                          style={{ border: '1px solid #e2d9cf', background: '#ffffff', color: '#1e3a2f', fontFamily: 'inherit' }}
-                          onFocus={(e) => (e.target.style.borderColor = '#fa6b04')}
-                          onBlur={(e) => (e.target.style.borderColor = '#e2d9cf')}
-                        />
-                        <input
-                          type="text"
-                          value={inv.lastName ?? ''}
-                          onChange={(e) => updateInvite(inv.email, { lastName: e.target.value })}
-                          placeholder="Last name"
-                          className="rounded-xl px-2.5 py-1.5 text-xs focus:outline-none transition-colors"
+                          value={inv.nickname ?? ''}
+                          onChange={(e) => updateInvite(inv.email, { nickname: e.target.value })}
+                          placeholder="Nickname (optional — used in email greeting)"
+                          className="w-full rounded-xl px-2.5 py-1.5 text-xs focus:outline-none transition-colors"
                           style={{ border: '1px solid #e2d9cf', background: '#ffffff', color: '#1e3a2f', fontFamily: 'inherit' }}
                           onFocus={(e) => (e.target.style.borderColor = '#fa6b04')}
                           onBlur={(e) => (e.target.style.borderColor = '#e2d9cf')}
@@ -458,9 +505,27 @@ export function StepInviteVendors({
             <p className="text-sm" style={{ color: '#8a9e96' }}>Drafting your email…</p>
           </div>
         ) : (
-          <div className="rounded-xl px-6 py-5" style={{ border: '1px solid #e2d9cf', background: '#ede8e2' }}>
-            <EditableEmailBody value={emailBody} onChange={onEmailBodyChange} initKey={initKey} />
-          </div>
+          <>
+            {!emailBody.includes('{{vendor_first_name}}') && (
+              <div className="mb-2 flex items-center gap-2">
+                <span className="text-[11px]" style={{ color: '#8a9e96' }}>Insert token:</span>
+                <button
+                  type="button"
+                  onClick={() => emailEditorRef.current?.insertFirstNameChip()}
+                  className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition-opacity hover:opacity-70"
+                  style={{ borderColor: '#fdc89a', background: '#fff3eb', color: '#fa6b04' }}
+                >
+                  <svg className="h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM2 14s-1 0-1-1 1-4 7-4 7 3 7 4-1 1-1 1H2Z" />
+                  </svg>
+                  First Name
+                </button>
+              </div>
+            )}
+            <div className="rounded-xl px-6 py-5" style={{ border: '1px solid #e2d9cf', background: '#ede8e2' }}>
+              <EditableEmailBody ref={emailEditorRef} value={emailBody} onChange={onEmailBodyChange} initKey={initKey} />
+            </div>
+          </>
         )}
 
         <div className="mt-5 flex gap-3">

@@ -62,9 +62,15 @@ export class OpenAIAgentsProductRuntime implements ProductAgentRuntime {
         'Material write actions must be proposed for approval rather than committed.',
         'For sheet mutations, call one or more quoteComparison proposal tools. The runtime will aggregate their patch fragments into one Comparison Patch Proposal.',
         'For read-only sheet questions, call quoteComparison_answerSheetQuestion when the answer depends on sheet state.',
+        'When sheet state matters, inspect it first with quoteComparison_inspectSnapshot before calling a proposal or answer tool.',
         'Use quoteComparison_proposeDeletions for delete row, delete column, and delete selected cell contents requests.',
         'Use bulk, derived-column, structure, and selection-state tools when those operations match the request instead of emitting many tiny unrelated edits.',
         'Use quoteComparison_proposeConvertedQuantityColumn for requests to add a Qty/quantity column converted into hundreds or thousands of linear feet, hLF, kLF, or similar visible quantity unit conversions. Use divisor 100 for hundreds and 1000 for thousands.',
+        'Use quoteComparison_proposeDerivedColumns for requests to add calculated columns such as normalized price, unit price per 1k, recommendation, or summary columns.',
+        'Use quoteComparison_proposeHighlights with lowest-price-per-row for cheapest-valid quote highlighting and missing-lead-times for missing lead time review.',
+        'For missing lead time requests that also ask for notes, combine quoteComparison_proposeHighlights with quoteComparison_proposeCellEdits for the note cells.',
+        'For broad read-only prompts such as "Compare the quotes", answer analytically with quoteComparison_answerSheetQuestion and do not create a proposal.',
+        'For ambiguous edit prompts such as "Make this cleaner" or "Pick the best quote", inspect the sheet if relevant, then return needs_clarification with one concise question.',
         'Never return completed for a Quote Comparison sheet edit unless you have called at least one quoteComparison proposal tool.',
         'When ambiguity affects material correctness, return needs_clarification with one concise question.',
         'When a request is outside the v1 product boundary, return blocked with a clear reason.',
@@ -359,6 +365,12 @@ function recordTool(
     status: 'ok',
     summary: toolSummary(toolId),
     data,
+  })
+  context?.context.onProgress?.({
+    type: 'tool_result',
+    toolId,
+    status: 'ok',
+    message: `Runtime tool completed: ${toolSummary(toolId)} (${toolId})`,
   })
   return data
 }

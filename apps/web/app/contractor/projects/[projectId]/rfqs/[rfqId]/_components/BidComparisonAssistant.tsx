@@ -5,9 +5,11 @@ import { X } from 'lucide-react'
 import type { ComparisonSheetView, ComparisonViewPatch } from './comparison-sheet-view'
 import type { ComparisonSheetSnapshot } from '@/lib/procurement/comparison-sheet-snapshot'
 import {
+  debugStepFromProgressEvent,
   debugStepsFromAgentResponse,
   initialAgentProgressSteps,
   type ComparisonAgentDebugResponse,
+  type ComparisonAgentProgressEvent,
 } from '@/lib/procurement/comparison-agent-debug'
 
 interface SheetSchemaColumn {
@@ -169,9 +171,16 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
       const response = await fetch('/api/bid-comparison/ai-propose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, currentView, sheetSchema, snapshot, debug: debugMode }),
+        body: JSON.stringify({ message, currentView, sheetSchema, snapshot, debug: debugMode, stream: debugMode }),
         signal: controller.signal,
       })
+      if (debugMode && response.body && response.headers.get('content-type')?.includes('text/event-stream')) {
+        const json = await readAgentProgressStream(response)
+        if (!response.ok || !json.patch) throw new Error(json.error ?? 'Could not generate a change.')
+        setSummary(json.patch.summary)
+        setProposal(json.patch)
+        return
+      }
       const json = (await response.json()) as { patch?: ComparisonViewPatch; error?: string } & ComparisonAgentDebugResponse
       if (debugMode) {
         const returnedSteps = debugStepsFromAgentResponse(json)
@@ -182,7 +191,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
       setProposal(json.patch)
     } catch (caught) {
       const message = caught instanceof DOMException && caught.name === 'AbortError'
-        ? 'Rialto Agent timed out after 90 seconds before returning a preview.'
+        ? 'Rialto Agent timed out after 90 seconds before returning changes.'
         : caught instanceof Error ? caught.message : 'Could not generate a change.'
       setError(message)
       if (debugMode) setDebugSteps((steps) => [...steps, `Error: ${message}`])
@@ -191,6 +200,52 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
       setIsSending(false)
       setStartedAt(null)
     }
+  }
+
+  async function readAgentProgressStream(response: Response) {
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('Rialto Agent did not return a readable progress stream.')
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let finalPayload: ({ patch?: ComparisonViewPatch; error?: string } & ComparisonAgentDebugResponse) | null = null
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const events = buffer.split('\n\n')
+      buffer = events.pop() ?? ''
+      for (const rawEvent of events) {
+        const event = parseAgentSseEvent(rawEvent)
+        if (!event) continue
+        if (event.event === 'progress') {
+          const step = debugStepFromProgressEvent(event.data as ComparisonAgentProgressEvent)
+          setDebugSteps((steps) => [...steps, step])
+        } else if (event.event === 'final') {
+          finalPayload = event.data as { patch?: ComparisonViewPatch; error?: string } & ComparisonAgentDebugResponse
+          const returnedSteps = debugStepsFromAgentResponse(finalPayload)
+          if (returnedSteps.length) setDebugSteps((steps) => [...steps, ...returnedSteps])
+        } else if (event.event === 'error') {
+          const errorPayload = event.data as { error?: string }
+          throw new Error(errorPayload.error ?? 'Rialto Agent stream failed.')
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      const event = parseAgentSseEvent(buffer)
+      if (event?.event === 'final') finalPayload = event.data as { patch?: ComparisonViewPatch; error?: string } & ComparisonAgentDebugResponse
+    }
+    if (!finalPayload) throw new Error('Rialto Agent stream ended before returning changes.')
+    return finalPayload
+  }
+
+  function parseAgentSseEvent(rawEvent: string): { event: string; data: unknown } | null {
+    const event = rawEvent.split('\n').find((line) => line.startsWith('event: '))?.slice('event: '.length).trim()
+    const dataLine = rawEvent.split('\n').find((line) => line.startsWith('data: '))
+    if (!event || !dataLine) return null
+    return { event, data: JSON.parse(dataLine.slice('data: '.length)) }
   }
 
   function applyProposal() {
@@ -303,7 +358,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
             )}
             style={{ background: '#1e3a2f' }}
           >
-            {isSending ? 'Thinking…' : 'Preview'}
+            {isSending ? 'Thinking…' : 'Send'}
           </button>
           <button
             type="button"

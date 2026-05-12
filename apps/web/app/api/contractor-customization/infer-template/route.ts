@@ -27,6 +27,19 @@ function normalizeHeader(value: string) {
   return value.replace(/[_/-]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
+function titleCaseHeaderLabel(value: string) {
+  const acronyms = new Set(['sku', 'rfq', 'uom', 'hvac', 'mep', 'astm', 'ul', 'psi', 'pdf', 'csv', 'bom'])
+  return normalizeHeader(value)
+    .split(' ')
+    .map((word) => {
+      const lower = word.toLowerCase()
+      if (acronyms.has(lower)) return lower.toUpperCase()
+      if (/^[A-Z0-9]+$/.test(word) && /[A-Z]/.test(word)) return word
+      return lower.replace(/[a-z]/, (letter) => letter.toUpperCase())
+    })
+    .join(' ')
+}
+
 function parseDelimited(text: string) {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
   if (lines.length === 0) return []
@@ -83,7 +96,7 @@ function mapHeaderToField(header: string, order: number): CustomLineItemFieldDef
     const entryLabel = normalizeFieldKey(entry.label)
     return key === entryKey || key.includes(entryKey) || key.includes(entryLabel) || entryLabel.includes(key)
   })
-  return makeFieldDefinition(bank?.label ?? normalized, order, 'spreadsheet', {
+  return makeFieldDefinition(bank?.label ?? titleCaseHeaderLabel(normalized), order, 'spreadsheet', {
     key: bank?.key ?? key,
     group: bank?.group ?? 'From uploaded example',
   })

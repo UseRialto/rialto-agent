@@ -1,4 +1,5 @@
-import { Boxes, ShieldCheck, Sparkles } from 'lucide-react'
+import Image from 'next/image'
+import { ShieldCheck, Sparkles } from 'lucide-react'
 import { LoginForm } from './_components/LoginForm'
 
 export const metadata = {
@@ -11,20 +12,21 @@ export default function LoginPage() {
       <section className="relative flex min-h-[42rem] items-center overflow-hidden px-6 py-10 lg:px-12">
         <div className="absolute inset-0" style={{ background: 'radial-gradient(circle at 20% 20%, rgba(200,115,90,0.25), transparent 26rem), radial-gradient(circle at 80% 75%, rgba(45,106,79,0.30), transparent 22rem)' }} />
         <div className="relative z-10 max-w-3xl">
-          <div className="mb-10 flex items-center gap-3">
-            <span className="flex h-12 w-12 items-center justify-center rounded-xl shadow-xl" style={{ background: '#fa6b04' }}>
-              <Boxes className="h-6 w-6 text-white" />
-            </span>
-            <div>
-              <p className="text-2xl font-semibold tracking-tight" style={{ fontFamily: 'var(--font-lora, Georgia, serif)' }}>Rialto</p>
-              <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'rgba(255,255,255,0.4)' }}>Construction Procurement OS</p>
-            </div>
+          <div className="mb-10 inline-flex rounded-2xl px-4 py-3 shadow-xl" style={{ background: 'rgba(245,240,235,0.96)' }}>
+            <Image
+              src="/Rialto_Full_Logo_CLEAR.png"
+              alt="Rialto"
+              width={206}
+              height={40}
+              priority
+              className="h-auto w-[12.875rem]"
+            />
           </div>
           <h1 className="max-w-2xl text-5xl font-semibold tracking-tight text-white" style={{ fontFamily: 'var(--font-lora, Georgia, serif)' }}>
             Turn RFQs and vendor quotes into one controlled comparison workflow.
           </h1>
           <p className="mt-5 max-w-xl text-base leading-7" style={{ color: 'rgba(255,255,255,0.6)' }}>
-            Contractor and vendor teams share a focused workspace for quote requests, vendor responses, mailbox replies, and quote comparison.
+            Sub contractor and vendor teams share a focused workspace for quote requests, vendor responses, mailbox replies, and quote comparison.
           </p>
           <div className="mt-10 grid max-w-2xl gap-3 sm:grid-cols-2">
             <div className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}>
@@ -35,7 +37,7 @@ export default function LoginPage() {
             <div className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}>
               <ShieldCheck className="h-5 w-5" style={{ color: '#fdc89a' }} />
               <p className="mt-3 text-sm font-semibold">Role-aware portals</p>
-              <p className="mt-1 text-xs leading-5" style={{ color: 'rgba(255,255,255,0.5)' }}>Contractors and vendors see the tools that match their work.</p>
+              <p className="mt-1 text-xs leading-5" style={{ color: 'rgba(255,255,255,0.5)' }}>Sub contractors and vendors see the tools that match their work.</p>
             </div>
           </div>
         </div>

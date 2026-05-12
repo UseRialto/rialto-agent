@@ -64,7 +64,7 @@ export function ExternalQuoteImportButton({ projectId, variant = 'primary' }: Pr
         style={style}
       >
         <FileUp className="h-4 w-4" />
-        {busy ? 'Importing...' : 'Import Quote Comparison'}
+        {busy ? 'Importing...' : 'Import Vendor Quotes'}
       </button>
       {error && (
         <p className="absolute right-0 top-[calc(100%+0.5rem)] z-20 w-72 rounded-lg border bg-white px-3 py-2 text-xs shadow-lg" style={{ borderColor: '#f5c6c6', color: '#c0392b' }}>

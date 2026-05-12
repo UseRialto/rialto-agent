@@ -35,6 +35,7 @@ interface RequestBody {
   currentView?: unknown
   snapshot?: unknown
   debug?: boolean
+  stream?: boolean
   sheetSchema?: {
     columns?: SchemaColumn[]
     lineItems?: SchemaItem[]
@@ -59,6 +60,52 @@ function debugPayload(data: Pick<AgentTurnData, 'plan' | 'debugTrace' | 'toolRes
   }
 }
 
+function agentPayload(body: RequestBody, session: Awaited<ReturnType<typeof getSession>>, message: string) {
+  if (!session) throw new Error('Not authenticated.')
+  return {
+    user: {
+      id: session.userId,
+      contractorOrganizationId: session.userId,
+      role: session.role === 'vendor' ? 'vendor' : 'estimator',
+      name: session.name || 'Estimator',
+      email: session.email || 'estimator@example.com',
+    },
+    messages: [{ role: 'user' as const, content: message }],
+    currentPage: {
+      path: '/contractor/quote-comparison',
+      title: 'Quote Comparison',
+    },
+    quoteComparison: {
+      currentView: body.currentView,
+      sheetSchema: body.sheetSchema,
+      snapshot: body.snapshot,
+    },
+    debug: body.debug,
+  }
+}
+
+function proposalResponsePayload(data: AgentTurnData, sheetSchema: RequestBody['sheetSchema']) {
+  if (data.proposal?.kind === 'comparison-patch-proposal') {
+    return {
+      patch: comparisonViewPatchFromProposal(data.proposal),
+      usedFallback: false,
+      ...debugPayload(data),
+    }
+  }
+
+  const toolPatch = data.toolResults?.find((result) => result.data?.action === 'preview-spreadsheet-patch')?.data?.patch
+  if (!toolPatch) throw new Error(data.error ?? 'Rialto Agent did not return a Quote Comparison tool patch.')
+  return {
+    patch: comparisonViewPatchFromAgentToolPatch(toolPatch, sheetSchema ?? {}),
+    usedFallback: false,
+    ...debugPayload(data),
+  }
+}
+
+function sseEvent(event: string, data: unknown) {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+}
+
 export async function POST(request: NextRequest) {
   const session = await getSession()
   if (!session) return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 })
@@ -74,26 +121,10 @@ export async function POST(request: NextRequest) {
   if (!message) return NextResponse.json({ error: 'message is required.' }, { status: 400 })
 
   try {
-    const response = await postAgentTurnWithRetry({
-      user: {
-        id: session.userId,
-        contractorOrganizationId: session.userId,
-        role: session.role === 'vendor' ? 'vendor' : 'estimator',
-        name: session.name || 'Estimator',
-        email: session.email || 'estimator@example.com',
-      },
-      messages: [{ role: 'user', content: message }],
-      currentPage: {
-        path: '/contractor/quote-comparison',
-        title: 'Quote Comparison',
-      },
-      quoteComparison: {
-        currentView: body.currentView,
-        sheetSchema: body.sheetSchema,
-        snapshot: body.snapshot,
-      },
-      debug: body.debug,
-    })
+    const payload = agentPayload(body, session, message)
+    if (body.stream) return streamAgentProposal(payload, body.sheetSchema)
+
+    const response = await postAgentTurnWithRetry(payload)
     const data = await response.json() as AgentTurnData
 
     if (!response.ok) {
@@ -104,21 +135,7 @@ export async function POST(request: NextRequest) {
       }, { status: response.status })
     }
 
-    if (data.proposal?.kind === 'comparison-patch-proposal') {
-      return NextResponse.json({
-        patch: comparisonViewPatchFromProposal(data.proposal),
-        usedFallback: false,
-        ...debugPayload(data),
-      })
-    }
-
-    const toolPatch = data.toolResults?.find((result) => result.data?.action === 'preview-spreadsheet-patch')?.data?.patch
-    if (!toolPatch) throw new Error(data.error ?? 'Rialto Agent did not return a Quote Comparison tool patch.')
-    return NextResponse.json({
-      patch: comparisonViewPatchFromAgentToolPatch(toolPatch, body.sheetSchema ?? {}),
-      usedFallback: false,
-      ...debugPayload(data),
-    })
+    return NextResponse.json(proposalResponsePayload(data, body.sheetSchema))
   } catch (error) {
     console.error('bid-comparison ai-propose failed:', error instanceof Error ? error.message : error)
     return NextResponse.json({
@@ -126,4 +143,79 @@ export async function POST(request: NextRequest) {
       status: 'tool_error',
     }, { status: 502 })
   }
+}
+
+async function streamAgentProposal(payload: unknown, sheetSchema: RequestBody['sheetSchema']) {
+  const apiUrl = process.env.RIALTO_AGENT_API_URL ?? 'http://localhost:8787'
+  const response = await fetch(`${apiUrl}/agent/turn/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok || !response.body) {
+    const data = await response.json().catch(() => ({})) as AgentTurnData
+    return NextResponse.json({
+      error: agentTurnFailureMessage(response.status, data.error),
+      status: data.status ?? 'tool_error',
+      ...debugPayload(data),
+    }, { status: response.status })
+  }
+
+  const encoder = new TextEncoder()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const reader = response.body!.getReader()
+      try {
+        while (true) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const events = buffer.split('\n\n')
+          buffer = events.pop() ?? ''
+          for (const rawEvent of events) {
+            const parsed = parseSseEvent(rawEvent)
+            if (!parsed) continue
+            if (parsed.event === 'final') {
+              controller.enqueue(encoder.encode(sseEvent('final', proposalResponsePayload(parsed.data as AgentTurnData, sheetSchema))))
+            } else {
+              controller.enqueue(encoder.encode(sseEvent(parsed.event, parsed.data)))
+            }
+          }
+        }
+        if (buffer.trim()) {
+          const parsed = parseSseEvent(buffer)
+          if (parsed?.event === 'final') {
+            controller.enqueue(encoder.encode(sseEvent('final', proposalResponsePayload(parsed.data as AgentTurnData, sheetSchema))))
+          } else if (parsed) {
+            controller.enqueue(encoder.encode(sseEvent(parsed.event, parsed.data)))
+          }
+        }
+      } catch (error) {
+        controller.enqueue(encoder.encode(sseEvent('error', {
+          status: 'tool_error',
+          error: error instanceof Error ? error.message : 'Rialto Agent stream failed.',
+        })))
+      } finally {
+        controller.close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+    },
+  })
+}
+
+function parseSseEvent(rawEvent: string): { event: string; data: unknown } | null {
+  const event = rawEvent.split('\n').find((line) => line.startsWith('event: '))?.slice('event: '.length).trim()
+  const dataLine = rawEvent.split('\n').find((line) => line.startsWith('data: '))
+  if (!event || !dataLine) return null
+  return { event, data: JSON.parse(dataLine.slice('data: '.length)) }
 }

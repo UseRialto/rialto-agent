@@ -54,22 +54,24 @@ const registerSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
   email: z.string().email('Invalid email address'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
-  role: z.enum(['vendor', 'contractor'], { message: 'Select a role' }),
+  role: z.enum(['vendor', 'contractor']).optional(),
 })
 
 export async function registerAction(_state: FormState, formData: FormData): Promise<FormState> {
+  const submittedRole = formData.get('role')
   const parsed = registerSchema.safeParse({
     name: formData.get('name'),
     email: formData.get('email'),
     password: formData.get('password'),
-    role: formData.get('role'),
+    role: submittedRole || undefined,
   })
 
   if (!parsed.success) {
     return { errors: parsed.error.flatten().fieldErrors }
   }
 
-  const { name, email, password, role } = parsed.data
+  const { name, email, password } = parsed.data
+  const role = parsed.data.role ?? 'contractor'
 
   if (await findUserByEmail(email)) {
     return { message: 'An account with this email already exists.' }

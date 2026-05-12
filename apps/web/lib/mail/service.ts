@@ -871,6 +871,7 @@ async function getOffPlatformInvites(rfqId: string) {
     .filter((row) => row.email)
     .map((row) => ({
       email: row.email ?? '',
+      vendorFirstName: row.vendorFirstName ?? undefined,
       vendorName: row.vendorName ?? [row.vendorFirstName, row.vendorLastName].filter(Boolean).join(' '),
     }))
 }
@@ -911,7 +912,8 @@ async function upsertVendorRequest(userId: string, rfqId: string, vendorEmail: s
 
 async function ensureVendorRequestsForRFQ(userId: string, rfqId: string) {
   const invites = await getOffPlatformInvites(rfqId)
-  return Promise.all(invites.map((invite) => upsertVendorRequest(userId, rfqId, invite.email, invite.vendorName)))
+  const requests = await Promise.all(invites.map((invite) => upsertVendorRequest(userId, rfqId, invite.email, invite.vendorName)))
+  return requests.map((request, i) => ({ ...request, vendorFirstName: invites[i]?.vendorFirstName }))
 }
 
 function attachmentFilenameFromUrl(url: string) {
@@ -2405,6 +2407,7 @@ export async function sendRFQInvites(userId: string, rfqId: string, baseUrl?: st
     const templateParams = {
       vendorName: request.vendor_name,
       vendorEmail: request.vendor_email,
+      vendorFirstName: request.vendorFirstName,
     }
     const renderedSubject = renderVendorEmailTemplate(draft.subject, templateParams)
     const renderedBody = renderVendorEmailTemplate(draft.body, templateParams)

@@ -8,9 +8,23 @@ import { createProjectAction } from '@/lib/actions/contractor'
 import { uploadProjectSpecPdf } from '@/lib/files/blob-client-upload'
 import { ADDRESS_SUGGESTIONS } from '@/lib/fixtures/address-suggestions'
 
+function formatBudgetInput(value: string) {
+  const cleaned = value.replace(/[^\d.]/g, '')
+  const [whole = '', ...decimalParts] = cleaned.split('.')
+  const formattedWhole = whole.replace(/^0+(?=\d)/, '').replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  const decimal = decimalParts.join('').slice(0, 2)
+  if (cleaned.includes('.')) return `${formattedWhole || '0'}.${decimal}`
+  return formattedWhole
+}
+
+function isProjectSpecPdf(file: File) {
+  return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+}
+
 export function CreateProjectForm() {
   const [state, action, pending] = useActionState(createProjectAction, undefined)
   const [location, setLocation] = useState('')
+  const [budget, setBudget] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [draggingFiles, setDraggingFiles] = useState(false)
@@ -46,8 +60,10 @@ export function CreateProjectForm() {
 
   function addFiles(files: FileList | File[]) {
     const incoming = Array.from(files)
+    const pdfFiles = incoming.filter(isProjectSpecPdf)
+    const skippedCount = incoming.length - pdfFiles.length
     const merged = [...selectedFiles]
-    for (const file of incoming) {
+    for (const file of pdfFiles) {
       const duplicate = merged.some((existing) => (
         existing.name === file.name &&
         existing.size === file.size &&
@@ -57,6 +73,7 @@ export function CreateProjectForm() {
     }
     setSelectedFiles(merged)
     syncFileInput(merged)
+    setUploadError(skippedCount > 0 ? `${skippedCount} non-PDF file${skippedCount === 1 ? '' : 's'} skipped. Project spec uploads must be PDFs.` : '')
   }
 
   function removeFile(index: number) {
@@ -66,11 +83,10 @@ export function CreateProjectForm() {
   }
 
   async function uploadProjectSpecFiles() {
-    const pdfFiles = selectedFiles.filter((file) => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'))
-    if (pdfFiles.length === 0) return []
+    if (selectedFiles.length === 0) return []
 
     const uploaded = []
-    for (const file of pdfFiles) {
+    for (const file of selectedFiles) {
       const json = await uploadProjectSpecPdf(file, `project-specs/pending/${uploadBatchRef.current}`)
       uploaded.push({
         filename: json.filename,
@@ -205,9 +221,10 @@ export function CreateProjectForm() {
           <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm" style={{ color: '#8a9e96' }}>$</span>
           <input
             name="budget"
-            type="number"
-            min="0"
-            step="1000"
+            type="text"
+            inputMode="decimal"
+            value={budget}
+            onChange={(event) => setBudget(formatBudgetInput(event.target.value))}
             placeholder="0"
             className="w-full rounded-md border bg-white py-2 pl-7 pr-3 text-sm focus:border-[#fa6b04] focus:outline-none"
             style={{ borderColor: '#e2d9cf', color: '#1e3a2f' }}
@@ -250,6 +267,7 @@ export function CreateProjectForm() {
             ref={fileInputRef}
             type="file"
             multiple
+            accept="application/pdf,.pdf"
             className="hidden"
             onChange={(e) => addFiles(e.target.files ?? [])}
           />
@@ -257,7 +275,7 @@ export function CreateProjectForm() {
             <UploadCloud className="h-5 w-5" />
           </div>
           <p className="mt-3 text-sm font-semibold" style={{ color: '#1e3a2f' }}>Drop files here or click to browse</p>
-          <p className="mt-1 text-xs" style={{ color: '#8a9e96' }}>Add drawings, schedules, specs, or project reference documents.</p>
+          <p className="mt-1 text-xs" style={{ color: '#8a9e96' }}>Add PDF drawings, schedules, specs, or project reference documents.</p>
         </div>
 
         {selectedFiles.length > 0 && (

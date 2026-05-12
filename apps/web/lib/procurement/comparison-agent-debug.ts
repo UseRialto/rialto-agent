@@ -15,13 +15,17 @@ export interface ComparisonAgentDebugResponse {
   toolResults?: Array<{ toolId?: string; status?: string; summary?: string }>
 }
 
+export interface ComparisonAgentProgressEvent {
+  type?: 'status' | 'tool_result'
+  message?: string
+  toolId?: string
+  status?: string
+}
+
 export function initialAgentProgressSteps(message: string) {
   const trimmed = message.trim()
   return [
     trimmed ? `Received request: ${trimmed}` : 'Received request.',
-    'Reading the visible quote comparison sheet state.',
-    'Sending the sheet snapshot to Rialto Agent.',
-    'Waiting for plan, tool calls, and one preview patch batch.',
   ]
 }
 
@@ -46,7 +50,7 @@ export function debugStepsFromAgentResponse(response: ComparisonAgentDebugRespon
 
   if (trace?.proposal) {
     const operationCount = trace.proposal.operations?.length ?? 0
-    steps.push(`Preview batch: ${operationCount} operation${operationCount === 1 ? '' : 's'} ready for approve-all-or-discard.`)
+    steps.push(`Change batch: ${operationCount} operation${operationCount === 1 ? '' : 's'} ready for approve-all-or-discard.`)
   }
 
   for (const warning of trace?.warnings ?? []) steps.push(`Warning: ${warning}`)
@@ -54,6 +58,15 @@ export function debugStepsFromAgentResponse(response: ComparisonAgentDebugRespon
 
   if (steps.length === 0 && trace?.responseState) steps.push(`Agent finished with status: ${trace.responseState}`)
   return steps
+}
+
+export function debugStepFromProgressEvent(event: ComparisonAgentProgressEvent) {
+  if (event.type === 'tool_result') {
+    const tool = event.toolId ? prettyToolId(event.toolId) : 'tool'
+    const status = event.status ? ` (${event.status})` : ''
+    return `Tool: ${tool}${status}${event.message ? ` - ${event.message}` : ''}`
+  }
+  return event.message ?? 'Rialto Agent is working.'
 }
 
 function prettyToolId(toolId: string) {

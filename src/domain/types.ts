@@ -132,6 +132,13 @@ export interface AgentTurnRequest {
   quoteComparison?: QuoteComparisonTurnContext
 }
 
+export interface AgentProgressEvent {
+  type: 'status' | 'tool_result'
+  message: string
+  toolId?: string
+  status?: ToolResult['status']
+}
+
 export interface AgentTurnResponse {
   requestId: string
   status: 'completed' | 'needs_clarification' | 'blocked' | 'tool_error'

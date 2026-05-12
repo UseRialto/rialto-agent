@@ -16,7 +16,7 @@ function StatusCard({
     >
       <div className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-2xl items-center">
         <div className="w-full rounded-2xl border bg-white p-8 shadow-sm" style={{ borderColor: '#e2d9cf' }}>
-          <Image src="/Rialto_Full_Logo_CLEAR.png" alt="Rialto" height={38} width={126} className="object-contain" />
+          <Image src="/Rialto_Full_Logo_CLEAR.png" alt="Rialto" height={38} width={196} className="h-[38px] w-auto object-contain" />
           <p className="mt-6 text-xs font-semibold uppercase tracking-[0.2em]" style={{ color: '#8a9e96' }}>Secure Quote Form</p>
           <h1 className="mt-3 text-2xl font-semibold" style={{ color: '#1e3a2f' }}>{title}</h1>
           <p className="mt-2 text-sm" style={{ color: '#4a6358' }}>{body}</p>
