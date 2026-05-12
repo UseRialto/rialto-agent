@@ -2358,11 +2358,15 @@ async function assertSendableMailbox(userId: string) {
   return mailbox
 }
 
-export async function sendRFQInvites(userId: string, rfqId: string, baseUrl?: string): Promise<OffPlatformSendSummary> {
+export async function sendRFQInvites(userId: string, rfqId: string, baseUrl?: string, vendorEmails?: string[]): Promise<OffPlatformSendSummary> {
   const rfq = await assertContractorOwnsRFQ(userId, rfqId)
   const mailbox = await assertSendableMailbox(userId)
   const provider = mailboxProvider(mailbox)
-  const requests = await ensureVendorRequestsForRFQ(userId, rfqId)
+  const emailFilter = vendorEmails
+    ? new Set(vendorEmails.map((email) => email.trim().toLowerCase()).filter(Boolean))
+    : null
+  const requests = (await ensureVendorRequestsForRFQ(userId, rfqId))
+    .filter((request) => !emailFilter || emailFilter.has(request.vendor_email.toLowerCase()))
   if (requests.length === 0) {
     throw new Error('Add at least one off-platform vendor before sending the RFQ.')
   }

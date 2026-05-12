@@ -470,6 +470,35 @@ export async function saveRFQ(rfq: ContractorRFQ): Promise<void> {
   }
 }
 
+export async function updateRFQInviteList(
+  rfqId: string,
+  invites: NonNullable<ContractorRFQ['invites']>,
+  emailBody?: string,
+): Promise<void> {
+  // Keep invite-only edits away from saveRFQ; replacing RFQ line items can cascade into bid line responses.
+  const patch: Partial<typeof rfqsTable.$inferInsert> = {}
+  if (emailBody !== undefined) patch.email_body = emailBody
+  if (Object.keys(patch).length > 0) {
+    await db.update(rfqsTable).set(patch).where(eq(rfqsTable.id, rfqId))
+  }
+
+  await db.delete(rfqInvitesTable).where(eq(rfqInvitesTable.rfq_id, rfqId))
+  const inviteRows = invites
+    .filter((invite) => invite.vendor_id || invite.vendor_email)
+    .map((invite) => ({
+      rfq_id: rfqId,
+      vendor_id: invite.vendor_id ?? null,
+      vendor_email: invite.vendor_email || null,
+      vendor_name: invite.vendor_name || null,
+      vendor_first_name: invite.vendor_first_name ?? null,
+      vendor_last_name: invite.vendor_last_name ?? null,
+      on_platform: invite.on_platform,
+    }))
+  if (inviteRows.length > 0) {
+    await db.insert(rfqInvitesTable).values(inviteRows)
+  }
+}
+
 export async function deleteRFQ(rfqId: string): Promise<void> {
   await db.delete(rfqsTable).where(eq(rfqsTable.id, rfqId))
   // Cascades: rfq_line_items, rfq_invites, bids → bid_line_items

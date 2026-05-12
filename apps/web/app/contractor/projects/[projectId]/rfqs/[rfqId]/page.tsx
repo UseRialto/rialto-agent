@@ -14,7 +14,7 @@ import { formatDate } from '@/lib/utils'
 import { BidDashboard } from './_components/BidDashboard'
 import { EditableRFQTitle } from './_components/EditableRFQTitle'
 import { MessageCenter } from './_components/MessageCenter'
-import { RFQActions } from './_components/RFQActions'
+import { InviteAdditionalVendorsButton, RFQActions } from './_components/RFQActions'
 
 function fmt(n: number): string {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`
@@ -106,8 +106,8 @@ export default async function RFQDetailPage({
 
   if (isFullScreenComparison) {
     return (
-      <div className="-m-6 flex h-[calc(100vh-0rem)] min-h-0 flex-col" style={{ background: '#eef3f0' }}>
-        <div className="shrink-0 border-b px-5 pt-4" style={{ borderColor: '#d9e0dc', background: '#f8faf9' }}>
+      <div className="-m-6 min-h-[calc(100vh+13rem)]" style={{ background: '#eef3f0' }}>
+        <div className="border-b px-5 pt-4" style={{ borderColor: '#d9e0dc', background: '#f8faf9' }}>
           <nav className="mb-3 text-xs" style={{ color: '#587067' }}>
             <Link href="/contractor/projects" className="hover:underline" style={{ color: '#8a9e96' }}>Projects</Link>
             <span className="mx-2">/</span>
@@ -130,16 +130,19 @@ export default async function RFQDetailPage({
                 Due {rfq.bid_deadline}
               </span>
             )}
-            <div className="ml-auto flex items-center gap-2">
-              <a
-                href={`/api/rfq-pdf/${rfqId}`}
-                download={`${rfq.request_type === 'rfp' ? 'rfp' : 'rfq'}-${rfqId}.pdf`}
-                className="inline-flex items-center gap-1.5 rounded border bg-white px-3 py-1.5 text-xs font-medium shadow-sm transition-colors"
-                style={{ borderColor: '#e2d9cf', color: '#4a6358' }}
-              >
-                Download PDF
-              </a>
-              <RFQActions rfqId={rfqId} projectId={projectId} status={rfq.status} />
+            <div className="ml-auto flex flex-col items-end gap-2">
+              <div className="flex items-center gap-2">
+                <a
+                  href={`/api/rfq-pdf/${rfqId}`}
+                  download={`${rfq.request_type === 'rfp' ? 'rfp' : 'rfq'}-${rfqId}.pdf`}
+                  className="inline-flex items-center gap-1.5 rounded border bg-white px-3 py-1.5 text-xs font-medium shadow-sm transition-colors"
+                  style={{ borderColor: '#e2d9cf', color: '#4a6358' }}
+                >
+                  Download PDF
+                </a>
+                <RFQActions rfqId={rfqId} projectId={projectId} status={rfq.status} />
+              </div>
+              <InviteAdditionalVendorsButton projectId={projectId} rfq={rfq} projectName={project.name} />
             </div>
           </div>
           <nav className="flex gap-1 overflow-x-auto">
@@ -170,7 +173,7 @@ export default async function RFQDetailPage({
             ))}
           </div>
         </div>
-        <div className="min-h-0 flex-1">
+        <div className="sticky top-0 z-10 h-screen min-h-0 shadow-[0_-1px_0_#d9e0dc,0_12px_28px_rgba(30,58,47,0.12)]">
           <BidDashboard
             projectId={projectId}
             projectName={project.name}
@@ -226,25 +229,28 @@ export default async function RFQDetailPage({
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2 lg:relative">
-          <div className="flex items-center justify-end gap-2 lg:absolute lg:bottom-full lg:right-0 lg:mb-2">
-            {rfq.status === 'draft' && rfq.request_type === 'rfq' && (
-              <Link
-                href={`/contractor/projects/${projectId}/rfqs/new?rfqId=${rfq.id}`}
-                className="inline-flex items-center gap-1.5 rounded border px-3 py-1.5 text-xs font-medium transition-colors"
-                style={{ borderColor: '#e8c4a0', background: '#fdf0e8', color: '#a85c2a' }}
+          <div className="flex flex-col items-end gap-2 lg:absolute lg:bottom-full lg:right-0 lg:mb-2">
+            <div className="flex items-center justify-end gap-2">
+              {rfq.status === 'draft' && rfq.request_type === 'rfq' && (
+                <Link
+                  href={`/contractor/projects/${projectId}/rfqs/new?rfqId=${rfq.id}`}
+                  className="inline-flex items-center gap-1.5 rounded border px-3 py-1.5 text-xs font-medium transition-colors"
+                  style={{ borderColor: '#e8c4a0', background: '#fdf0e8', color: '#a85c2a' }}
+                >
+                  Edit Draft
+                </Link>
+              )}
+              <a
+                href={`/api/rfq-pdf/${rfqId}`}
+                download={`${rfq.request_type === 'rfp' ? 'rfp' : 'rfq'}-${rfqId}.pdf`}
+                className="inline-flex items-center gap-1.5 rounded border bg-white px-3 py-1.5 text-xs font-medium shadow-sm transition-colors"
+                style={{ borderColor: '#e2d9cf', color: '#4a6358' }}
               >
-                Edit Draft
-              </Link>
-            )}
-            <a
-              href={`/api/rfq-pdf/${rfqId}`}
-              download={`${rfq.request_type === 'rfp' ? 'rfp' : 'rfq'}-${rfqId}.pdf`}
-              className="inline-flex items-center gap-1.5 rounded border bg-white px-3 py-1.5 text-xs font-medium shadow-sm transition-colors"
-              style={{ borderColor: '#e2d9cf', color: '#4a6358' }}
-            >
-              Download PDF
-            </a>
-            <RFQActions rfqId={rfqId} projectId={projectId} status={rfq.status} />
+                Download PDF
+              </a>
+              <RFQActions rfqId={rfqId} projectId={projectId} status={rfq.status} />
+            </div>
+            <InviteAdditionalVendorsButton projectId={projectId} rfq={rfq} projectName={project.name} />
           </div>
           {bids.length > 0 && (
             <div className="grid grid-cols-3 overflow-hidden rounded-2xl border bg-white shadow-sm" style={{ borderColor: '#e2d9cf' }}>

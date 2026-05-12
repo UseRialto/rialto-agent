@@ -19,9 +19,10 @@ import {
   getRFQById,
   getVendorRelationship,
   upsertVendorRelationship,
+  updateRFQInviteList,
 } from '@/lib/store/contractor-store'
 import { disconnectMailboxOAuth, getMailboxSummary, humanizeMailError, sendNegotiationThreadReply, sendRFQEmails, sendRFQInvites, syncRFQReplies } from '@/lib/mail/service'
-import type { ContractorProject, ContractorRFQ, OffPlatformSendSummary } from '@/lib/types/contractor'
+import type { ContractorProject, ContractorRFQ, ContractorVendorInvite, OffPlatformSendSummary } from '@/lib/types/contractor'
 import type { FormState } from '@/lib/actions/auth'
 import type {
   AISpecAssistantResult,
@@ -481,6 +482,92 @@ export async function publishRFQAction(
   revalidatePath('/vendor/projects')
   revalidatePath(`/contractor/projects/${projectId}/rfqs/${rfqId}`)
   return { success: true, redirectTo: `/contractor/projects/${projectId}`, offPlatformSendSummary }
+}
+
+export async function inviteAdditionalVendorsAction(
+  projectId: string,
+  rfqId: string,
+  invites: ContractorVendorInvite[],
+  emailBody: string,
+): Promise<{ success: boolean; error?: string; offPlatformSendSummary?: OffPlatformSendSummary }> {
+  const session = await getSession()
+  if (!session || session.role !== 'contractor') return { success: false, error: 'Not authenticated' }
+
+  const rfq = await getRFQ(rfqId)
+  if (!rfq || rfq.project_id !== projectId) return { success: false, error: 'RFQ not found' }
+  if (rfq.status !== 'active') return { success: false, error: 'Only active RFQs can invite additional vendors.' }
+
+  const existingInviteKeys = new Set((rfq.invites ?? []).map((invite) =>
+    invite.vendor_id ? `id:${invite.vendor_id}` : `email:${invite.vendor_email.toLowerCase()}`,
+  ))
+  const normalizedInvites = normalizeInvites({
+    rfqId,
+    title: rfq.title,
+    requestType: rfq.request_type,
+    emailSubject: rfq.email_subject,
+    emailBody: emailBody || rfq.email_body,
+    category: rfq.category,
+    anonymousPublicListing: rfq.anonymous_public_listing,
+    rfpDetails: rfq.rfp_details,
+    procurementRequirements: rfq.procurement_requirements,
+    aiSpecAssistant: rfq.ai_spec_assistant,
+    commodityWatch: rfq.commodity_watch,
+    attachmentUrls: rfq.attachment_urls,
+    vendorResponseFields: rfq.vendor_response_fields,
+    line_items: rfq.line_items,
+    invites,
+    invited_vendor_ids: [],
+    invited_vendor_emails: [],
+    visibility: rfq.visibility,
+    bid_deadline: rfq.bid_deadline,
+    sourceRfqId: rfq.source_rfq_id,
+  })
+  const missingInviteNamesError = validateOffPlatformInviteNames(normalizedInvites)
+  if (missingInviteNamesError) return { success: false, error: missingInviteNamesError }
+
+  const newOffPlatformEmails = normalizedInvites
+    .filter((invite) => !invite.on_platform && invite.vendor_email)
+    .filter((invite) => !existingInviteKeys.has(`email:${invite.vendor_email.toLowerCase()}`))
+    .map((invite) => invite.vendor_email.toLowerCase())
+
+  await updateRFQInviteList(rfq.id, normalizedInvites, emailBody || rfq.email_body)
+
+  let offPlatformSendSummary: OffPlatformSendSummary | undefined
+  if (newOffPlatformEmails.length > 0) {
+    const mailbox = await getMailboxSummary(session.userId)
+    if (!mailbox.connected) {
+      revalidatePath(`/contractor/projects/${projectId}/rfqs/${rfqId}`)
+      return {
+        success: false,
+        error: 'Additional vendors were saved, but a Google Workspace or Microsoft 365 mailbox must be connected before sending off-platform invites.',
+      }
+    }
+    const headerList = await headers()
+    const host = headerList.get('x-forwarded-host') ?? headerList.get('host')
+    const proto = headerList.get('x-forwarded-proto') ?? 'http'
+    const baseUrl = host ? `${proto}://${host}` : undefined
+    try {
+      offPlatformSendSummary = await sendRFQInvites(session.userId, rfqId, baseUrl, newOffPlatformEmails)
+    } catch (error) {
+      revalidatePath(`/contractor/projects/${projectId}/rfqs/${rfqId}`)
+      return {
+        success: false,
+        error: humanizeMailError(error),
+      }
+    }
+    if (offPlatformSendSummary.failedCount > 0) {
+      revalidatePath(`/contractor/projects/${projectId}/rfqs/${rfqId}`)
+      return {
+        success: false,
+        offPlatformSendSummary,
+        error: `Failed to send ${offPlatformSendSummary.failedCount} additional invite${offPlatformSendSummary.failedCount === 1 ? '' : 's'}.`,
+      }
+    }
+  }
+
+  revalidatePath(`/contractor/projects/${projectId}`)
+  revalidatePath(`/contractor/projects/${projectId}/rfqs/${rfqId}`)
+  return { success: true, offPlatformSendSummary }
 }
 
 // --- Delete Draft RFQ ---
