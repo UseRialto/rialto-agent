@@ -336,6 +336,50 @@ export function RFQWizard({
     }]))
   }
 
+  function renameTemplateField(key: string, newLabel: string) {
+    syncRowsToTemplate(fieldTemplate.map((f) => f.key === key ? { ...f, label: newLabel } : f))
+  }
+
+  function addCustomTemplateField() {
+    const key = `custom-${Date.now()}`
+    syncRowsToTemplate(mergeFieldDefinitions(fieldTemplate, [{
+      key,
+      label: 'New Column',
+      inputType: 'text',
+      required: false,
+      visible: true,
+      options: [],
+      source: 'user',
+      order: fieldTemplate.length,
+    }]))
+  }
+
+  function addVendorResponseField() {
+    const key = `vendor-custom-${Date.now()}`
+    setVendorResponseTemplate(sanitizeVendorResponseFields([...vendorResponseTemplate, {
+      key,
+      label: 'New Column',
+      inputType: 'text',
+      required: false,
+      visible: true,
+      options: [],
+      source: 'user',
+      order: vendorResponseTemplate.length,
+    }]))
+  }
+
+  function removeVendorResponseField(key: string) {
+    setVendorResponseTemplate(sanitizeVendorResponseFields(vendorResponseTemplate.filter((f) => f.key !== key)))
+  }
+
+  function renameVendorResponseField(key: string, newLabel: string) {
+    setVendorResponseTemplate(sanitizeVendorResponseFields(vendorResponseTemplate.map((f) => f.key === key ? { ...f, label: newLabel } : f)))
+  }
+
+  function toggleVendorResponseFieldRequired(key: string) {
+    setVendorResponseTemplate(sanitizeVendorResponseFields(vendorResponseTemplate.map((f) => f.key === key ? { ...f, required: !f.required } : f)))
+  }
+
   function moveTemplateField(dragKey: string, targetKey: string, position: 'before' | 'after' = 'before') {
     if (dragKey === targetKey) return
     const index = fieldTemplate.findIndex((field) => field.key === dragKey)
@@ -419,7 +463,7 @@ export function RFQWizard({
           vendor_id: invite.id,
           vendor_email: invite.email,
           vendor_name: invite.name || invite.email || invite.id || '',
-          vendor_first_name: invite.firstName?.trim() || undefined,
+          vendor_first_name: invite.nickname?.trim() || invite.firstName?.trim() || undefined,
           vendor_last_name: invite.lastName?.trim() || undefined,
           on_platform: invite.onPlatform,
         })),
@@ -654,6 +698,12 @@ export function RFQWizard({
             onTemplateFieldRemove={removeTemplateField}
             onTemplateFieldMove={moveTemplateField}
             onTemplateReplace={syncRowsToTemplate}
+            onTemplateFieldRename={renameTemplateField}
+            onTemplateFieldAddCustom={addCustomTemplateField}
+            onVendorResponseFieldAdd={addVendorResponseField}
+            onVendorResponseFieldRemove={removeVendorResponseField}
+            onVendorResponseFieldRename={renameVendorResponseField}
+            onVendorResponseFieldToggleRequired={toggleVendorResponseFieldRequired}
             onFieldRemove={(field) => setFieldVisible(field, false)}
             onFieldRestore={(field) => setFieldVisible(field, true)}
             onItemsChange={setItems}

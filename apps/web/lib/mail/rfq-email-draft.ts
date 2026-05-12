@@ -12,7 +12,7 @@ export function buildRFQEmailBody(params: {
   requestType?: RequestType
   bidDeadline?: string | null
 }) {
-  const senderName = params.senderName?.trim() || params.contractorName
+  const senderName = params.senderName?.trim() || 'Rialto'
   const deadline = params.bidDeadline
     ? `Please send your quote by ${params.bidDeadline}.`
     : 'Please send your quote at your earliest convenience.'
@@ -22,7 +22,7 @@ export function buildRFQEmailBody(params: {
     '',
     `${params.contractorName} is requesting ${params.requestType === 'rfp' ? 'a proposal' : 'a quote'} for ${params.rfqTitle} on the ${params.projectName} project. ${deadline} Use the secure quote form linked in this email to submit your pricing, lead times, and any scope notes; the ${params.requestType === 'rfp' ? 'RFP' : 'RFQ'} PDF is attached for reference.`,
     '',
-    'Thank you,',
+    'Best,',
     senderName,
   ].join('\n')
 }
@@ -53,9 +53,9 @@ export function deriveVendorFirstName(vendorName?: string, vendorEmail?: string)
   return cleaned.split(/\s+/)[0] ?? 'Vendor'
 }
 
-export function renderVendorEmailTemplate(body: string, params: { vendorName?: string; vendorEmail?: string }) {
+export function renderVendorEmailTemplate(body: string, params: { vendorName?: string; vendorEmail?: string; vendorFirstName?: string }) {
   const vendorName = (params.vendorName ?? '').trim() || params.vendorEmail?.trim() || 'Vendor'
-  const firstName = deriveVendorFirstName(vendorName, params.vendorEmail)
+  const firstName = params.vendorFirstName?.trim() || deriveVendorFirstName(vendorName, params.vendorEmail)
   return body
     .replaceAll('{{vendor_first_name}}', firstName)
     .replaceAll('{{vendor_name}}', vendorName)
