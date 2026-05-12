@@ -241,6 +241,9 @@ export function StepReview({
             projectLocation,
             requestType,
             rfpDetails,
+            attachmentUrls,
+            procurementRequirements,
+            commodityWatch,
             title,
             bidDeadline: bidDeadline || undefined,
             lineItems: items
@@ -288,7 +291,7 @@ export function StepReview({
       active = false
       if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl)
     }
-  }, [bidDeadline, contractorName, items, projectId, projectLocation, projectName, requestType, rfpDetails, rfqId, title])
+  }, [attachmentUrls, bidDeadline, commodityWatch, contractorName, items, procurementRequirements, projectId, projectLocation, projectName, requestType, rfpDetails, rfqId, title])
 
   async function handleSave() {
     setSaving(true)
@@ -532,7 +535,7 @@ export function StepReview({
         </div>
 
         {previewLoading ? (
-          <div className="flex h-[28rem] items-center justify-center rounded-xl border-dashed text-sm" style={{ background: '#ede8e2', border: '2px dashed #e2d9cf', color: '#8a9e96' }}>
+          <div className="flex h-72 items-center justify-center rounded-xl border-dashed text-sm" style={{ background: '#ede8e2', border: '2px dashed #e2d9cf', color: '#8a9e96' }}>
             Generating preview…
           </div>
         ) : previewError ? (

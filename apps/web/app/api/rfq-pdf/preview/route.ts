@@ -1,5 +1,5 @@
 import { buildRFQPreviewPdfBytes } from '@/lib/rfq-pdf'
-import type { ProcurementLineItemAttribute, RequestType, RFPDetails } from '@/lib/types/procurement'
+import type { CommodityWatch, ProcurementLineItemAttribute, ProcurementRequirement, RequestType, RFPDetails } from '@/lib/types/procurement'
 
 type PreviewPayload = {
   rfqId?: string
@@ -9,6 +9,9 @@ type PreviewPayload = {
   contractorName?: string
   requestType?: RequestType
   rfpDetails?: RFPDetails
+  attachmentUrls?: string[]
+  procurementRequirements?: ProcurementRequirement[]
+  commodityWatch?: CommodityWatch[]
   title?: string
   bidDeadline?: string
   lineItems?: Array<{
@@ -17,6 +20,7 @@ type PreviewPayload = {
     quantity?: number
     unit?: string
     specs?: string
+    constraints?: string
     attributes?: ProcurementLineItemAttribute[]
     certifications?: string[]
     notes?: string
@@ -48,6 +52,9 @@ export async function POST(request: Request) {
     contractorName: payload.contractorName?.trim() || undefined,
     requestType: payload.requestType,
     rfpDetails: payload.rfpDetails,
+    attachmentUrls: payload.attachmentUrls,
+    procurementRequirements: payload.procurementRequirements,
+    commodityWatch: payload.commodityWatch,
     title,
     bidDeadline: payload.bidDeadline?.trim() || undefined,
     lineItems: lineItems.map((item) => ({
@@ -57,6 +64,7 @@ export async function POST(request: Request) {
       quantity: Number(item.quantity ?? 0),
       unit: item.unit?.trim() || 'ea',
       specs: item.specs?.trim() || '',
+      constraints: item.constraints?.trim() || '',
       attributes: item.attributes ?? [],
       certifications: item.certifications ?? [],
       notes: item.notes?.trim() || '',
