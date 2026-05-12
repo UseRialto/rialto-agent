@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { GripVertical, Plus, UploadCloud, X } from 'lucide-react'
+import { GripVertical, Plus, Settings, UploadCloud, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { SKU_CATALOG, SKU_CATEGORIES, type SKUEntry } from '@/lib/fixtures/sku-catalog'
 import type { ContractorRFQLineItem } from '@/lib/types/contractor'
@@ -155,6 +155,7 @@ interface Props {
   availableFieldBank?: ContractorFieldBankEntry[]
   fieldVisibility?: RFQCreationFieldVisibility
   isCustomizingFields?: boolean
+  onToggleCustomizeFields?: () => void
   existingCategories: string[]
   items: ItemRow[]
   onRequestTypeChange: (v: RequestType) => void
@@ -196,6 +197,7 @@ export function StepItems({
   availableFieldBank = [],
   fieldVisibility = DEFAULT_RFQ_CREATION_FIELD_VISIBILITY,
   isCustomizingFields = false,
+  onToggleCustomizeFields,
   existingCategories,
   items,
   onRequestTypeChange,
@@ -751,24 +753,39 @@ export function StepItems({
               Import a takeoff file or add materials manually with SKU, quantity, unit, specs, constraints, notes, budget, and lead time.
             </p>
           </div>
-          <div className="flex shrink-0 rounded-xl p-1" style={{ background: '#ede8e2', border: '1px solid #e2d9cf' }}>
-            {(['import', 'manual'] as const).map((mode) => {
-              const active = materialEntryMode === mode
-              return (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setMaterialEntryMode(mode)}
-                  className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
-                  style={active
-                    ? { background: '#ffffff', color: '#1e3a2f', boxShadow: '0 1px 3px rgba(30,58,47,0.12)' }
-                    : { color: '#4a6358' }
-                  }
-                >
-                  {mode === 'import' ? 'Import File' : 'Manual Entry'}
-                </button>
-              )
-            })}
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={onToggleCustomizeFields}
+              className="flex h-8 w-8 items-center justify-center rounded-xl transition-colors"
+              style={isCustomizingFields
+                ? { background: '#a85c2a', color: '#ffffff', border: '1px solid #a85c2a' }
+                : { background: '#f5f0eb', color: '#4a6358', border: '1px solid #e2d9cf' }
+              }
+              aria-label="Customize fields"
+              title="Customize fields"
+            >
+              <Settings className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <div className="flex rounded-xl p-1" style={{ background: '#ede8e2', border: '1px solid #e2d9cf' }}>
+              {(['import', 'manual'] as const).map((mode) => {
+                const active = materialEntryMode === mode
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setMaterialEntryMode(mode)}
+                    className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors"
+                    style={active
+                      ? { background: '#ffffff', color: '#1e3a2f', boxShadow: '0 1px 3px rgba(30,58,47,0.12)' }
+                      : { color: '#4a6358' }
+                    }
+                  >
+                    {mode === 'import' ? 'Import File' : 'Manual Entry'}
+                  </button>
+                )
+              })}
+            </div>
           </div>
         </div>
 
@@ -782,43 +799,6 @@ export function StepItems({
           className="sr-only"
         />
         {importError && <p className="px-5 pt-4 text-xs" style={{ color: '#a85c2a' }}>{importError}</p>}
-
-        {isCustomizingFields && materialEntryMode === 'manual' && (
-          <div className="mx-5 mt-4 rounded-xl px-3 py-3" style={{ background: '#edf6ef', border: '1px solid #2f9e62' }}>
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="mr-1 text-xs font-semibold uppercase tracking-wider" style={{ color: '#1f7a45' }}>Quick add</p>
-              {availableFieldBank.map((entry) => (
-                <button
-                  key={entry.key}
-                  type="button"
-                  onClick={() => onTemplateFieldAdd?.(entry.key)}
-                  className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1.5 text-xs font-semibold"
-                  style={{ border: '1px solid #2f9e62', color: '#1f7a45' }}
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  {entry.label}
-                </button>
-              ))}
-              {hiddenMaterialFields.map((field) => (
-                <button
-                  key={field.key}
-                  type="button"
-                  onClick={() => restoreField(field.key)}
-                  className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1.5 text-xs font-semibold"
-                  style={{ border: '1px solid #2f9e62', color: '#1f7a45' }}
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  {field.label}
-                </button>
-              ))}
-              {availableFieldBank.length === 0 && hiddenMaterialFields.length === 0 && (
-                <span className="rounded-full bg-white px-2.5 py-1.5 text-xs font-semibold" style={{ border: '1px solid #c5e2cf', color: '#8a9e96' }}>
-                  No recommended fields left
-                </span>
-              )}
-            </div>
-          </div>
-        )}
 
         {materialEntryMode === 'import' && (
           <div className="space-y-4 p-5">

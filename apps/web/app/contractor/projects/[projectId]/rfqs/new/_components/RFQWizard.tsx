@@ -683,6 +683,11 @@ export function RFQWizard({
             availableFieldBank={availableFieldBank}
             fieldVisibility={fieldVisibility}
             isCustomizingFields={fieldSettingsOpen}
+            onToggleCustomizeFields={() => {
+              setFieldSettingsStuck(false)
+              setFieldSettingsOpen((open) => !open)
+              setFieldSettingsToggleCount((count) => count + 1)
+            }}
             existingCategories={existingCategories}
             items={items}
             onRequestTypeChange={setRequestType}
