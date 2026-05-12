@@ -27,12 +27,16 @@ export function MessageCenter({
   const [activeVendorEmail, setActiveVendorEmail] = useState(vendorThreads[0]?.vendorEmail ?? '')
   const [draft, setDraft] = useState('')
   const [error, setError] = useState('')
+  const [composingEmptyThread, setComposingEmptyThread] = useState(false)
   const [isPending, startTransition] = useTransition()
 
   const activeThread = useMemo(
     () => vendorThreads.find((thread) => thread.vendorEmail === activeVendorEmail) ?? vendorThreads[0],
     [activeVendorEmail, vendorThreads],
   )
+  const activeThreadMessages = activeThread?.messages ?? []
+  const hasMessages = activeThreadMessages.length > 0
+  const showComposer = hasMessages || composingEmptyThread
 
   if (vendorThreads.length === 0) {
     return (
@@ -63,6 +67,8 @@ export function MessageCenter({
                 onClick={() => {
                   setActiveVendorEmail(thread.vendorEmail)
                   setError('')
+                  setDraft('')
+                  setComposingEmptyThread(false)
                 }}
                 className="w-full rounded-xl px-3 py-3 text-left transition-colors"
                 style={active ? { background: '#fff3eb' } : { background: 'transparent' }}
@@ -86,7 +92,22 @@ export function MessageCenter({
             <h2 className="mt-1 text-xl font-semibold" style={{ color: '#1e3a2f' }}>
               {activeThread?.vendorName || activeThread?.vendorEmail}
             </h2>
-            <p className="text-xs" style={{ color: '#8a9e96' }}>{activeThread?.vendorEmail}</p>
+            <div className="mt-2 inline-flex rounded-full border px-3 py-1 text-xs font-medium" style={{ borderColor: '#e2d9cf', background: '#ede8e2', color: '#4a6358' }}>
+              {activeThread?.vendorEmail}
+            </div>
+            {!hasMessages && activeThread && (
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={() => setComposingEmptyThread(true)}
+                  className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white shadow-sm"
+                  style={{ background: '#fa6b04' }}
+                >
+                  <Send className="h-4 w-4" />
+                  Message {activeThread.vendorName || activeThread.vendorEmail}
+                </button>
+              </div>
+            )}
           </div>
           {!mailboxConnected && (
             <Link
@@ -99,18 +120,9 @@ export function MessageCenter({
           )}
         </header>
 
-        <div className="min-h-[24rem] space-y-3 px-5 py-5" style={{ background: '#f5f0eb' }}>
-          {(activeThread?.messages ?? []).length === 0 ? (
-            <div className="flex h-56 items-center justify-center rounded-2xl border border-dashed bg-white px-6 text-center" style={{ borderColor: '#e2d9cf' }}>
-              <div>
-                <p className="text-sm font-semibold" style={{ color: '#1e3a2f' }}>No messages yet</p>
-                <p className="mt-1 text-xs" style={{ color: '#8a9e96' }}>
-                  Start the thread and the vendor will receive a magic-link email to respond.
-                </p>
-              </div>
-            </div>
-          ) : (
-            activeThread?.messages.map((message) => {
+        {hasMessages && (
+          <div className="min-h-[24rem] space-y-3 px-5 py-5" style={{ background: '#f5f0eb' }}>
+            {activeThreadMessages.map((message) => {
               const isContractor = message.author_role === 'contractor'
               return (
                 <div key={message.id} className={isContractor ? 'flex justify-end' : 'flex justify-start'}>
@@ -130,10 +142,11 @@ export function MessageCenter({
                   </div>
                 </div>
               )
-            })
-          )}
-        </div>
+            })}
+          </div>
+        )}
 
+        {showComposer && (
         <div className="border-t p-4" style={{ borderColor: '#ede8e2' }}>
           {error && (
             <div className="mb-3 rounded-xl px-4 py-3 text-sm" style={{ background: '#fdeaea', border: '1px solid #f5c6c6', color: '#c0392b' }}>
@@ -176,6 +189,7 @@ export function MessageCenter({
                     return
                   }
                   setDraft('')
+                  setComposingEmptyThread(false)
                   router.refresh()
                 })
               }}
@@ -187,6 +201,7 @@ export function MessageCenter({
             </button>
           </div>
         </div>
+        )}
       </section>
     </div>
   )

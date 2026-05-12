@@ -5,6 +5,19 @@ import { getSession } from '@/lib/auth/session'
 export const runtime = 'nodejs'
 
 const MAX_SPEC_PDF_BYTES = 1024 * 1024 * 1024 // 1 GB
+const MAX_REQUEST_ATTACHMENT_BYTES = 100 * 1024 * 1024 // 100 MB
+const REQUEST_ATTACHMENT_CONTENT_TYPES = [
+  'application/pdf',
+  'text/csv',
+  'text/plain',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/msword',
+  'image/png',
+  'image/jpeg',
+  'application/octet-stream',
+]
 
 type ClientPayload = {
   filename?: string
@@ -44,10 +57,33 @@ function validateProjectSpecUpload(pathname: string, payload: ClientPayload) {
   }
 }
 
+function validateRequestAttachmentUpload(pathname: string, payload: ClientPayload) {
+  const normalizedPath = pathname.replace(/\\/g, '/')
+  const filename = payload.filename ?? normalizedPath.split('/').at(-1) ?? ''
+  const contentType = payload.contentType ?? 'application/octet-stream'
+
+  if (normalizedPath !== pathname || normalizedPath.includes('..')) {
+    throw new Error('Invalid upload path.')
+  }
+  if (!normalizedPath.startsWith('request-attachments/')) {
+    throw new Error('Request attachments must use the request-attachments folder.')
+  }
+  if (!filename.trim()) {
+    throw new Error('Request attachment filename is required.')
+  }
+  if (!REQUEST_ATTACHMENT_CONTENT_TYPES.includes(contentType)) {
+    throw new Error('Request attachment file type is not supported.')
+  }
+  if (payload.sizeBytes && payload.sizeBytes > MAX_REQUEST_ATTACHMENT_BYTES) {
+    throw new Error('Request attachments must be 100 MB or smaller.')
+  }
+}
+
 export async function GET() {
   return Response.json({
     directUploadAvailable: Boolean(process.env.BLOB_READ_WRITE_TOKEN),
     maxSizeBytes: MAX_SPEC_PDF_BYTES,
+    requestAttachmentMaxSizeBytes: MAX_REQUEST_ATTACHMENT_BYTES,
   })
 }
 
@@ -73,11 +109,18 @@ export async function POST(request: NextRequest) {
       body,
       onBeforeGenerateToken: async (pathname, clientPayload, multipart) => {
         const payload = parseClientPayload(clientPayload)
-        validateProjectSpecUpload(pathname, payload)
+        const normalizedPath = pathname.replace(/\\/g, '/')
+        const isRequestAttachment = normalizedPath.startsWith('request-attachments/')
+
+        if (isRequestAttachment) {
+          validateRequestAttachmentUpload(pathname, payload)
+        } else {
+          validateProjectSpecUpload(pathname, payload)
+        }
 
         return {
-          allowedContentTypes: ['application/pdf'],
-          maximumSizeInBytes: MAX_SPEC_PDF_BYTES,
+          allowedContentTypes: isRequestAttachment ? REQUEST_ATTACHMENT_CONTENT_TYPES : ['application/pdf'],
+          maximumSizeInBytes: isRequestAttachment ? MAX_REQUEST_ATTACHMENT_BYTES : MAX_SPEC_PDF_BYTES,
           addRandomSuffix: true,
           tokenPayload: JSON.stringify({
             userId: session?.userId,
