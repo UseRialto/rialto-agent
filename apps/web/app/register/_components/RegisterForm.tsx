@@ -1,12 +1,11 @@
 'use client'
 
-import { useActionState, useState } from 'react'
+import { useActionState } from 'react'
 import Link from 'next/link'
 import { registerAction } from '@/lib/actions/auth'
 
 export function RegisterForm() {
   const [state, action, pending] = useActionState(registerAction, undefined)
-  const [selectedRole, setSelectedRole] = useState<string>('')
 
   return (
     <form action={action} className="space-y-4">
@@ -71,38 +70,6 @@ export function RegisterForm() {
         />
         {state?.errors?.password && (
           <p className="mt-1 text-xs" style={{ color: '#c0392b' }}>{state.errors.password[0]}</p>
-        )}
-      </div>
-
-      <div>
-        <label className="mb-2 block text-sm font-medium" style={{ color: '#4a6358' }}>I am a…</label>
-        <div className="grid grid-cols-2 gap-3">
-          {(['vendor', 'contractor'] as const).map((role) => (
-            <label
-              key={role}
-              className="flex cursor-pointer flex-col items-center rounded-xl border-2 p-3 text-center transition-colors"
-              style={selectedRole === role
-                ? { borderColor: '#1e3a2f', background: '#f0f4f1' }
-                : { borderColor: '#e2d9cf', background: '#ffffff' }}
-            >
-              <input
-                type="radio"
-                name="role"
-                value={role}
-                className="sr-only"
-                required
-                onChange={() => setSelectedRole(role)}
-              />
-              <span className="text-xl">{role === 'vendor' ? '🏭' : '🏗'}</span>
-              <span className="mt-1 text-sm font-medium capitalize" style={{ color: '#1e3a2f' }}>{role}</span>
-              <span className="mt-0.5 text-xs" style={{ color: '#8a9e96' }}>
-                {role === 'vendor' ? 'Supplier / Distributor' : 'General Contractor'}
-              </span>
-            </label>
-          ))}
-        </div>
-        {state?.errors?.role && (
-          <p className="mt-1 text-xs" style={{ color: '#c0392b' }}>{state.errors.role[0]}</p>
         )}
       </div>
 
