@@ -8,9 +8,19 @@ import { createProjectAction } from '@/lib/actions/contractor'
 import { uploadProjectSpecPdf } from '@/lib/files/blob-client-upload'
 import { ADDRESS_SUGGESTIONS } from '@/lib/fixtures/address-suggestions'
 
+function formatBudgetInput(value: string) {
+  const cleaned = value.replace(/[^\d.]/g, '')
+  const [whole = '', ...decimalParts] = cleaned.split('.')
+  const formattedWhole = whole.replace(/^0+(?=\d)/, '').replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  const decimal = decimalParts.join('').slice(0, 2)
+  if (cleaned.includes('.')) return `${formattedWhole || '0'}.${decimal}`
+  return formattedWhole
+}
+
 export function CreateProjectForm() {
   const [state, action, pending] = useActionState(createProjectAction, undefined)
   const [location, setLocation] = useState('')
+  const [budget, setBudget] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [draggingFiles, setDraggingFiles] = useState(false)
@@ -205,9 +215,10 @@ export function CreateProjectForm() {
           <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm" style={{ color: '#8a9e96' }}>$</span>
           <input
             name="budget"
-            type="number"
-            min="0"
-            step="1000"
+            type="text"
+            inputMode="decimal"
+            value={budget}
+            onChange={(event) => setBudget(formatBudgetInput(event.target.value))}
             placeholder="0"
             className="w-full rounded-md border bg-white py-2 pl-7 pr-3 text-sm focus:border-[#fa6b04] focus:outline-none"
             style={{ borderColor: '#e2d9cf', color: '#1e3a2f' }}
