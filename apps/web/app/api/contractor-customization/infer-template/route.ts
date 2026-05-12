@@ -10,6 +10,7 @@ import {
   sanitizeLineItemFields,
   type CustomLineItemFieldDefinition,
 } from '@/lib/contractor-customization'
+import { loadPdfJs } from '@/lib/pdf/runtime'
 
 const MAX_FILE_BYTES = 4 * 1024 * 1024
 const DEFAULT_MODEL = 'gemini-2.5-flash'
@@ -64,8 +65,7 @@ async function extractExcelRows(buffer: Buffer) {
 }
 
 async function extractPdfText(buffer: Buffer) {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.mjs', import.meta.url).toString()
+  const pdfjs = await loadPdfJs()
   const document = await pdfjs.getDocument({ data: new Uint8Array(buffer), isEvalSupported: false }).promise
   const pageTexts: string[] = []
   for (let pageNumber = 1; pageNumber <= Math.min(document.numPages, 20); pageNumber += 1) {

@@ -4,6 +4,7 @@ import {
   isProbablyText,
   type ImportWarning,
 } from '@/lib/ai/line-item-import'
+import { loadPdfJs } from '@/lib/pdf/runtime'
 import type { RequestType } from '@/lib/types/procurement'
 
 const MAX_IMPORT_BYTES = 512 * 1024
@@ -25,8 +26,7 @@ function isPdfFile(file: File) {
 }
 
 async function extractPdfText(buffer: Buffer) {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.mjs', import.meta.url).toString()
+  const pdfjs = await loadPdfJs()
   const options = {
     data: new Uint8Array(buffer),
     isEvalSupported: false,

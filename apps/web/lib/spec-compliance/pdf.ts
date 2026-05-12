@@ -1,24 +1,9 @@
 import fs from 'fs'
 import path from 'path'
+import { loadPdfJs } from '@/lib/pdf/runtime'
 import type { ExtractedPdfPage } from './types'
 
 const UPLOADS_ROOT = path.join(process.cwd(), '.local', 'uploads')
-
-let pdfRuntimeReady: Promise<void> | undefined
-
-async function ensurePdfRuntime() {
-  pdfRuntimeReady ??= (async () => {
-    const canvas = await import('@napi-rs/canvas')
-    const globalWithCanvas = globalThis as Record<string, unknown>
-
-    globalWithCanvas['DOMMatrix'] ??= canvas.DOMMatrix
-    globalWithCanvas['DOMPoint'] ??= canvas.DOMPoint
-    globalWithCanvas['DOMRect'] ??= canvas.DOMRect
-    globalWithCanvas['ImageData'] ??= canvas.ImageData
-    globalWithCanvas['Path2D'] ??= canvas.Path2D
-  })()
-  await pdfRuntimeReady
-}
 
 async function readUploadedFile(fileUrl: string): Promise<Uint8Array> {
   if (fileUrl.startsWith('/api/files/')) {
@@ -40,12 +25,7 @@ async function readUploadedFile(fileUrl: string): Promise<Uint8Array> {
 }
 
 export async function extractPdfPages(fileUrl: string): Promise<{ pageCount: number; pages: ExtractedPdfPage[] }> {
-  await ensurePdfRuntime()
-  const [pdfjs, pdfjsWorker] = await Promise.all([
-    import('pdfjs-dist/legacy/build/pdf.mjs'),
-    import('pdfjs-dist/legacy/build/pdf.worker.mjs'),
-  ])
-  ;(globalThis as typeof globalThis & { pdfjsWorker?: typeof pdfjsWorker }).pdfjsWorker = pdfjsWorker
+  const pdfjs = await loadPdfJs()
   const data = await readUploadedFile(fileUrl)
   const loadingTask = pdfjs.getDocument({
     data,

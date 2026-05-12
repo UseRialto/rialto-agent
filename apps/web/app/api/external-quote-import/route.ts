@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth/session'
 import { getProject, saveRFQ, appendBidToRFQ } from '@/lib/store/contractor-store'
 import { createExternalQuoteImport } from '@/lib/procurement/external-quote-import'
+import { loadPdfJs } from '@/lib/pdf/runtime'
 
 export const runtime = 'nodejs'
 
@@ -22,8 +23,7 @@ function isExcelFile(file: File) {
 }
 
 async function extractPdfText(buffer: Buffer) {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.mjs', import.meta.url).toString()
+  const pdfjs = await loadPdfJs()
   const document = await pdfjs.getDocument({
     data: new Uint8Array(buffer),
     isEvalSupported: false,
