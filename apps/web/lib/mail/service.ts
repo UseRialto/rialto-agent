@@ -833,6 +833,7 @@ async function assertContractorOwnsRFQ(userId: string, rfqId: string) {
       requestType: rfqs.request_type,
       email_subject: rfqs.email_subject,
       email_body: rfqs.email_body,
+      attachmentUrlsJson: rfqs.attachment_urls_json,
       bidDeadline: rfqs.bid_deadline,
       projectId: rfqs.project_id,
       publishedAt: rfqs.published_at,
@@ -846,7 +847,14 @@ async function assertContractorOwnsRFQ(userId: string, rfqId: string) {
     .where(eq(rfqs.id, rfqId)))[0]
   if (!row) throw new Error('RFQ not found')
   if (row.projectOwnerId !== userId) throw new Error('Not authorized for this RFQ')
-  return row
+  let attachmentUrls: string[] = []
+  try {
+    const parsed = JSON.parse(row.attachmentUrlsJson ?? '[]') as unknown
+    attachmentUrls = Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : []
+  } catch {
+    attachmentUrls = []
+  }
+  return { ...row, attachmentUrls }
 }
 
 async function getOffPlatformInvites(rfqId: string) {
@@ -906,6 +914,50 @@ async function ensureVendorRequestsForRFQ(userId: string, rfqId: string) {
   return Promise.all(invites.map((invite) => upsertVendorRequest(userId, rfqId, invite.email, invite.vendorName)))
 }
 
+function attachmentFilenameFromUrl(url: string) {
+  const pathname = url.startsWith('http') ? new URL(url).pathname : url
+  return decodeURIComponent((pathname.split('/').pop() ?? 'attachment').replace(/^\d+-/, '')) || 'attachment'
+}
+
+function contentTypeForFilename(filename: string) {
+  const ext = path.extname(filename).slice(1).toLowerCase()
+  if (ext === 'pdf') return 'application/pdf'
+  if (ext === 'csv') return 'text/csv'
+  if (ext === 'txt') return 'text/plain'
+  if (ext === 'xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  if (ext === 'xls') return 'application/vnd.ms-excel'
+  if (ext === 'png') return 'image/png'
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg'
+  return 'application/octet-stream'
+}
+
+async function loadRFQAttachment(url: string): Promise<{ filename: string; mimeType: string; raw: Buffer } | null> {
+  const filename = attachmentFilenameFromUrl(url)
+  if (url.startsWith('/api/files/')) {
+    const relativePath = url.replace(/^\/api\/files\//, '')
+    const uploadsRoot = path.resolve(process.cwd(), '.local', 'uploads')
+    const resolved = path.resolve(uploadsRoot, relativePath)
+    if (!resolved.startsWith(uploadsRoot) || !fs.existsSync(resolved)) return null
+    return {
+      filename,
+      mimeType: contentTypeForFilename(filename),
+      raw: fs.readFileSync(resolved),
+    }
+  }
+
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    const response = await fetch(url)
+    if (!response.ok) return null
+    return {
+      filename,
+      mimeType: response.headers.get('content-type') ?? contentTypeForFilename(filename),
+      raw: Buffer.from(await response.arrayBuffer()),
+    }
+  }
+
+  return null
+}
+
 function buildMimeMessage(params: {
   fromEmail: string
   fromName: string
@@ -913,8 +965,7 @@ function buildMimeMessage(params: {
   toName: string
   subject: string
   body: string
-  attachmentName: string
-  attachmentBytes: Buffer
+  attachments: Array<{ filename: string; mimeType: string; raw: Buffer }>
 }) {
   const boundaryMixed = `mix_${randomBytes(12).toString('hex')}`
   const boundaryAlt = `alt_${randomBytes(12).toString('hex')}`
@@ -922,7 +973,6 @@ function buildMimeMessage(params: {
   const messageId = `<${randomUUID()}@${domain}>`
   const safeBody = params.body.trim()
   const htmlBody = renderEmailHtmlBody(safeBody)
-  const attachmentBase64 = params.attachmentBytes.toString('base64')
   const raw = [
     'MIME-Version: 1.0',
     `From: ${params.fromName ? `"${params.fromName.replaceAll('"', '')}" ` : ''}<${params.fromEmail}>`,
@@ -948,13 +998,18 @@ function buildMimeMessage(params: {
     htmlBody,
     '',
     `--${boundaryAlt}--`,
-    `--${boundaryMixed}`,
-    `Content-Type: application/pdf; name="${params.attachmentName}"`,
-    'Content-Transfer-Encoding: base64',
-    `Content-Disposition: attachment; filename="${params.attachmentName}"`,
-    '',
-    attachmentBase64,
-    '',
+    ...params.attachments.flatMap((attachment) => {
+      const filename = attachment.filename.replaceAll('"', '')
+      return [
+        `--${boundaryMixed}`,
+        `Content-Type: ${attachment.mimeType}; name="${filename}"`,
+        'Content-Transfer-Encoding: base64',
+        `Content-Disposition: attachment; filename="${filename}"`,
+        '',
+        attachment.raw.toString('base64'),
+        '',
+      ]
+    }),
     `--${boundaryMixed}--`,
     '',
   ].join('\r\n')
@@ -1023,8 +1078,7 @@ async function sendMicrosoftMessage(userId: string, params: {
   htmlBody: string
   toEmail: string
   toName: string
-  attachmentName: string
-  attachmentBytes: Buffer
+  attachments: Array<{ filename: string; mimeType: string; raw: Buffer }>
   internetMessageId: string
 }) {
   const draft = await microsoftGraphRequest<{
@@ -1046,14 +1100,12 @@ async function sendMicrosoftMessage(userId: string, params: {
           },
         },
       ],
-      attachments: [
-        {
+      attachments: params.attachments.map((attachment) => ({
           '@odata.type': '#microsoft.graph.fileAttachment',
-          name: params.attachmentName,
-          contentType: 'application/pdf',
-          contentBytes: params.attachmentBytes.toString('base64'),
-        },
-      ],
+          name: attachment.filename,
+          contentType: attachment.mimeType,
+          contentBytes: attachment.raw.toString('base64'),
+        })),
       internetMessageHeaders: [
         { name: 'Message-ID', value: params.internetMessageId },
       ],
@@ -2329,6 +2381,12 @@ export async function sendRFQInvites(userId: string, rfqId: string, baseUrl?: st
   })
   const attachmentBytes = await buildRFQPdfBytes(rfqId)
   const attachmentName = `${rfq.requestType === 'rfp' ? 'rfp' : 'rfq'}-${rfqId}.pdf`
+  const uploadedAttachments = (await Promise.all(rfq.attachmentUrls.map((url) => loadRFQAttachment(url))))
+    .filter((attachment): attachment is { filename: string; mimeType: string; raw: Buffer } => Boolean(attachment))
+  const emailAttachments = [
+    { filename: attachmentName, mimeType: 'application/pdf', raw: attachmentBytes },
+    ...uploadedAttachments,
+  ]
   const results: OffPlatformSendResult[] = []
 
   for (const request of requests) {
@@ -2354,8 +2412,7 @@ export async function sendRFQInvites(userId: string, rfqId: string, baseUrl?: st
       toName: request.vendor_name,
       subject: renderedSubject,
       body: outboundBody,
-      attachmentName,
-      attachmentBytes,
+      attachments: emailAttachments,
     })
     try {
       const response: { id?: string; threadId?: string; internetMessageId?: string } = provider === 'microsoft_365'
@@ -2365,8 +2422,7 @@ export async function sendRFQInvites(userId: string, rfqId: string, baseUrl?: st
           htmlBody: mime.htmlBody,
           toEmail: request.vendor_email,
           toName: request.vendor_name,
-          attachmentName,
-          attachmentBytes,
+          attachments: emailAttachments,
           internetMessageId: mime.messageId,
         })
         : await sendGmailMessage(userId, mime.raw)

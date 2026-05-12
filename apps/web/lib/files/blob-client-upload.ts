@@ -18,6 +18,7 @@ type UploadProgress = {
 type BlobUploadConfig = {
   directUploadAvailable?: boolean
   maxSizeBytes?: number
+  requestAttachmentMaxSizeBytes?: number
 }
 
 function safeBlobPathSegment(rawSegment: string) {
@@ -97,6 +98,47 @@ export async function uploadProjectSpecPdf(
     handleUploadUrl: '/api/blob-upload',
     contentType: mimeType,
     multipart: true,
+    clientPayload: JSON.stringify({
+      filename: file.name,
+      contentType: mimeType,
+      sizeBytes: file.size,
+    }),
+    onUploadProgress,
+  })
+
+  return {
+    url: blob.url,
+    filename: file.name,
+    mimeType,
+    sizeBytes: file.size,
+  }
+}
+
+export async function uploadRequestAttachmentFile(
+  file: File,
+  folder: string,
+  onUploadProgress?: (progress: UploadProgress) => void,
+): Promise<ClientUploadedFileResult> {
+  const safeFolder = safeBlobFolder(folder)
+  const safeName = safeBlobPathSegment(file.name)
+  const mimeType = file.type || 'application/octet-stream'
+
+  if (!safeFolder || !safeName) throw new Error('Invalid request attachment upload destination.')
+
+  const config = await getBlobUploadConfig()
+  if (!config.directUploadAvailable) {
+    throw new Error('Vercel Blob is not configured. Connect the project Blob store and set BLOB_READ_WRITE_TOKEN.')
+  }
+
+  if (config.requestAttachmentMaxSizeBytes && file.size > config.requestAttachmentMaxSizeBytes) {
+    throw new Error(`Request attachments must be ${Math.floor(config.requestAttachmentMaxSizeBytes / 1024 / 1024)} MB or smaller.`)
+  }
+
+  const blob = await upload(`${safeFolder}/${safeName}`, file, {
+    access: 'public',
+    handleUploadUrl: '/api/blob-upload',
+    contentType: mimeType,
+    multipart: file.size > 8 * 1024 * 1024,
     clientPayload: JSON.stringify({
       filename: file.name,
       contentType: mimeType,

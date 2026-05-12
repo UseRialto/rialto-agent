@@ -690,6 +690,8 @@ export function RFQWizard({
               setEmailBody(value)
               setEmailBodyCustomized(true)
             }}
+            attachmentUrls={attachmentUrls}
+            onAttachmentUrlsChange={setAttachmentUrls}
           />
         )}
 

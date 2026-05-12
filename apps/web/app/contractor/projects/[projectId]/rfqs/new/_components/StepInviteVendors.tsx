@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { uploadRequestAttachmentFile } from '@/lib/files/blob-client-upload'
 import type { ItemRow } from './StepItems'
 
 export interface VendorInvite {
@@ -23,6 +24,8 @@ interface Props {
   bidDeadline?: string
   emailBody: string
   onEmailBodyChange: (body: string) => void
+  attachmentUrls: string[]
+  onAttachmentUrlsChange: (urls: string[]) => void
 }
 
 function isEmail(s: string) {
@@ -142,6 +145,8 @@ export function StepInviteVendors({
   bidDeadline,
   emailBody,
   onEmailBodyChange,
+  attachmentUrls,
+  onAttachmentUrlsChange,
 }: Props) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<VendorInvite[]>([])
@@ -150,6 +155,9 @@ export function StepInviteVendors({
   const [draftError, setDraftError] = useState('')
   const [initKey, setInitKey] = useState(0)
   const [refinementPrompt, setRefinementPrompt] = useState('')
+  const [uploadingAttachments, setUploadingAttachments] = useState(false)
+  const [attachmentError, setAttachmentError] = useState('')
+  const [attachmentUploadFolder] = useState(() => `request-attachments/${crypto.randomUUID().slice(0, 8)}`)
   const hasGeneratedRef = useRef(false)
 
   useEffect(() => {
@@ -240,6 +248,29 @@ export function StepInviteVendors({
 
   function removeInvite(email: string) {
     onInvitesChange(invites.filter((i) => i.email !== email))
+  }
+
+  async function uploadAttachment(file: File) {
+    const result = await uploadRequestAttachmentFile(file, attachmentUploadFolder)
+    return result.url
+  }
+
+  async function handleAttachmentFiles(files: FileList | null) {
+    if (!files?.length) return
+    setUploadingAttachments(true)
+    setAttachmentError('')
+    try {
+      const uploaded = await Promise.all(Array.from(files).map(uploadAttachment))
+      onAttachmentUrlsChange([...attachmentUrls, ...uploaded])
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : 'Failed to upload attachment.')
+    } finally {
+      setUploadingAttachments(false)
+    }
+  }
+
+  function removeAttachment(url: string) {
+    onAttachmentUrlsChange(attachmentUrls.filter((entry) => entry !== url))
   }
 
   const showOffPlatformOption =
@@ -378,7 +409,7 @@ export function StepInviteVendors({
 
       {/* Email draft */}
       <div className="rounded-2xl p-5 shadow-sm" style={{ border: '1px solid #e2d9cf', background: '#ffffff' }}>
-	        <div className="mb-5">
+	        <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h3 className="text-sm font-bold" style={{ fontFamily: 'var(--font-lora, Georgia, serif)', color: '#1e3a2f' }}>Vendor outreach email</h3>
             <p className="mt-0.5 text-xs" style={{ color: '#8a9e96' }}>
@@ -393,10 +424,33 @@ export function StepInviteVendors({
               is replaced per recipient.
             </p>
           </div>
+          <label
+            className="inline-flex cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold transition-colors"
+            style={{ border: '1px solid #e2d9cf', background: '#ede8e2', color: '#4a6358' }}
+            title="Attach files"
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21.44 11.05-8.49 8.49a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66l-9.19 9.19a2 2 0 1 1-2.83-2.83l8.48-8.49" />
+            </svg>
+            {uploadingAttachments ? 'Uploading' : attachmentUrls.length > 0 ? `${attachmentUrls.length} attached` : 'Attach'}
+            <input
+              type="file"
+              multiple
+              disabled={uploadingAttachments}
+              className="sr-only"
+              onChange={(event) => {
+                void handleAttachmentFiles(event.target.files)
+                event.target.value = ''
+              }}
+            />
+          </label>
 	        </div>
 
         {draftError && (
           <p className="mb-4 rounded-xl px-4 py-3 text-xs" style={{ border: '1px solid #e8c4a0', background: '#fdf0e8', color: '#a85c2a' }}>{draftError}</p>
+        )}
+        {attachmentError && (
+          <p className="mb-4 rounded-xl px-4 py-3 text-xs" style={{ border: '1px solid #e8c4a0', background: '#fdf0e8', color: '#a85c2a' }}>{attachmentError}</p>
         )}
 
         {generatingDraft && !emailBody ? (
@@ -431,6 +485,27 @@ export function StepInviteVendors({
             {generatingDraft ? '…' : 'Refine'}
           </button>
         </div>
+        {attachmentUrls.length > 0 ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {attachmentUrls.map((url) => {
+              const filename = decodeURIComponent((url.split('/').pop() ?? url).replace(/^\d+-/, ''))
+              return (
+                <span key={url} className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium" style={{ borderColor: '#e2d9cf', background: '#ede8e2', color: '#4a6358' }}>
+                  <a href={url} target="_blank" rel="noreferrer" className="max-w-[18rem] truncate">{filename}</a>
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(url)}
+                    className="font-bold"
+                    style={{ color: '#8a9e96' }}
+                    aria-label={`Remove ${filename}`}
+                  >
+                    x
+                  </button>
+                </span>
+              )
+            })}
+          </div>
+        ) : null}
       </div>
     </div>
   )
