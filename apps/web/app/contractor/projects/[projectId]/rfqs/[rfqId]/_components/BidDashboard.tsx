@@ -1175,7 +1175,7 @@ interface SheetColumn {
   defaultWidth: number
   vendorId?: string
   vendorName?: string
-  vendorMetric?: 'unit_price' | 'total' | 'lead' | 'alternate' | 'response_attr'
+  vendorMetric?: 'unit_price' | 'total' | 'lead' | 'response_attr'
   responseFieldKey?: string
   derivedFormula?: string
 }
@@ -1198,7 +1198,6 @@ function buildColumns(rfq: ContractorRFQ, bids: ContractorBid[], derivedColumns:
     cols.push({ key: `vendor:${bid.id}:unit_price`, label: 'Unit Price', kind: 'vendor', align: 'right', defaultWidth: 104, vendorId: bid.id, vendorName: bid.vendor_name, vendorMetric: 'unit_price' })
     cols.push({ key: `vendor:${bid.id}:total`, label: 'Total Price', kind: 'vendor', align: 'right', defaultWidth: 112, vendorId: bid.id, vendorName: bid.vendor_name, vendorMetric: 'total' })
     cols.push({ key: `vendor:${bid.id}:lead`, label: 'Lead Time', kind: 'vendor', align: 'right', defaultWidth: 96, vendorId: bid.id, vendorName: bid.vendor_name, vendorMetric: 'lead' })
-    cols.push({ key: `vendor:${bid.id}:alternate`, label: 'Alt', kind: 'vendor', align: 'center', defaultWidth: 74, vendorId: bid.id, vendorName: bid.vendor_name, vendorMetric: 'alternate' })
     for (const field of (rfq.vendor_response_fields ?? []).filter((entry) => entry.visible !== false).slice().sort((a, b) => a.order - b.order)) {
       cols.push({
         key: `vendor:${bid.id}:response:${field.key}`,
@@ -1254,7 +1253,6 @@ function valueForCol(item: ContractorRFQ['line_items'][number], col: SheetColumn
     if (col.vendorMetric === 'unit_price') return moneyShort(response.unit_price)
     if (col.vendorMetric === 'total') return moneyShort(response.total_price)
     if (col.vendorMetric === 'lead') return `${response.lead_time_days}d`
-    if (col.vendorMetric === 'alternate') return response.is_alternate || quotedDifferentItem(item, response) ? 'Alternate' : ''
     if (col.vendorMetric === 'response_attr' && col.responseFieldKey) {
       return response.response_attributes?.find((attribute) => attribute.key === col.responseFieldKey)?.value ?? ''
     }
@@ -2149,6 +2147,25 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
           </div>
         </div>
 
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-4 py-2 text-[11px] font-semibold" style={{ borderColor: '#e6ece8', background: '#ffffff', color: '#587067' }}>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#dcfce7', boxShadow: 'inset 0 -2px 0 #16a34a' }} />
+            Lowest line total
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#dbeafe', boxShadow: 'inset 0 -2px 0 #2563eb' }} />
+            Fastest lead time
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#fff7ed', border: '1.5px dotted #fa6b04' }} />
+            Alternate or substitution
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#fdeaea', border: '1.5px solid #d64545' }} />
+            Spec issue
+          </span>
+        </div>
+
         {(hiddenColEntries.length > 0 || view.hiddenLineItemIds.length > 0) && (
           <div className="flex flex-wrap items-center gap-2 border-t px-4 py-2" style={{ borderColor: '#e6ece8', background: '#ffffff' }}>
             {hiddenColEntries.length > 0 && <span className="text-[11px] font-semibold" style={{ color: '#587067' }}>Hidden columns</span>}
@@ -2371,6 +2388,12 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                   const bid = col.vendorId ? bids.find((entry) => entry.id === col.vendorId) : undefined
                   const response = bid?.line_item_responses.find((entry) => entry.line_item_id === item.id)
                   const state = bid ? vendorCellState(item, bid, response) : { tone: 'normal' as const, tooltip: '' }
+                  const isQuoteValueMetric = col.kind === 'vendor' && (
+                    col.vendorMetric === 'unit_price' ||
+                    col.vendorMetric === 'total' ||
+                    col.vendorMetric === 'lead'
+                  )
+                  const cellState = isQuoteValueMetric ? state : { tone: 'normal' as const, tooltip: '' }
                   const best = bestByItem.get(item.id)
                   const isLowestPrice = col.kind === 'vendor' && col.vendorMetric === 'total' && col.vendorId === best?.totalVendorId
                   const isFastestLead = col.kind === 'vendor' && col.vendorMetric === 'lead' && col.vendorId === best?.leadVendorId
@@ -2380,15 +2403,15 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                   const inRange = isInSelectedRange(r, c)
                   const isFrozen = col.key === frozenColumnKey
                   const stateStyle: React.CSSProperties =
-                    state.tone === 'violation'
+                    cellState.tone === 'violation'
                       ? { background: '#fdeaea', color: '#8b1d1d', borderTop: '1.5px solid #d64545', borderBottom: '1.5px solid #d64545' }
-                      : state.tone === 'review'
+                      : cellState.tone === 'review'
                         ? { background: '#fff7ed', color: '#7c3f12', borderTop: '1.5px dashed #f59e0b', borderBottom: '1.5px dashed #f59e0b' }
-                        : state.tone === 'alternate'
-                          ? { background: '#fffdf2', borderTop: '1.5px dotted #b48a2c', borderBottom: '1.5px dotted #b48a2c' }
+                        : cellState.tone === 'alternate'
+                          ? { background: '#fff7ed', borderTop: '1.5px dotted #fa6b04', borderBottom: '1.5px dotted #fa6b04' }
                           : {}
-                  if (state.tone !== 'normal' && col.kind === 'vendor' && col.vendorMetric === 'unit_price') stateStyle.borderLeft = state.tone === 'violation' ? '1.5px solid #d64545' : '1.5px dotted #b48a2c'
-                  if (state.tone !== 'normal' && col.kind === 'vendor' && (col.vendorMetric === 'lead' || col.vendorMetric === 'alternate')) stateStyle.borderRight = state.tone === 'violation' ? '1.5px solid #d64545' : '1.5px dotted #b48a2c'
+                  if (cellState.tone !== 'normal' && col.kind === 'vendor' && col.vendorMetric === 'unit_price') stateStyle.borderLeft = cellState.tone === 'violation' ? '1.5px solid #d64545' : `1.5px ${cellState.tone === 'review' ? 'dashed' : 'dotted'} #fa6b04`
+                  if (cellState.tone !== 'normal' && col.kind === 'vendor' && col.vendorMetric === 'lead') stateStyle.borderRight = cellState.tone === 'violation' ? '1.5px solid #d64545' : `1.5px ${cellState.tone === 'review' ? 'dashed' : 'dotted'} #fa6b04`
                   return (
                     <div
                       key={`cell-${item.id}-${col.key}`}
@@ -2399,7 +2422,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                       title={[
                         isLowestPrice ? 'Lowest total price for this item.' : '',
                         isFastestLead ? 'Fastest lead time for this item.' : '',
-                        state.tooltip,
+                        cellState.tooltip,
                       ].filter(Boolean).join(' ')}
                       style={{
                         ...cellBase,
@@ -2428,10 +2451,6 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                           }}
                           style={{ width: '100%', height: ROW_H - 6, border: '1px solid #2563eb', borderRadius: 3, padding: '0 6px', fontSize: 12, outline: 'none', background: '#ffffff', color: '#111827' }}
                         />
-                      ) : col.vendorMetric === 'alternate' && value ? (
-                        <span className="rounded px-1.5 py-0.5 text-[10px] font-bold" style={{ background: '#fff7cc', color: '#74531a', border: '1px solid #d7ad43', lineHeight: '14px' }}>
-                          {value}
-                        </span>
                       ) : (
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</span>
                       )}
