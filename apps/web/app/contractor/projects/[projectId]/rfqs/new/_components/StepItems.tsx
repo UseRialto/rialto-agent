@@ -170,6 +170,12 @@ interface Props {
   onTemplateFieldRemove?: (key: string) => void
   onTemplateFieldMove?: (dragKey: string, targetKey: string, position?: 'before' | 'after') => void
   onTemplateReplace?: (fields: CustomLineItemFieldDefinition[]) => void
+  onTemplateFieldRename?: (key: string, newLabel: string) => void
+  onTemplateFieldAddCustom?: () => void
+  onVendorResponseFieldAdd?: () => void
+  onVendorResponseFieldRemove?: (key: string) => void
+  onVendorResponseFieldRename?: (key: string, newLabel: string) => void
+  onVendorResponseFieldToggleRequired?: (key: string) => void
   onFieldRemove?: (field: RFQCreationFieldKey) => void
   onFieldRestore?: (field: RFQCreationFieldKey) => void
   onItemsChange: (items: ItemRow[]) => void
@@ -203,6 +209,12 @@ export function StepItems({
   onTemplateFieldRemove,
   onTemplateFieldMove,
   onTemplateReplace,
+  onTemplateFieldRename,
+  onTemplateFieldAddCustom,
+  onVendorResponseFieldAdd,
+  onVendorResponseFieldRemove,
+  onVendorResponseFieldRename,
+  onVendorResponseFieldToggleRequired,
   onFieldRemove,
   onFieldRestore,
   onItemsChange,
@@ -221,6 +233,9 @@ export function StepItems({
   }, [deliveryRequiredBy])
   const [draggedFieldKey, setDraggedFieldKey] = useState<string | null>(null)
   const [dragOverField, setDragOverField] = useState<{ key: string; position: 'before' | 'after' } | null>(null)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Set<string>>(new Set())
+  const [editingColKey, setEditingColKey] = useState<string | null>(null)
+  const [editingColValue, setEditingColValue] = useState('')
   const spreadsheetViewportRef = useRef<HTMLDivElement>(null)
   const spreadsheetScrollbarRef = useRef<HTMLDivElement>(null)
   const [spreadsheetScrollWidth, setSpreadsheetScrollWidth] = useState(1)
@@ -229,6 +244,22 @@ export function StepItems({
   const isVisible = (field: RFQCreationFieldKey) => fieldVisibility[field] !== false
   const removeField = (field: RFQCreationFieldKey) => onFieldRemove?.(field)
   const restoreField = (field: RFQCreationFieldKey) => onFieldRestore?.(field)
+
+  function toTitleCase(s: string) {
+    return s.trim().replace(/\b\w/g, (c) => c.toUpperCase())
+  }
+  function commitColRename(colKey: string) {
+    const titled = toTitleCase(editingColValue)
+    if (titled) {
+      if (colKey.startsWith('vendor:')) {
+        onVendorResponseFieldRename?.(colKey.slice(7), titled)
+      } else {
+        onTemplateFieldRename?.(colKey, titled)
+      }
+    }
+    setEditingColKey(null)
+    setEditingColValue('')
+  }
   const hiddenMaterialFields = ([
     { key: 'specifications', label: 'Notes / Specifications' },
     { key: 'targetBudget', label: 'Target Budget' },
@@ -483,6 +514,7 @@ export function StepItems({
   const spreadsheetAttributes = items[0]?.attributes ?? (fieldTemplate.length ? fieldsToAttributes(fieldTemplate) : buildLineItemAttributes(category))
   const vendorResponseColumns = [...CORE_VENDOR_RESPONSE_COLUMNS, ...vendorResponseFields.map((field) => field.label)]
   const spreadsheetColumnWidths = [
+    40,
     54,
     360,
     108,
@@ -494,7 +526,6 @@ export function StepItems({
     ...(isVisible('specifications') ? [300] : []),
     ...(isVisible('certifications') ? [260] : []),
     ...vendorResponseColumns.map(() => 150),
-    76,
   ]
   const spreadsheetWidth = spreadsheetColumnWidths.reduce((sum, width) => sum + width, 0)
   const spreadsheetColumns = spreadsheetColumnWidths.map((width) => `${width}px`).join(' ')
@@ -854,6 +885,28 @@ export function StepItems({
 
       {materialEntryMode === 'manual' && (
       <div>
+        {isCustomizingFields && (
+          <div className="mb-2 flex flex-wrap items-center gap-2 px-1">
+            <button
+              type="button"
+              onClick={() => onTemplateFieldAddCustom?.()}
+              className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors"
+              style={{ background: '#f5f0eb', border: '1px solid #e2d9cf', color: '#4a6358' }}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add Column
+            </button>
+            <button
+              type="button"
+              onClick={() => onVendorResponseFieldAdd?.()}
+              className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors"
+              style={{ background: '#fff5eb', border: '1px solid #f2c99d', color: '#8a4615' }}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add Vendor Column
+            </button>
+          </div>
+        )}
         <div className="mb-5 overflow-hidden" style={{ background: '#ffffff' }}>
           <div
             ref={spreadsheetViewportRef}
@@ -866,6 +919,19 @@ export function StepItems({
               className="sticky top-0 z-20 grid items-center gap-0 border-b text-[11px] font-semibold uppercase tracking-wide"
               style={{ gridTemplateColumns: spreadsheetColumns, background: '#f5f0eb', borderColor: '#e2d9cf', color: '#4a6358' }}
             >
+              <div
+                className="sticky left-0 z-30 flex items-center justify-center border-r px-2 py-3 shadow-[8px_0_14px_-16px_rgba(15,23,42,0.5)]"
+                style={{ borderColor: '#e2d9cf', background: '#ede8e2', left: 0 }}
+              >
+                <input
+                  type="checkbox"
+                  checked={items.length > 0 && selectedRowKeys.size === items.length}
+                  ref={(el) => { if (el) el.indeterminate = selectedRowKeys.size > 0 && selectedRowKeys.size < items.length }}
+                  onChange={(e) => setSelectedRowKeys(e.target.checked ? new Set(items.map((r) => r._key)) : new Set())}
+                  aria-label="Select all rows"
+                  className="h-4 w-4 cursor-pointer rounded accent-[#1e3a2f]"
+                />
+              </div>
               {['#', 'Item Description or SKU', 'Qty', 'Units'].map((heading, index) => (
                 <div
                   key={heading}
@@ -873,7 +939,7 @@ export function StepItems({
                     'truncate whitespace-nowrap border-r px-3 py-3',
                     index <= 1 && 'sticky z-30 shadow-[8px_0_14px_-16px_rgba(15,23,42,0.5)]',
                   )}
-                  style={{ borderColor: '#e2d9cf', background: '#ede8e2', left: index === 1 ? 54 : index === 0 ? 0 : undefined }}
+                  style={{ borderColor: '#e2d9cf', background: '#ede8e2', left: index === 0 ? 40 : index === 1 ? 94 : undefined }}
                 >
                   {heading}
                 </div>
@@ -921,10 +987,31 @@ export function StepItems({
                         : 'inset -4px 0 0 #fa6b04, 0 8px 18px rgba(168,92,42,0.12)'
                       : undefined,
                   }}
-                  title={isCustomizingFields ? `Drag to reorder ${attribute.label}` : attribute.label}
+                  title={isCustomizingFields && editingColKey !== attribute.key ? `Drag to reorder; click label to rename ${attribute.label}` : attribute.label}
                 >
                   {isCustomizingFields && <GripVertical className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
-                  <span className="min-w-0 flex-1 truncate whitespace-nowrap">{attribute.label}</span>
+                  {isCustomizingFields && editingColKey === attribute.key ? (
+                    <input
+                      type="text"
+                      value={editingColValue}
+                      autoFocus
+                      onChange={(e) => setEditingColValue(e.target.value)}
+                      onBlur={() => commitColRename(attribute.key)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); commitColRename(attribute.key) }
+                        if (e.key === 'Escape') { setEditingColKey(null); setEditingColValue('') }
+                      }}
+                      className="min-w-0 flex-1 truncate rounded px-1 py-0.5 text-[11px] normal-case tracking-normal focus:outline-none"
+                      style={{ background: '#ffffff', border: '1px solid #fa6b04', color: '#1e3a2f' }}
+                    />
+                  ) : (
+                    <span
+                      className={cn('min-w-0 flex-1 truncate whitespace-nowrap', isCustomizingFields && 'cursor-text hover:text-[#a85c2a]')}
+                      onClick={isCustomizingFields ? () => { setEditingColKey(attribute.key); setEditingColValue(attribute.label) } : undefined}
+                    >
+                      {attribute.label}
+                    </span>
+                  )}
                   {isCustomizingFields && (
                     <button
                       type="button"
@@ -948,12 +1035,71 @@ export function StepItems({
               ].map((heading, index) => (
                 <div key={`${heading}-${index}`} className="truncate whitespace-nowrap border-r px-3 py-3" style={{ borderColor: '#e2d9cf' }}>{heading}</div>
               ))}
-              {vendorResponseColumns.map((heading) => (
-                <div key={`vendor-response-${heading}`} className="truncate whitespace-nowrap border-r px-3 py-3" style={{ borderColor: '#f2c99d', background: '#fff5eb', color: '#8a4615' }}>
-                  {heading}
-                </div>
-              ))}
-              <div className="border-r px-3 py-3" style={{ borderColor: '#e2d9cf' }} />
+              {vendorResponseColumns.map((heading, vcIdx) => {
+                const isCoreCol = vcIdx < CORE_VENDOR_RESPONSE_COLUMNS.length
+                const vendorField = !isCoreCol ? vendorResponseFields[vcIdx - CORE_VENDOR_RESPONSE_COLUMNS.length] : null
+                const isEditingVendor = vendorField != null && editingColKey === `vendor:${vendorField.key}`
+                const isRequired = isCoreCol || vendorField?.required !== false
+                return (
+                  <div
+                    key={`vendor-response-${heading}`}
+                    className="relative flex min-w-0 items-center gap-1 border-r px-3 py-3"
+                    style={{ borderColor: '#f2c99d', background: '#fff5eb', color: '#8a4615' }}
+                  >
+                    {isCustomizingFields && isEditingVendor ? (
+                      <input
+                        type="text"
+                        value={editingColValue}
+                        autoFocus
+                        onChange={(e) => setEditingColValue(e.target.value)}
+                        onBlur={() => commitColRename(`vendor:${vendorField!.key}`)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { e.preventDefault(); commitColRename(`vendor:${vendorField!.key}`) }
+                          if (e.key === 'Escape') { setEditingColKey(null); setEditingColValue('') }
+                        }}
+                        className="min-w-0 flex-1 truncate rounded px-1 py-0.5 text-[11px] normal-case tracking-normal focus:outline-none"
+                        style={{ background: '#fff5eb', border: '1px solid #fa6b04', color: '#8a4615' }}
+                      />
+                    ) : (
+                      <span
+                        className={cn('min-w-0 flex-1 truncate whitespace-nowrap', isCustomizingFields && !isCoreCol && 'cursor-text hover:text-[#a85c2a]')}
+                        onClick={isCustomizingFields && vendorField ? () => { setEditingColKey(`vendor:${vendorField.key}`); setEditingColValue(heading) } : undefined}
+                      >
+                        {heading}
+                      </span>
+                    )}
+                    {isCustomizingFields && isCoreCol && (
+                      <span className="shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold normal-case tracking-normal" style={{ background: '#1e3a2f', color: '#fff' }}>Req</span>
+                    )}
+                    {isCustomizingFields && vendorField && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => onVendorResponseFieldToggleRequired?.(vendorField.key)}
+                          className="shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold normal-case tracking-normal transition-colors"
+                          style={isRequired
+                            ? { background: '#1e3a2f', color: '#fff', border: '1px solid #1e3a2f' }
+                            : { background: '#f5f0eb', color: '#4a6358', border: '1px solid #c8bfb4' }
+                          }
+                          title={isRequired ? 'Required — click to make optional' : 'Optional — click to make required'}
+                        >
+                          {isRequired ? 'Req' : 'Opt'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onVendorResponseFieldRemove?.(vendorField.key)}
+                          className="shrink-0 rounded-full p-0.5 transition-colors"
+                          style={{ color: '#8f3d22' }}
+                          title={`Remove ${heading}`}
+                          aria-label={`Remove ${heading}`}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )
+              })}
             </div>
 
             {items.map((row, idx) => {
@@ -967,7 +1113,26 @@ export function StepItems({
                   className="grid items-stretch gap-0 border-b last:border-b-0"
                   style={{ gridTemplateColumns: spreadsheetColumns, borderColor: '#f0ebe6' }}
                 >
-                  <div className="sticky left-0 z-10 flex h-full items-center border-r px-3 py-2 text-xs font-semibold shadow-[8px_0_14px_-16px_rgba(15,23,42,0.5)]" style={{ borderColor: '#e2d9cf', background: '#ffffff', color: '#1e3a2f' }}>
+                  <div
+                    className="sticky left-0 z-10 flex h-full items-center justify-center border-r px-2 py-2 shadow-[8px_0_14px_-16px_rgba(15,23,42,0.5)]"
+                    style={{ borderColor: '#e2d9cf', background: selectedRowKeys.has(row._key) ? '#fff5eb' : '#ffffff', left: 0 }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedRowKeys.has(row._key)}
+                      onChange={(e) => {
+                        setSelectedRowKeys((prev) => {
+                          const next = new Set(prev)
+                          if (e.target.checked) next.add(row._key)
+                          else next.delete(row._key)
+                          return next
+                        })
+                      }}
+                      aria-label={`Select row ${idx + 1}`}
+                      className="h-4 w-4 cursor-pointer rounded accent-[#1e3a2f]"
+                    />
+                  </div>
+                  <div className="sticky z-10 flex h-full items-center border-r px-3 py-2 text-xs font-semibold shadow-[8px_0_14px_-16px_rgba(15,23,42,0.5)]" style={{ borderColor: '#e2d9cf', background: selectedRowKeys.has(row._key) ? '#fff5eb' : '#ffffff', color: '#1e3a2f', left: 40 }}>
                     {idx + 1}
                   </div>
                   <SkuCell
@@ -975,7 +1140,7 @@ export function StepItems({
                     entries={skuDropdowns[row._key] ?? []}
                     onChange={(value) => handleSkuInput(row._key, value)}
                     onSelect={(entry) => selectSku(row._key, entry)}
-                    stickyLeft={54}
+                    stickyLeft={94}
                   />
                   <div className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
                     <label className="sr-only">Quantity</label>
@@ -1161,19 +1326,6 @@ export function StepItems({
                     </div>
                   ))}
 
-                  <div className="flex items-center justify-center p-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const filtered = items.filter((entry) => entry._key !== row._key)
-                        onItemsChange(filtered.length > 0 ? filtered : [newRow(category, fieldTemplate)])
-                      }}
-                      className="rounded-md px-2 py-1 text-[11px] font-semibold"
-                      style={{ background: '#fff1e8', border: '1px solid #f2b38f', color: '#a85c2a' }}
-                    >
-                      Remove
-                    </button>
-                  </div>
                 </div>
               )
             })}
@@ -1201,6 +1353,34 @@ export function StepItems({
       </div>
         )}
       </div>
+
+      {selectedRowKeys.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-2xl px-5 py-3 shadow-2xl" style={{ background: '#1e3a2f', border: '1px solid #2f4a3a' }}>
+          <span className="text-sm font-semibold" style={{ color: '#ffffff' }}>
+            {selectedRowKeys.size} row{selectedRowKeys.size !== 1 ? 's' : ''} selected
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              const filtered = items.filter((r) => !selectedRowKeys.has(r._key))
+              onItemsChange(filtered.length > 0 ? filtered : [newRow(category, fieldTemplate)])
+              setSelectedRowKeys(new Set())
+            }}
+            className="rounded-xl px-3 py-1.5 text-sm font-semibold transition-colors"
+            style={{ background: '#c0392b', color: '#ffffff' }}
+          >
+            Delete
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedRowKeys(new Set())}
+            className="rounded-xl px-3 py-1.5 text-sm font-semibold transition-colors"
+            style={{ background: 'rgba(255,255,255,0.15)', color: '#ffffff' }}
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       <div className="rounded-2xl p-5" style={{ background: '#ffffff', border: '1px solid #e2d9cf' }}>
         <div className="mb-3">

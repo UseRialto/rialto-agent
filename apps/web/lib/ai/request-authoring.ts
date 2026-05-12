@@ -173,7 +173,7 @@ function buildDefaultEmailDraft(input: EmailDraftInput) {
     '',
     `Could you take a look at ${itemSummary} for the ${input.projectName} project in ${input.projectLocation}? ${deadlineLine} Use the Rialto link in this email to submit pricing, lead time, and any substitutions or scope notes.`,
     '',
-    'Thanks,',
+    'Best,',
     senderName,
   ].join('\n')
 }
@@ -190,7 +190,7 @@ function fallbackRefinedEmail(input: EmailDraftInput) {
       '',
       `Please quote the attached ${input.rfqTitle} for ${input.projectName}. ${input.bidDeadline ? `Please submit through Rialto by ${input.bidDeadline}.` : 'Please submit through Rialto when you can.'}`,
       '',
-      'Thanks,',
+      'Best,',
       senderName,
     ].join('\n')
   }
@@ -201,7 +201,7 @@ function fallbackRefinedEmail(input: EmailDraftInput) {
       '',
       `Please review ${input.rfqTitle} for ${input.projectName}. ${input.bidDeadline ? `We need your Rialto response by ${input.bidDeadline}, so an early turn would help.` : 'An early response through Rialto would help on this package.'} Please include pricing, lead time, and any substitutions or scope concerns.`,
       '',
-      'Thanks,',
+      'Best,',
       senderName,
     ].join('\n')
   }
@@ -262,7 +262,7 @@ export async function generateVendorOutreachDraft(input: EmailDraftInput): Promi
         'Preserve the token {{vendor_first_name}} exactly.',
         'The first line must be: Hello {{vendor_first_name}},',
         'Use fewer paragraph breaks: greeting, one natural body paragraph, then sign-off.',
-        input.senderName ? `Sign off exactly with:\nThanks,\n${input.senderName}` : 'Sign off with the sender name if present, not the company name.',
+        input.senderName ? `Sign off exactly with:\nBest,\n${input.senderName}` : `Sign off with:\nBest,\nRialto`,
         `Current draft:\n${input.currentDraft}`,
         `Refinement request: ${input.refinementPrompt}`,
       ].join('\n\n')
@@ -271,7 +271,7 @@ export async function generateVendorOutreachDraft(input: EmailDraftInput): Promi
         'Open exactly with: Hello {{vendor_first_name}},',
         'Keep it warm, direct, and natural.',
         'Use fewer paragraph breaks: greeting, one concise body paragraph, then sign-off.',
-        input.senderName ? `Sign off exactly with:\nThanks,\n${input.senderName}` : 'Sign off with the sender name if present, not the company name.',
+        input.senderName ? `Sign off exactly with:\nBest,\n${input.senderName}` : `Sign off with:\nBest,\nRialto`,
         `Request: ${input.rfqTitle}`,
         `Project: ${input.projectName}`,
         `Location: ${input.projectLocation}`,
