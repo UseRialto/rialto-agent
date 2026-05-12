@@ -522,13 +522,14 @@ export function StepItems({
     108,
     132,
     ...spreadsheetAttributes.map(() => 184),
+    ...(isCustomizingFields ? [128] : []),
     ...(requestType === 'rfp' && isVisible('specifications') ? [240, 260] : []),
     ...(isVisible('targetBudget') ? [144] : []),
     ...(isVisible('suggestedLeadTime') ? [144] : []),
     ...(isVisible('specifications') ? [300] : []),
     ...(isVisible('certifications') ? [260] : []),
     ...vendorResponseColumns.map(() => 150),
-    ...(isCustomizingFields ? [128, 160] : []),
+    ...(isCustomizingFields ? [160] : []),
   ]
   const spreadsheetWidth = spreadsheetColumnWidths.reduce((sum, width) => sum + width, 0)
   const spreadsheetColumns = spreadsheetColumnWidths.map((width) => `${width}px`).join(' ')
@@ -985,6 +986,18 @@ export function StepItems({
                   )}
                 </div>
               ))}
+              {isCustomizingFields && (
+                <button
+                  type="button"
+                  onClick={() => onTemplateFieldAddCustom?.()}
+                  className="flex items-center justify-center gap-1 border-r px-2 py-3 text-[11px] font-semibold uppercase tracking-wide transition-colors hover:bg-[#efe9e2]"
+                  style={{ borderColor: '#e2d9cf', color: '#4a6358' }}
+                  title="Add a custom column"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Column
+                </button>
+              )}
               {[
                 ...(requestType === 'rfp' && isVisible('specifications') ? ['Spec Summary', 'Spec Notes'] : []),
                 ...(isVisible('targetBudget') ? ['Budget'] : []),
@@ -1060,30 +1073,16 @@ export function StepItems({
                 )
               })}
               {isCustomizingFields && (
-                <>
-                  <div className="flex items-center justify-center border-r px-2 py-2" style={{ borderColor: '#e2d9cf', background: '#f5f0eb' }}>
-                    <button
-                      type="button"
-                      onClick={() => onTemplateFieldAddCustom?.()}
-                      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold normal-case tracking-normal transition-colors"
-                      style={{ background: '#ffffff', border: '1px solid #d4c7bb', color: '#4a6358' }}
-                    >
-                      <Plus className="h-3 w-3" />
-                      Column
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-center px-2 py-2" style={{ background: '#fff5eb' }}>
-                    <button
-                      type="button"
-                      onClick={() => onVendorResponseFieldAdd?.()}
-                      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold normal-case tracking-normal transition-colors"
-                      style={{ background: '#ffffff', border: '1px solid #f2c99d', color: '#8a4615' }}
-                    >
-                      <Plus className="h-3 w-3" />
-                      Vendor Col
-                    </button>
-                  </div>
-                </>
+                <button
+                  type="button"
+                  onClick={() => onVendorResponseFieldAdd?.()}
+                  className="flex items-center justify-center gap-1 px-2 py-3 text-[11px] font-semibold uppercase tracking-wide transition-colors hover:bg-[#fff0e0]"
+                  style={{ color: '#8a4615' }}
+                  title="Add a vendor response column"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Vendor Col
+                </button>
               )}
             </div>
 
@@ -1201,6 +1200,10 @@ export function StepItems({
                     )
                   })}
 
+                  {isCustomizingFields && (
+                    <div className="border-r" style={{ borderColor: '#e2d9cf', background: '#f9f6f2' }} />
+                  )}
+
                   {requestType === 'rfp' && isVisible('specifications') && (
                     <>
                       <div className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
@@ -1315,6 +1318,10 @@ export function StepItems({
                       <div className="border-r" style={{ borderColor: '#e2d9cf', background: '#f9f6f2' }} />
                       <div style={{ background: '#fffcf8' }} />
                     </>
+                  )}
+
+                  {isCustomizingFields && (
+                    <div style={{ background: '#fffcf8' }} />
                   )}
 
                 </div>
