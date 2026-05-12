@@ -106,8 +106,8 @@ export default async function RFQDetailPage({
 
   if (isFullScreenComparison) {
     return (
-      <div className="-m-6 flex h-[calc(100vh-0rem)] min-h-0 flex-col" style={{ background: '#eef3f0' }}>
-        <div className="shrink-0 border-b px-5 pt-4" style={{ borderColor: '#d9e0dc', background: '#f8faf9' }}>
+      <div className="-m-6 min-h-[calc(100vh-4rem)]" style={{ background: '#eef3f0' }}>
+        <div data-testid="rfq-comparison-overview" className="border-b px-5 pt-4" style={{ borderColor: '#d9e0dc', background: '#f8faf9' }}>
           <nav className="mb-3 text-xs" style={{ color: '#587067' }}>
             <Link href="/contractor/projects" className="hover:underline" style={{ color: '#8a9e96' }}>Projects</Link>
             <span className="mx-2">/</span>
@@ -170,7 +170,7 @@ export default async function RFQDetailPage({
             ))}
           </div>
         </div>
-        <div className="min-h-0 flex-1">
+        <div data-testid="rfq-comparison-sheet-workspace" className="h-[calc(100vh-4rem)] min-h-[560px]">
           <BidDashboard
             projectId={projectId}
             projectName={project.name}

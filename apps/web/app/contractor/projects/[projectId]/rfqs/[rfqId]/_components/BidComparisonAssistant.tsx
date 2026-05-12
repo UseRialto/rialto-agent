@@ -32,6 +32,7 @@ export interface BidComparisonAssistantProps {
   }
   snapshot?: ComparisonSheetSnapshot
   onApply: (patch: ComparisonViewPatch) => void
+  onPreviewChange?: (patch: ComparisonViewPatch | null) => void
   onDismiss: () => void
 }
 
@@ -104,8 +105,23 @@ function describePatch(patch: ComparisonViewPatch | null, schema: BidComparisonA
     chips.push({ id: `manual-row-${r.id}`, label: `Insert row: ${r.description || r.id}`, tone: 'add', onDismiss: () => {} })
   })
   patch.setCells?.forEach((cell) => {
-    chips.push({ id: `set-${cell.rowKey}-${cell.colKey}`, label: `Set cell: ${cell.colKey}`, tone: 'add', onDismiss: () => {} })
+    const col = schema.columns.find((candidate) => candidate.key === cell.colKey)
+    const row = schema.lineItems.find((candidate) => candidate.id === cell.rowKey)
+    chips.push({
+      id: `set-${cell.rowKey}-${cell.colKey}`,
+      label: `Update ${row?.description ?? 'row'} / ${col?.label ?? 'cell'}`,
+      tone: 'add',
+      onDismiss: () => {},
+    })
   })
+  if ((patch.setCells?.length ?? 0) > 6) {
+    return [{
+      id: 'set-cells-summary',
+      label: `${patch.setCells!.length} cell updates previewed in yellow on the sheet`,
+      tone: 'highlight',
+      onDismiss: () => {},
+    }, ...chips.filter((chip) => !chip.id.startsWith('set-'))]
+  }
   return chips
 }
 
@@ -115,7 +131,7 @@ const TONE_STYLES: Record<PatchChip['tone'], React.CSSProperties> = {
   highlight: { background: '#fef3c7', border: '1px solid #fcd34d', color: '#92400e' },
 }
 
-export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSchema, snapshot, onApply, onDismiss }: BidComparisonAssistantProps) {
+export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSchema, snapshot, onApply, onPreviewChange, onDismiss }: BidComparisonAssistantProps) {
   const [draft, setDraft] = useState('')
   const [proposal, setProposal] = useState<ComparisonViewPatch | null>(null)
   const [summary, setSummary] = useState('')
@@ -163,6 +179,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
     setError('')
     setSummary('')
     setProposal(null)
+    onPreviewChange?.(null)
     if (debugMode) setDebugSteps(initialAgentProgressSteps(message))
     setStartedAt(Date.now())
     const controller = new AbortController()
@@ -179,6 +196,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
         if (!response.ok || !json.patch) throw new Error(json.error ?? 'Could not generate a change.')
         setSummary(json.patch.summary)
         setProposal(json.patch)
+        onPreviewChange?.(json.patch)
         return
       }
       const json = (await response.json()) as { patch?: ComparisonViewPatch; error?: string } & ComparisonAgentDebugResponse
@@ -189,6 +207,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
       if (!response.ok || !json.patch) throw new Error(json.error ?? 'Could not generate a change.')
       setSummary(json.patch.summary)
       setProposal(json.patch)
+      onPreviewChange?.(json.patch)
     } catch (caught) {
       const message = caught instanceof DOMException && caught.name === 'AbortError'
         ? 'Rialto Agent timed out after 90 seconds before returning changes.'
@@ -253,6 +272,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
     setIsApplying(true)
     applyTimerRef.current = setTimeout(() => {
       onApply(proposal)
+      onPreviewChange?.(null)
       setProposal(null)
       setDraft('')
       setSummary('')
@@ -313,7 +333,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
               </button>
               <button
                 type="button"
-                onClick={() => { setProposal(null); setSummary('') }}
+                onClick={() => { setProposal(null); setSummary(''); onPreviewChange?.(null) }}
                 disabled={isApplying}
                 className="rounded-xl border px-4 py-2 text-xs font-semibold transition disabled:opacity-60"
                 style={{ borderColor: '#e2d9cf', color: '#4a6358', background: '#ffffff' }}
@@ -382,7 +402,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
           </button>
           <button
             type="button"
-            onClick={onDismiss}
+            onClick={() => { onPreviewChange?.(null); onDismiss() }}
             className={cn(
               'relative z-10 ml-1 mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition',
               isClosing ? 'animate-[bid-ai-content-hide_160ms_ease-in_forwards]' : 'animate-[bid-ai-content-fade_360ms_ease-out_760ms_both]',

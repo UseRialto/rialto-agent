@@ -6,6 +6,7 @@ import {
   type ComparisonAgentToolPatch,
   type ComparisonPatchProposal,
 } from '@/lib/procurement/comparison-agent-tools'
+import { comparisonFastCommandPatch } from '@/lib/procurement/comparison-fast-commands'
 import { agentTurnFailureMessage, postAgentTurnWithRetry } from '@/lib/procurement/comparison-agent-api-client'
 import type { ComparisonAgentDebugTrace } from '@/lib/procurement/comparison-agent-debug'
 
@@ -15,7 +16,7 @@ interface SchemaColumn {
   kind: 'rfq-core' | 'rfq-attribute' | 'rfq-standard' | 'vendor' | 'derived' | 'manual'
   vendorId?: string
   vendorName?: string
-  metric?: 'unit_price' | 'total' | 'lead'
+  metric?: 'unit_price' | 'total' | 'lead' | 'alternate'
   isEmpty?: boolean
 }
 
@@ -106,6 +107,23 @@ function sseEvent(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
 }
 
+function fastCommandPayload(body: RequestBody, message: string) {
+  const patch = comparisonFastCommandPatch(message, body.sheetSchema ?? {})
+  if (!patch) return null
+  return {
+    patch,
+    usedFallback: false,
+    usedFastCommand: true,
+    plan: ['Matched a deterministic visible Comparison Sheet command.', 'Prepared a previewable Comparison Sheet patch without calling the Product Agent Runtime.'],
+    toolResults: [{
+      toolId: 'quoteComparison.fastCommand',
+      status: 'ok',
+      summary: patch.summary,
+      data: { action: 'comparison-fast-command', patch },
+    }],
+  }
+}
+
 export async function POST(request: NextRequest) {
   const session = await getSession()
   if (!session) return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 })
@@ -121,6 +139,19 @@ export async function POST(request: NextRequest) {
   if (!message) return NextResponse.json({ error: 'message is required.' }, { status: 400 })
 
   try {
+    const fastPayload = fastCommandPayload(body, message)
+    if (fastPayload) {
+      if (body.stream) {
+        return new Response(sseEvent('final', fastPayload), {
+          headers: {
+            'content-type': 'text/event-stream; charset=utf-8',
+            'cache-control': 'no-cache, no-transform',
+          },
+        })
+      }
+      return NextResponse.json(fastPayload)
+    }
+
     const payload = agentPayload(body, session, message)
     if (body.stream) return streamAgentProposal(payload, body.sheetSchema)
 

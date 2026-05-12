@@ -1466,6 +1466,52 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     return map
   }, [view.highlights, visibleItems, bids])
 
+  const [previewPatch, setPreviewPatch] = useState<ComparisonViewPatch | null>(null)
+  const previewCellMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const cell of previewPatch?.setCells ?? []) {
+      map.set(`${cell.rowKey}|${cell.colKey}`, cell.value)
+    }
+    return map
+  }, [previewPatch])
+  const previewHighlightMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const h of previewPatch?.addHighlights ?? []) {
+      if (h.selector.kind === 'cell') {
+        map.set(`${h.selector.rowKey}|${h.selector.colKey}`, '#fef3c7')
+      } else {
+        const rule = h.selector.rule
+        if (rule === 'fastest-lead-per-row') {
+          for (const item of visibleItems) {
+            let bestVendorId: string | null = null
+            let bestLead = Infinity
+            for (const bid of bids) {
+              const r = bid.line_item_responses.find((x) => x.line_item_id === item.id)
+              if (!r || r.availability === 'unavailable') continue
+              if (r.lead_time_days < bestLead) { bestLead = r.lead_time_days; bestVendorId = bid.id }
+            }
+            if (bestVendorId) map.set(`${item.id}|vendor:${bestVendorId}:lead`, '#fef3c7')
+          }
+        } else if (rule === 'lowest-price-per-row') {
+          for (const item of visibleItems) {
+            let bestVendorId: string | null = null
+            let bestTotal = Infinity
+            for (const bid of bids) {
+              const r = bid.line_item_responses.find((x) => x.line_item_id === item.id)
+              if (!r || r.availability === 'unavailable') continue
+              if (r.total_price < bestTotal) { bestTotal = r.total_price; bestVendorId = bid.id }
+            }
+            if (bestVendorId) {
+              map.set(`${item.id}|vendor:${bestVendorId}:total`, '#fef3c7')
+              map.set(`${item.id}|vendor:${bestVendorId}:unit_price`, '#fef3c7')
+            }
+          }
+        }
+      }
+    }
+    return map
+  }, [previewPatch, visibleItems, bids])
+
   const bestByItem = useMemo(() => {
     const map = new Map<string, { totalVendorId?: string; leadVendorId?: string }>()
     for (const item of visibleItems) {
@@ -1885,6 +1931,8 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     }
     const item = visibleItems[r - dataStartRow]
     if (!item) return ''
+    const previewValue = previewCellMap.get(`${item.id}|${col.key}`)
+    if (previewValue !== undefined) return previewValue
     return getCellText(item, col)
   }
 
@@ -1924,6 +1972,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
         setAssistantClosing(false)
         setAssistantOpen(true)
       } else {
+        setPreviewPatch(null)
         setAssistantClosing(true)
         closingTimerRef.current = setTimeout(() => {
           setAssistantOpen(false)
@@ -1984,6 +2033,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
       }
     }
     replaceView(nextView, workbookVersionMetadataFromApprovedComparisonPatch(patch))
+    setPreviewPatch(null)
     dispatchAssistant(false)
   }
 
@@ -2367,7 +2417,10 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                   {r + 1}
                 </div>
                 {visibleCols.map((col, c) => {
-                  const value = getCellText(item, col)
+                  const cellKey = `${item.id}|${col.key}`
+                  const previewValue = previewCellMap.get(cellKey)
+                  const value = previewValue ?? getCellText(item, col)
+                  const hasPreview = previewValue !== undefined || previewHighlightMap.has(cellKey)
                   const bid = col.vendorId ? bids.find((entry) => entry.id === col.vendorId) : undefined
                   const response = bid?.line_item_responses.find((entry) => entry.line_item_id === item.id)
                   const state = bid ? vendorCellState(item, bid, response) : { tone: 'normal' as const, tooltip: '' }
@@ -2375,7 +2428,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                   const isLowestPrice = col.kind === 'vendor' && col.vendorMetric === 'total' && col.vendorId === best?.totalVendorId
                   const isFastestLead = col.kind === 'vendor' && col.vendorMetric === 'lead' && col.vendorId === best?.leadVendorId
                   const autoHighlight = isLowestPrice ? '#dcfce7' : isFastestLead ? '#dbeafe' : undefined
-                  const highlight = highlightMap.get(`${item.id}|${col.key}`) ?? autoHighlight
+                  const highlight = previewHighlightMap.get(cellKey) ?? (hasPreview ? '#fef3c7' : highlightMap.get(cellKey) ?? autoHighlight)
                   const isSelected = sel.r === r && sel.c === c
                   const inRange = isInSelectedRange(r, c)
                   const isFrozen = col.key === frozenColumnKey
@@ -2413,6 +2466,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                         fontVariantNumeric: col.align === 'right' ? 'tabular-nums' : 'normal',
                         ...(isLowestPrice || isFastestLead ? { boxShadow: `inset 0 -2px 0 ${isLowestPrice ? '#16a34a' : '#2563eb'}` } : {}),
                         ...(isFrozen ? { position: 'sticky', left: GUTTER_W, zIndex: 2, borderRight: strongBorder } : {}),
+                        ...(hasPreview ? { boxShadow: 'inset 0 0 0 2px #f59e0b' } : {}),
                         ...(isSelected ? { boxShadow: 'inset 0 0 0 2px #2563eb' } : inRange ? { boxShadow: 'inset 0 0 0 1px #93c5fd' } : {}),
                       }}
                     >
@@ -2614,6 +2668,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
         sheetSchema={sheetSchema}
         snapshot={comparisonSheetSnapshot}
         onApply={applyPatchToView}
+        onPreviewChange={setPreviewPatch}
         onDismiss={() => dispatchAssistant(false)}
       />
     </div>

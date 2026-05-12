@@ -129,6 +129,7 @@ export function quoteComparisonArchitectureScenarios(): QuoteComparisonArchitect
     answerScenario('weird anomalies', 'What’s weird about this quote comparison?', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['missing lead times', 'outliers', 'unit mismatches']),
     scenario('multi step leveling patch', 'Add normalized price, calculate unit price per 1k LF, highlight cheapest quote per item, and summarize the winner.', ['quoteComparison.inspectSnapshot', 'quoteComparison.proposeNormalizedPriceColumn', 'quoteComparison.proposeUnitPricePerThousandColumn', 'quoteComparison.proposeCheapestQuoteHighlights'], ['insert-column', 'set-cell', 'add-highlight'], ['multi-step']),
     scenario('drywall studs track explanation', 'For drywall, studs, and track, tell me the cheapest partial quote and then add a column explaining why.', ['quoteComparison.inspectSnapshot', 'quoteComparison.proposeCheapestPartialExplanationColumn'], ['insert-column', 'set-cell'], ['Drywall', 'studs', 'track']),
+    scenario('chat upload fills vendor cells', 'I uploaded this vendor CSV in chat: Supplier,Item,Description,Unit Price,Lead Time\\nAcme Drywall Supply,A,Drywall 5/8 Type X,1785,2 weeks\\nAcme Drywall Supply,B,Metal studs 20ga,990,10 days\\nFill those Acme values into the comparison sheet with provenance notes.', ['quoteComparison.inspectSnapshot', 'document.readSource', 'quoteComparison.proposeDocumentGroundedEdits'], ['set-cell'], ['document-grounded']),
     answerScenario('bid leveling summary', 'Create a bid leveling summary.', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['vendor', 'total comparable price', 'missing items', 'recommendation']),
     ...extraArchitectureScenarios(),
   ]
@@ -242,6 +243,12 @@ export class QuoteComparisonArchitectureRuntime implements ProductAgentRuntime {
       plan.push('Filter drywall, studs, and track; add explanations for cheapest partial quote decisions.')
       fragments.push(explanationFragment(snapshot))
       recordFragment(calls, results, 'quoteComparison.proposeCheapestPartialExplanationColumn', {}, fragments.at(-1)!)
+    }
+    if (lower.includes('uploaded') && lower.includes('fill') && lower.includes('provenance')) {
+      plan.push('Read the uploaded chat source, map supplier rows to visible comparison cells, and prepare document-grounded provenance notes for each filled value.')
+      record(calls, results, 'document.readSource', { sourceId: 'chat-upload', text: prompt }, { action: 'document-read', sourceId: 'chat-upload', text: prompt })
+      fragments.push(documentGroundedEditsFragment(snapshot, prompt))
+      recordFragment(calls, results, 'quoteComparison.proposeDocumentGroundedEdits', { sourceId: 'chat-upload' }, fragments.at(-1)!)
     }
     if (lower.includes('review notes') && lower.includes('exclusions')) {
       plan.push('Add review notes for quote cells with exclusions.')
@@ -415,6 +422,38 @@ function explanationFragment(snapshot: Snapshot): ComparisonPatchFragment {
     operations.push({ kind: 'set-cell', rowKey: row.id, colKey: 'cheapest-partial-explanation', value: clean ? `${clean.vendor} is lowest clean partial quote.` : 'No clean partial quote found.' })
   }
   return { summary: 'Added explanations for drywall, studs, and track.', operations }
+}
+
+function documentGroundedEditsFragment(snapshot: Snapshot, prompt: string): ComparisonPatchFragment {
+  const operations: ComparisonOperation[] = []
+  const provenanceNotes: ComparisonPatchFragment['provenanceNotes'] = []
+  const sourceLines = prompt.split(/\n|\\n/).map((line) => line.trim()).filter(Boolean)
+  for (const row of snapshot.rows) {
+    const sourceLine = sourceLines.find((line) => line.toLowerCase().includes(row.description.toLowerCase()))
+    if (!sourceLine) continue
+    const cells = sourceLine.split(',').map((cell) => cell.trim())
+    const supplier = cells[0] ?? ''
+    const unitPrice = cells[3] ?? ''
+    const leadTime = cells[4] ?? ''
+    const vendorPrefix = supplier.toLowerCase().includes('acme') ? 'acme' : supplier.toLowerCase().includes('l n w') ? 'lnw' : supplier.toLowerCase().includes('build') ? 'build' : ''
+    if (!vendorPrefix) continue
+    if (unitPrice) {
+      const colKey = `${vendorPrefix}-price`
+      operations.push({ kind: 'set-cell', rowKey: row.id, colKey, value: `$${unitPrice}`, note: `From uploaded chat file: ${sourceLine}` })
+      provenanceNotes.push({ rowKey: row.id, colKey, sourceId: 'chat-upload', note: sourceLine })
+    }
+    if (leadTime) {
+      const colKey = `${vendorPrefix}-lead`
+      operations.push({ kind: 'set-cell', rowKey: row.id, colKey, value: leadTime, note: `From uploaded chat file: ${sourceLine}` })
+      provenanceNotes.push({ rowKey: row.id, colKey, sourceId: 'chat-upload', note: sourceLine })
+    }
+  }
+  return {
+    summary: 'Prepared document-grounded edits from uploaded chat file.',
+    operations,
+    provenanceNotes,
+    warnings: ['Review filled values against the uploaded source before approval.'],
+  }
 }
 
 function exclusionReviewNotesFragment(snapshot: Snapshot): ComparisonPatchFragment {
