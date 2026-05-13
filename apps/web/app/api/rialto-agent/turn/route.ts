@@ -1,16 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getDefaultAgentHttpService } from '@rialto-agent/agent/http-service'
+import { getSession } from '@/lib/auth/session'
 
-const RIALTO_AGENT_API_URL = process.env.RIALTO_AGENT_API_URL ?? 'http://localhost:8787'
+export const runtime = 'nodejs'
 
-const DEMO_USER = {
-  id: 'user-1',
-  contractorOrganizationId: 'org-1',
-  role: 'estimator',
-  name: 'Estimator One',
-  email: 'estimator@example.com',
+function userFromSession(session: Awaited<ReturnType<typeof getSession>>) {
+  if (!session) return null
+  return {
+    id: session.userId,
+    contractorOrganizationId: session.userId,
+    role: session.role === 'vendor' ? 'vendor' as const : 'estimator' as const,
+    name: session.name || 'Estimator',
+    email: session.email || 'estimator@example.com',
+  }
 }
 
 export async function POST(request: NextRequest) {
+  const session = await getSession()
+  const user = userFromSession(session)
+  if (!user) return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 })
+
   try {
     const body = await request.json() as {
       messages?: Array<{ role?: string; content?: string }>
@@ -35,19 +44,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Send a user message to start.' }, { status: 400 })
     }
 
-    const response = await fetch(`${RIALTO_AGENT_API_URL}/agent/turn`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user: DEMO_USER,
-        messages,
-        currentPage: body.currentPage,
-        debug: body.debug,
-      }),
+    const result = await getDefaultAgentHttpService().runTurn({
+      user,
+      messages,
+      currentPage: body.currentPage,
+      debug: body.debug,
     })
 
-    const json = await response.json()
-    return NextResponse.json(json, { status: response.status })
+    return NextResponse.json(result.body, { status: result.status })
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Rialto Agent turn failed.' },

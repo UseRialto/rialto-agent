@@ -6,7 +6,10 @@ export interface PostAgentTurnOptions {
 }
 
 export async function postAgentTurnWithRetry(payload: unknown, options: PostAgentTurnOptions = {}) {
-  const apiUrl = options.apiUrl ?? process.env.RIALTO_AGENT_API_URL ?? 'http://localhost:8787'
+  const apiUrl = options.apiUrl ?? process.env.RIALTO_AGENT_API_URL
+  if (!apiUrl) {
+    throw new Error('Rialto Agent endpoint is not configured.')
+  }
   const attempts = options.attempts ?? 3
   const timeoutMs = options.timeoutMs ?? 45_000
   const retryDelayMs = options.retryDelayMs ?? ((attempt) => 350 * attempt)

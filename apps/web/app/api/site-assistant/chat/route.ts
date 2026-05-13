@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getDefaultAgentHttpService } from '@rialto-agent/agent/http-service'
 import { getSession } from '@/lib/auth/session'
 
-const RIALTO_AGENT_API_URL = process.env.RIALTO_AGENT_API_URL ?? 'http://localhost:8787'
+export const runtime = 'nodejs'
 
 interface ChatRequest {
   messages?: Array<{ role?: string; content?: string }>
@@ -31,22 +32,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Send a user message to start.' }, { status: 400 })
     }
 
-    const response = await fetch(`${RIALTO_AGENT_API_URL}/agent/turn`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user: {
-          id: session.userId,
-          contractorOrganizationId: session.userId,
-          role: session.role === 'vendor' ? 'vendor' : 'estimator',
-          name: session.name || 'Estimator',
-          email: session.email || 'estimator@example.com',
-        },
-        messages,
-      }),
+    const result = await getDefaultAgentHttpService().runTurn({
+      user: {
+        id: session.userId,
+        contractorOrganizationId: session.userId,
+        role: session.role === 'vendor' ? 'vendor' : 'estimator',
+        name: session.name || 'Estimator',
+        email: session.email || 'estimator@example.com',
+      },
+      messages,
     })
-    const result = await response.json()
-    return NextResponse.json(result, { status: response.status })
+    return NextResponse.json(result.body, { status: result.status })
   } catch (error) {
     console.error('Site assistant chat failed:', error)
     return NextResponse.json(

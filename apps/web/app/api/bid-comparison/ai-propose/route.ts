@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getDefaultAgentHttpService } from '@rialto-agent/agent/http-service'
 import { getSession } from '@/lib/auth/session'
 import { comparisonAssistantPayloadFromAgentTurn, type AgentTurnData } from '@/lib/procurement/comparison-agent-response'
 import { comparisonFastCommandPatch } from '@/lib/procurement/comparison-fast-commands'
-import { agentFetchErrorMessage, agentTurnFailureMessage, postAgentTurnWithRetry } from '@/lib/procurement/comparison-agent-api-client'
 
 export const runtime = 'nodejs'
 
@@ -112,10 +112,6 @@ function sseEvent(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
 }
 
-function agentApiUrl() {
-  return (process.env.RIALTO_AGENT_API_URL?.trim() || 'http://localhost:8787').replace(/\/+$/, '')
-}
-
 function fastCommandPayload(body: RequestBody, message: string) {
   const patch = comparisonFastCommandPatch(message, body.sheetSchema ?? {})
   if (!patch) return null
@@ -164,15 +160,15 @@ export async function POST(request: NextRequest) {
     const payload = agentPayload(body, session, message)
     if (body.stream) return await streamAgentProposal(payload, body.sheetSchema)
 
-    const response = await postAgentTurnWithRetry(payload, { apiUrl: agentApiUrl() })
-    const data = await response.json() as AgentTurnData
+    const result = await getDefaultAgentHttpService().runTurn(payload)
+    const data = result.body as AgentTurnData
 
-    if (!response.ok) {
+    if (result.status < 200 || result.status >= 300) {
       return NextResponse.json({
-        error: agentTurnFailureMessage(response.status, data.error),
+        error: data.error ?? 'Rialto Agent could not prepare a Quote Comparison proposal.',
         status: data.status ?? 'tool_error',
         ...debugPayload(data),
-      }, { status: response.status })
+      }, { status: result.status })
     }
 
     return NextResponse.json(proposalResponsePayload(data, body.sheetSchema))
@@ -186,59 +182,19 @@ export async function POST(request: NextRequest) {
 }
 
 async function streamAgentProposal(payload: unknown, sheetSchema: RequestBody['sheetSchema']) {
-  const apiUrl = agentApiUrl()
-  let response: Response
-  try {
-    response = await fetch(`${apiUrl}/agent/turn/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-  } catch (error) {
-    return agentStreamErrorResponse(agentFetchErrorMessage(error))
-  }
-
-  if (!response.ok || !response.body) {
-    const data = await response.json().catch(() => ({})) as AgentTurnData
-    return NextResponse.json({
-      error: agentTurnFailureMessage(response.status, data.error),
-      status: data.status ?? 'tool_error',
-      ...debugPayload(data),
-    }, { status: response.status })
-  }
-
   const encoder = new TextEncoder()
-  const decoder = new TextDecoder()
-  let buffer = ''
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const reader = response.body!.getReader()
       try {
-        while (true) {
-          const { value, done } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          const events = buffer.split('\n\n')
-          buffer = events.pop() ?? ''
-          for (const rawEvent of events) {
-            const parsed = parseSseEvent(rawEvent)
-            if (!parsed) continue
-            if (parsed.event === 'final') {
-              controller.enqueue(encoder.encode(sseEvent('final', proposalResponsePayload(parsed.data as AgentTurnData, sheetSchema))))
-            } else {
-              controller.enqueue(encoder.encode(sseEvent(parsed.event, parsed.data)))
-            }
+        const earlyResult = await getDefaultAgentHttpService().streamTurn(payload, (event, data) => {
+          if (event === 'final') {
+            controller.enqueue(encoder.encode(sseEvent('final', proposalResponsePayload(data as AgentTurnData, sheetSchema))))
+            return
           }
-        }
-        if (buffer.trim()) {
-          const parsed = parseSseEvent(buffer)
-          if (parsed?.event === 'final') {
-            controller.enqueue(encoder.encode(sseEvent('final', proposalResponsePayload(parsed.data as AgentTurnData, sheetSchema))))
-          } else if (parsed) {
-            controller.enqueue(encoder.encode(sseEvent(parsed.event, parsed.data)))
-          }
-        }
+          controller.enqueue(encoder.encode(sseEvent(event, data)))
+        })
+        if (earlyResult) controller.enqueue(encoder.encode(sseEvent('error', earlyResult.body)))
       } catch (error) {
         controller.enqueue(encoder.encode(sseEvent('error', {
           status: 'tool_error',
@@ -256,23 +212,4 @@ async function streamAgentProposal(payload: unknown, sheetSchema: RequestBody['s
       'cache-control': 'no-cache, no-transform',
     },
   })
-}
-
-function agentStreamErrorResponse(error: string) {
-  return new Response(sseEvent('error', {
-    status: 'tool_error',
-    error,
-  }), {
-    headers: {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-    },
-  })
-}
-
-function parseSseEvent(rawEvent: string): { event: string; data: unknown } | null {
-  const event = rawEvent.split('\n').find((line) => line.startsWith('event: '))?.slice('event: '.length).trim()
-  const dataLine = rawEvent.split('\n').find((line) => line.startsWith('data: '))
-  if (!event || !dataLine) return null
-  return { event, data: JSON.parse(dataLine.slice('data: '.length)) }
 }
