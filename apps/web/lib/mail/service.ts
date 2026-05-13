@@ -1083,44 +1083,40 @@ async function sendMicrosoftMessage(userId: string, params: {
   attachments: Array<{ filename: string; mimeType: string; raw: Buffer }>
   internetMessageId: string
 }) {
-  const draft = await microsoftGraphRequest<{
-    id?: string
-    conversationId?: string
-    internetMessageId?: string
-  }>(userId, 'POST', '/messages', {
+  await microsoftGraphRequest(userId, 'POST', '/sendMail', {
     body: {
-      subject: params.subject,
-      body: {
-        contentType: 'HTML',
-        content: params.htmlBody,
-      },
-      toRecipients: [
-        {
-          emailAddress: {
-            address: params.toEmail,
-            name: params.toName || params.toEmail,
-          },
+      message: {
+        subject: params.subject,
+        body: {
+          contentType: 'HTML',
+          content: params.htmlBody,
         },
-      ],
-      attachments: params.attachments.map((attachment) => ({
+        toRecipients: [
+          {
+            emailAddress: {
+              address: params.toEmail,
+              name: params.toName || params.toEmail,
+            },
+          },
+        ],
+        attachments: params.attachments.map((attachment) => ({
           '@odata.type': '#microsoft.graph.fileAttachment',
           name: attachment.filename,
           contentType: attachment.mimeType,
           contentBytes: attachment.raw.toString('base64'),
         })),
-      internetMessageHeaders: [
-        { name: 'x-rialto-message-id', value: params.internetMessageId },
-      ],
+        internetMessageHeaders: [
+          { name: 'x-rialto-message-id', value: params.internetMessageId },
+        ],
+      },
+      saveToSentItems: true,
     },
   })
-  if (!draft.id) {
-    throw new Error('Microsoft Graph did not return a draft message id.')
-  }
-  await microsoftGraphRequest(userId, 'POST', `/messages/${draft.id}/send`)
+  const messageId = cleanMessageId(params.internetMessageId)
   return {
-    id: draft.id,
-    threadId: draft.conversationId ?? '',
-    internetMessageId: cleanMessageId(draft.internetMessageId) || cleanMessageId(params.internetMessageId),
+    id: messageId,
+    threadId: messageId,
+    internetMessageId: messageId,
   }
 }
 
@@ -1137,38 +1133,34 @@ async function sendMicrosoftSimpleMessage(userId: string, params: {
   toName: string
   internetMessageId: string
 }) {
-  const draft = await microsoftGraphRequest<{
-    id?: string
-    conversationId?: string
-    internetMessageId?: string
-  }>(userId, 'POST', '/messages', {
+  await microsoftGraphRequest(userId, 'POST', '/sendMail', {
     body: {
-      subject: params.subject,
-      body: {
-        contentType: 'HTML',
-        content: params.htmlBody,
-      },
-      toRecipients: [
-        {
-          emailAddress: {
-            address: params.toEmail,
-            name: params.toName || params.toEmail,
-          },
+      message: {
+        subject: params.subject,
+        body: {
+          contentType: 'HTML',
+          content: params.htmlBody,
         },
-      ],
-      internetMessageHeaders: [
-        { name: 'x-rialto-message-id', value: params.internetMessageId },
-      ],
+        toRecipients: [
+          {
+            emailAddress: {
+              address: params.toEmail,
+              name: params.toName || params.toEmail,
+            },
+          },
+        ],
+        internetMessageHeaders: [
+          { name: 'x-rialto-message-id', value: params.internetMessageId },
+        ],
+      },
+      saveToSentItems: true,
     },
   })
-  if (!draft.id) {
-    throw new Error('Microsoft Graph did not return a draft message id.')
-  }
-  await microsoftGraphRequest(userId, 'POST', `/messages/${draft.id}/send`)
+  const messageId = cleanMessageId(params.internetMessageId)
   return {
-    id: draft.id,
-    threadId: draft.conversationId ?? '',
-    internetMessageId: cleanMessageId(draft.internetMessageId) || cleanMessageId(params.internetMessageId),
+    id: messageId,
+    threadId: messageId,
+    internetMessageId: messageId,
   }
 }
 
