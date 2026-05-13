@@ -1,7 +1,7 @@
 'use client'
 
 import { type CSSProperties, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, Send, RotateCcw, Paperclip } from 'lucide-react'
+import { Bot, Send, RotateCcw, Paperclip, X } from 'lucide-react'
 
 type Role = 'user' | 'assistant'
 
@@ -114,7 +114,7 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE])
   const [draft, setDraft] = useState('')
   const [context, setContext] = useState<unknown>(null)
-  const [isLoadingContext, setIsLoadingContext] = useState(false)
+  const [isLoadingContext] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null)
@@ -545,182 +545,174 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
       {isOpen && (
         <section
           ref={sectionRef}
-          className="fixed bottom-12 left-1/2 z-40 w-[min(820px,calc(100vw-2rem))] -translate-x-1/2"
+          className="fixed bottom-5 right-5 z-50 w-[min(440px,calc(100vw-1.5rem))]"
           aria-label="AI Assistant"
         >
-          {/* Chat messages floating above the pill */}
-          {hasMessages && (
-            <div
-              className={cn(
-                'absolute bottom-[calc(100%+0.75rem)] left-[3.5rem] right-0',
-                isClosing ? 'animate-[sa-messages-hide_200ms_ease-in_forwards]' : 'animate-[sa-messages-fade_300ms_ease-out_800ms_both]',
-              )}
-            >
+          <div
+            className={cn(
+              'overflow-hidden rounded-lg bg-white shadow-2xl',
+              isClosing ? 'animate-[sa-pill-collapse_200ms_ease-out_forwards]' : 'animate-[sa-messages-fade_220ms_ease-out_1]',
+            )}
+            style={{ border: '1px solid #d8e0db', boxShadow: '0 24px 70px rgba(30,58,47,0.18)' }}
+          >
+            <div className="flex items-center justify-between gap-3 border-b px-3.5 py-3" style={{ borderColor: '#edf1ee', background: '#fbfcfb' }}>
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white" style={{ background: '#fa6b04' }}>
+                  <Bot className="h-4 w-4" />
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold leading-tight" style={{ color: '#1e3a2f' }}>Rialto assistant</p>
+                  <p className="text-[11px] leading-tight" style={{ color: '#7b8d86' }}>{isSending || isLoadingContext ? 'Working' : 'Ready'}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={dismissChat}
+                className="flex h-8 w-8 items-center justify-center rounded-md transition hover:bg-[#f4f7f5]"
+                style={{ color: '#8a9e96' }}
+                aria-label="Close assistant"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {hasMessages && (
               <div
                 ref={listRef}
-                className="max-h-[25vh] space-y-3 overflow-y-auto rounded-2xl px-4 py-4"
-                style={{
-                  background: 'rgba(255, 255, 255, 0.75)',
-                  backdropFilter: 'blur(20px) saturate(1.4)',
-                  WebkitBackdropFilter: 'blur(20px) saturate(1.4)',
-                  maskImage: 'linear-gradient(to bottom, transparent 0%, black 20%)',
-                  WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 20%)',
-                }}
+                className="max-h-[min(52vh,460px)] space-y-3 overflow-y-auto px-3.5 py-3.5"
               >
-                {visibleMessages.map((message) => (
-                  <div key={message.id}>
-                    <div className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+                  {visibleMessages.map((message) => (
+                    <div key={message.id}>
+                      <div className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+                        <div
+                          className="max-w-[88%] rounded-lg px-3 py-2 text-sm leading-6 shadow-sm"
+                          style={{
+                            background: message.role === 'user' ? '#1e3a2f' : '#f7faf8',
+                            border: message.role === 'assistant' ? '1px solid #dfe8e3' : '1px solid #1e3a2f',
+                            color: message.role === 'user' ? '#ffffff' : '#24463a',
+                          }}
+                        >
+                          <p className="whitespace-pre-wrap">{message.content}</p>
+                        </div>
+                      </div>
+                      {message.projects && message.projects.length > 0 && (
+                        <div className="mt-2 grid gap-2">
+                          {message.projects.map((project) => (
+                            <button
+                              key={project.id}
+                              type="button"
+                              onClick={() => void handleProjectOrRfqSelection(project.name)}
+                              className="rounded-lg px-3 py-2 text-left text-sm font-medium shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                              style={{ background: '#ffffff', color: '#1e3a2f', border: '1px solid #d8e0db' }}
+                            >
+                              <span className="font-semibold">{project.name}</span>
+                              {project.location && (
+                                <span className="ml-1.5 text-xs" style={{ color: '#8a9e96' }}>{project.location}</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {message.rfqs && message.rfqs.length > 0 && (
+                        <div className="mt-2 grid gap-2">
+                          {message.rfqs.map((rfq) => (
+                            <button
+                              key={rfq.id}
+                              type="button"
+                              onClick={() => {
+                                setMessages((current) => [
+                                  ...current,
+                                  { id: makeId(), role: 'user', content: rfq.title },
+                                  { id: makeId(), role: 'assistant', content: `Taking you to ${rfq.title}...` },
+                                ])
+                                setTimeout(() => {
+                                  window.location.href = `/contractor/projects/${rfq.projectId}/rfqs/${rfq.id}`
+                                }, 800)
+                              }}
+                              className="rounded-lg px-3 py-2.5 text-left text-sm font-medium shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                              style={{ background: '#ffffff', color: '#1e3a2f', border: '1px solid #d8e0db' }}
+                            >
+                              <span className="font-semibold">{rfq.title}</span>
+                              <span className="ml-2 inline-flex items-center gap-1.5 text-xs" style={{ color: '#8a9e96' }}>
+                                {rfq.status}
+                                {typeof rfq.bidCount === 'number' && ` · ${rfq.bidCount} bid${rfq.bidCount === 1 ? '' : 's'}`}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {(isSending || isLoadingContext) && (
+                    <div className="flex justify-start">
                       <div
-                        className="max-w-[75%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-lg"
-                        style={{
-                          background: message.role === 'user' ? '#1e3a2f' : '#fa6b04',
-                          color: '#ffffff',
-                        }}
+                        className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm shadow-sm"
+                        style={{ background: '#f7faf8', borderColor: '#dfe8e3', color: '#24463a' }}
                       >
-                        <p className="whitespace-pre-wrap">{message.content}</p>
+                        <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: '#fa6b04' }} />
+                        {isLoadingContext ? 'Refreshing context...' : 'Thinking...'}
                       </div>
                     </div>
-                    {message.projects && message.projects.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {message.projects.map((project) => (
-                          <button
-                            key={project.id}
-                            type="button"
-                            onClick={() => void handleProjectOrRfqSelection(project.name)}
-                            className="rounded-xl px-4 py-2 text-sm font-medium shadow-md transition hover:-translate-y-0.5 hover:shadow-lg"
-                            style={{ background: '#ffffff', color: '#1e3a2f', border: '1.5px solid #e2d9cf' }}
-                          >
-                            <span className="font-semibold">{project.name}</span>
-                            {project.location && (
-                              <span className="ml-1.5 text-xs" style={{ color: '#8a9e96' }}>{project.location}</span>
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {message.rfqs && message.rfqs.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {message.rfqs.map((rfq) => (
-                          <button
-                            key={rfq.id}
-                            type="button"
-                            onClick={() => {
-                              setMessages((current) => [
-                                ...current,
-                                { id: makeId(), role: 'user', content: rfq.title },
-                                { id: makeId(), role: 'assistant', content: `Taking you to ${rfq.title}…` },
-                              ])
-                              setTimeout(() => {
-                                window.location.href = `/contractor/projects/${rfq.projectId}/rfqs/${rfq.id}`
-                              }, 800)
-                            }}
-                            className="rounded-xl px-4 py-2.5 text-left text-sm font-medium shadow-md transition hover:-translate-y-0.5 hover:shadow-lg"
-                            style={{ background: '#ffffff', color: '#1e3a2f', border: '1.5px solid #e2d9cf' }}
-                          >
-                            <span className="font-semibold">{rfq.title}</span>
-                            <span className="ml-2 inline-flex items-center gap-1.5 text-xs" style={{ color: '#8a9e96' }}>
-                              {rfq.status}
-                              {typeof rfq.bidCount === 'number' && ` · ${rfq.bidCount} bid${rfq.bidCount === 1 ? '' : 's'}`}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-                {(isSending || isLoadingContext) && (
-                  <div className="flex justify-start">
-                    <div
-                      className="rounded-2xl px-4 py-2.5 text-sm shadow-lg"
-                      style={{ background: '#fa6b04', color: '#ffffff' }}
-                    >
-                      {isLoadingContext ? 'Refreshing context…' : 'Thinking…'}
-                    </div>
-                  </div>
-                )}
+                  )}
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Error display */}
-          {error && (
-            <div
-              className={cn(
-                'mb-2 rounded-full px-4 py-2 text-xs font-medium shadow-lg',
-                isClosing ? 'animate-[sa-content-hide_160ms_ease-in_forwards]' : 'animate-[sa-content-fade_260ms_ease-out_800ms_both]',
-              )}
-              style={{ background: 'rgba(255,247,237,0.95)', color: '#a85c2a', backdropFilter: 'blur(12px)' }}
-            >
-              {error}
-            </div>
-          )}
+            {error && (
+              <div className="mx-3.5 mb-3 rounded-lg px-3 py-2 text-xs font-medium" style={{ background: '#fff7ed', color: '#a85c2a', border: '1px solid #f2d8c5' }}>
+                {error}
+              </div>
+            )}
 
-          {/* Input pill */}
-          <form onSubmit={handleSubmit} className="relative flex h-12 items-center">
-            <div
-              className={cn(
-                'absolute inset-y-0 left-[3.5rem] right-0 rounded-full bg-white shadow-2xl',
-                isClosing ? 'animate-[sa-pill-collapse_240ms_ease-out_forwards]' : 'animate-[sa-pill-emerge_300ms_ease-out_650ms_both]',
-              )}
-              style={{ border: '1.5px solid #fa6b04', transformOrigin: 'left center' }}
-              aria-hidden="true"
-            />
-            <span aria-hidden="true" className="h-12 w-12 shrink-0" />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className={cn(
-                'relative z-10 ml-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition hover:bg-gray-100',
-                isClosing ? 'animate-[sa-content-hide_160ms_ease-in_forwards]' : 'animate-[sa-content-fade_260ms_ease-out_800ms_both]',
-              )}
-              style={{ color: '#8a9e96' }}
-              aria-label="Attach file"
-              title="Attach CSV to create RFQ"
-            >
-              <Paperclip className="h-4 w-4" />
-            </button>
-            <input
-              ref={inputRef}
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              className={cn(
-                'relative z-10 min-w-0 flex-1 bg-transparent py-3.5 pl-3 pr-3 text-sm outline-none',
-                isClosing ? 'animate-[sa-content-hide_160ms_ease-in_forwards]' : 'animate-[sa-content-fade_260ms_ease-out_800ms_both]',
-              )}
-              style={{ color: '#1e3a2f' }}
-              placeholder="Ask anything about your projects, quote requests, vendor responses, or comparisons..."
-              disabled={isSending}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') { event.preventDefault(); dismissChat() }
-              }}
-            />
-            <button
-              type="button"
-              onClick={startNewChat}
-              disabled={isLoadingContext || isSending || messages.length <= 1}
-              className={cn(
-                'relative z-10 shrink-0 flex h-8 w-8 items-center justify-center rounded-full transition disabled:opacity-40',
-                isClosing ? 'animate-[sa-content-hide_160ms_ease-in_forwards]' : 'animate-[sa-content-fade_360ms_ease-out_760ms_both]',
-              )}
-              style={{ color: '#8a9e96' }}
-              aria-label="New chat"
-              title="New chat"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="submit"
-              disabled={!draft.trim() || isSending}
-              className={cn(
-                'relative z-10 shrink-0 rounded-full px-5 py-2 text-sm font-semibold text-white transition-opacity disabled:opacity-60',
-                isClosing ? 'animate-[sa-content-hide_160ms_ease-in_forwards]' : 'animate-[sa-content-fade_360ms_ease-out_760ms_both]',
-              )}
-              style={{ background: '#1e3a2f' }}
-            >
-              {isSending ? 'Thinking…' : 'Send'}
-            </button>
-            <span className="w-3 shrink-0" />
-          </form>
+            <form onSubmit={handleSubmit} className="border-t p-2.5" style={{ borderColor: '#edf1ee', background: '#ffffff' }}>
+              <div className="flex items-center gap-2 rounded-lg border bg-white px-2 py-2" style={{ borderColor: '#d8e0db' }}>
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white" style={{ background: '#fa6b04' }} aria-hidden="true">
+                  <Bot className="h-4 w-4" />
+                </span>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition hover:bg-[#f4f7f5]"
+                  style={{ color: '#8a9e96' }}
+                  aria-label="Attach file"
+                  title="Attach CSV to create RFQ"
+                >
+                  <Paperclip className="h-4 w-4" />
+                </button>
+                <input
+                  ref={inputRef}
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  className="min-w-0 flex-1 bg-transparent py-1.5 text-sm outline-none"
+                  style={{ color: '#1e3a2f' }}
+                  placeholder="Ask Rialto..."
+                  disabled={isSending}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') { event.preventDefault(); dismissChat() }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={startNewChat}
+                  disabled={isLoadingContext || isSending || messages.length <= 1}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition disabled:opacity-40"
+                  style={{ color: '#8a9e96' }}
+                  aria-label="New chat"
+                  title="New chat"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="submit"
+                  disabled={!draft.trim() || isSending}
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-white transition-opacity disabled:opacity-60"
+                  style={{ background: '#1e3a2f' }}
+                >
+                  <Send className="h-3.5 w-3.5" />
+                  {isSending ? 'Thinking' : 'Send'}
+                </button>
+              </div>
+            </form>
+          </div>
         </section>
       )}
     </>

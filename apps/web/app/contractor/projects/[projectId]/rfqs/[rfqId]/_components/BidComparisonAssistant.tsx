@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Paperclip, X } from 'lucide-react'
+import { Bot, Bug, Check, Paperclip, Send, X } from 'lucide-react'
 import type { ComparisonSheetView, ComparisonViewPatch } from './comparison-sheet-view'
 import type { ComparisonSheetSnapshot } from '@/lib/procurement/comparison-sheet-snapshot'
 import {
@@ -63,6 +63,18 @@ interface AssistantAttachment {
   sourceKind?: 'pdf' | 'excel' | 'csv' | 'docx' | 'text'
   workbookId?: string
   summary?: unknown
+}
+
+interface AssistantMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  tone?: 'normal' | 'error'
+}
+
+function makeId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
 function describePatch(patch: ComparisonViewPatch | null, schema: BidComparisonAssistantProps['sheetSchema']): PatchChip[] {
@@ -142,6 +154,7 @@ const TONE_STYLES: Record<PatchChip['tone'], React.CSSProperties> = {
 
 export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSchema, snapshot, onApply, onPreviewChange, onDismiss }: BidComparisonAssistantProps) {
   const [draft, setDraft] = useState('')
+  const [messages, setMessages] = useState<AssistantMessage[]>([])
   const [proposal, setProposal] = useState<ComparisonViewPatch | null>(null)
   const [summary, setSummary] = useState('')
   const [error, setError] = useState('')
@@ -156,6 +169,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
   const applyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (isOpen && !isClosing) {
@@ -170,6 +184,11 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
   useEffect(() => {
     setDebugMode(agentDebugEnabled())
   }, [])
+
+  useEffect(() => {
+    if (!isOpen || isClosing) return
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
+  }, [debugSteps, error, isClosing, isOpen, isSending, messages, proposal, summary])
 
   useEffect(() => {
     if (!startedAt) {
@@ -241,6 +260,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
           agentProposal: undefined,
         }
       : undefined
+    setMessages((current) => [...current, { id: makeId(), role: 'user', content: message }])
     setDraft('')
     setIsSending(true)
     setError('')
@@ -269,7 +289,9 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
       if (debugMode && response.body && response.headers.get('content-type')?.includes('text/event-stream')) {
         const json = await readAgentProgressStream(response)
         if (!response.ok || (!json.patch && !json.answer)) throw new Error(json.error ?? 'Could not generate a response.')
-        setSummary(json.patch?.summary ?? json.answer ?? '')
+        const responseSummary = json.patch?.summary ?? json.answer ?? 'Prepared a sheet preview.'
+        setSummary(responseSummary)
+        setMessages((current) => [...current, { id: makeId(), role: 'assistant', content: responseSummary }])
         if (json.patch) {
           setProposal(json.patch)
           onPreviewChange?.(json.patch)
@@ -282,7 +304,9 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
         if (returnedSteps.length) setDebugSteps(returnedSteps)
       }
       if (!response.ok || (!json.patch && !json.answer)) throw new Error(json.error ?? 'Could not generate a response.')
-      setSummary(json.patch?.summary ?? json.answer ?? '')
+      const responseSummary = json.patch?.summary ?? json.answer ?? 'Prepared a sheet preview.'
+      setSummary(responseSummary)
+      setMessages((current) => [...current, { id: makeId(), role: 'assistant', content: responseSummary }])
       if (json.patch) {
         setProposal(json.patch)
         onPreviewChange?.(json.patch)
@@ -292,6 +316,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
         ? 'Rialto Agent timed out after 90 seconds before returning changes.'
         : caught instanceof Error ? caught.message : 'Could not generate a change.'
       setError(message)
+      setMessages((current) => [...current, { id: makeId(), role: 'assistant', content: message, tone: 'error' }])
       if (debugMode) setDebugSteps((steps) => [...steps, `Error: ${message}`])
     } finally {
       clearTimeout(timeout)
@@ -361,6 +386,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
   }
 
   const chips = describePatch(proposal, sheetSchema)
+  const hasTranscript = messages.length > 0 || isSending || error || proposal || (debugMode && debugSteps.length > 0)
 
   return (
     <>
@@ -371,197 +397,227 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
         @keyframes bid-ai-content-hide { 0% { opacity: 1; } 100% { opacity: 0; } }
         @keyframes bid-ai-preview-pop { 0% { opacity: 0; transform: translateY(14px) scale(0.98); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
         @keyframes bid-ai-preview-apply { 0% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translateY(10px) scale(0.985); } }
+        @keyframes bid-ai-panel-pop { 0% { opacity: 0; transform: translateY(10px) scale(0.99); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
       `}</style>
       <section
         className={cn(
-          'fixed bottom-12 left-1/2 z-40 w-[min(820px,calc(100vw-2rem))] -translate-x-1/2',
+          'fixed bottom-5 right-5 z-50 w-[min(440px,calc(100vw-1.5rem))]',
           isClosing && 'pointer-events-none',
         )}
         aria-label="Bid comparison AI assistant"
       >
-        {proposal && (
-          <div
-            className={cn(
-              'absolute bottom-[calc(100%+0.75rem)] left-0 right-0 rounded-2xl bg-white p-3 shadow-2xl',
-              isApplying ? 'pointer-events-none animate-[bid-ai-preview-apply_180ms_ease-in_forwards]' : 'animate-[bid-ai-preview-pop_220ms_ease-out_1]',
-            )}
-            style={{ border: '1px solid #e2d9cf', transformOrigin: 'bottom center' }}
-          >
-            {summary && (
-              <p className="mb-2 text-xs" style={{ color: '#4a6358' }}>{summary}</p>
-            )}
-            {chips.length === 0 ? (
-              <p className="text-xs" style={{ color: '#8a9e96' }}>AI is unsure.</p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {chips.map((chip) => (
-                  <span key={chip.id} className="inline-flex items-center gap-1.5 rounded-full py-1 pl-3 pr-1.5 text-xs font-semibold" style={TONE_STYLES[chip.tone]}>
-                    {chip.label}
-                  </span>
-                ))}
+        <div
+          className={cn(
+            'overflow-hidden rounded-lg bg-white shadow-2xl',
+            isApplying ? 'pointer-events-none animate-[bid-ai-preview-apply_180ms_ease-in_forwards]' : 'animate-[bid-ai-panel-pop_220ms_ease-out_1]',
+          )}
+          style={{ border: '1px solid #d8e0db', boxShadow: '0 24px 70px rgba(30,58,47,0.18)' }}
+        >
+          <div className="flex items-center justify-between gap-3 border-b px-3.5 py-3" style={{ borderColor: '#edf1ee', background: '#fbfcfb' }}>
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white" style={{ background: '#fa6b04' }}>
+                <Bot className="h-4 w-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold leading-tight" style={{ color: '#1e3a2f' }}>Quote comparison assistant</p>
+                <p className="text-[11px] leading-tight" style={{ color: '#7b8d86' }}>{isSending ? `Working ${elapsedSeconds}s` : proposal ? 'Preview ready' : 'Ready'}</p>
               </div>
-            )}
-            <div className="mt-3 flex items-center gap-2">
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {debugMode && debugSteps.length > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold" style={{ background: '#fff7ed', color: '#a85c2a' }}>
+                  <Bug className="h-3 w-3" />
+                  {debugSteps.length}
+                </span>
+              )}
               <button
                 type="button"
-                onClick={applyProposal}
-                disabled={isApplying || chips.length === 0}
-                className="rounded-xl px-4 py-2 text-xs font-semibold text-white transition-all disabled:scale-95 disabled:opacity-60"
-                style={{ background: '#fa6b04' }}
+                onClick={() => { onPreviewChange?.(null); onDismiss() }}
+                className="flex h-8 w-8 items-center justify-center rounded-md transition hover:bg-[#f4f7f5]"
+                aria-label="Close assistant"
+                style={{ color: '#8a9e96' }}
               >
-                {isApplying ? 'Applying…' : 'Apply'}
-              </button>
-              <button
-                type="button"
-                onClick={() => { setProposal(null); setSummary(''); onPreviewChange?.(null) }}
-                disabled={isApplying}
-                className="rounded-xl border px-4 py-2 text-xs font-semibold transition disabled:opacity-60"
-                style={{ borderColor: '#e2d9cf', color: '#4a6358', background: '#ffffff' }}
-              >
-                Discard
+                <X className="h-4 w-4" />
               </button>
             </div>
           </div>
-        )}
-        <div className="relative flex h-12 items-center">
-          <div
-            className={cn(
-              'absolute inset-y-0 left-[3.5rem] right-0 rounded-full bg-white shadow-2xl',
-              isClosing ? 'animate-[bid-ai-pill-collapse_240ms_ease-out_forwards]' : 'animate-[bid-ai-pill-emerge_300ms_ease-out_650ms_both]',
-            )}
-            style={{ border: '1.5px solid #fa6b04', transformOrigin: 'left center' }}
-            aria-hidden="true"
-          />
-          <span aria-hidden="true" className="h-12 w-12 shrink-0" />
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="hidden"
-            accept=".csv,.tsv,.txt,.pdf,.xlsx,.xls,.docx"
-            onChange={(event) => {
-              if (event.currentTarget.files) void attachFiles(event.currentTarget.files)
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isSending || isExtractingFile}
-            className={cn(
-              'relative z-10 ml-3 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition disabled:opacity-50',
-              isClosing ? 'animate-[bid-ai-content-hide_160ms_ease-in_forwards]' : 'animate-[bid-ai-content-fade_360ms_ease-out_760ms_both]',
-            )}
-            aria-label="Attach file"
-            title={isExtractingFile ? 'Reading file...' : 'Attach PDF, CSV, Excel, Word, or text file'}
-            style={{ color: '#60746b', background: attachments.length ? '#fef3c7' : '#f6f8fa' }}
-          >
-            <Paperclip className="h-4 w-4" />
-          </button>
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            className={cn(
-              'relative z-10 min-w-0 flex-1 bg-transparent py-3.5 pl-3 pr-3 text-sm outline-none',
-              isClosing ? 'animate-[bid-ai-content-hide_160ms_ease-in_forwards]' : 'animate-[bid-ai-content-fade_260ms_ease-out_800ms_both]',
-            )}
-            style={{ color: '#1e3a2f' }}
-            placeholder='Try: "highlight the fastest lead time per row" or "hide total price for Acme"'
-            onDragOver={(event) => {
-              event.preventDefault()
-              event.dataTransfer.dropEffect = 'copy'
-            }}
-            onDrop={(event) => {
-              event.preventDefault()
-              if (event.dataTransfer.files.length) void attachFiles(event.dataTransfer.files)
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') { event.preventDefault(); void askAssistant() }
-              if (event.key === 'Escape') { event.preventDefault(); onDismiss() }
-            }}
-          />
-          <button
-            type="button"
-            onClick={askAssistant}
-            disabled={!draft.trim() || isSending}
-            className={cn(
-              'relative z-10 shrink-0 rounded-full px-5 py-2 text-sm font-semibold text-white transition-opacity disabled:opacity-60',
-              isClosing ? 'animate-[bid-ai-content-hide_160ms_ease-in_forwards]' : 'animate-[bid-ai-content-fade_360ms_ease-out_760ms_both]',
-            )}
-            style={{ background: '#1e3a2f' }}
-          >
-            {isSending ? 'Thinking…' : 'Send'}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const next = !debugMode
-              setDebugMode(next)
-              try { localStorage.setItem('rialto:agent-debug', String(next)) } catch {}
-              if (!next) setDebugSteps([])
-            }}
-            className={cn(
-              'relative z-10 ml-1 shrink-0 rounded-full border px-3 py-2 text-xs font-semibold transition',
-              isClosing ? 'animate-[bid-ai-content-hide_160ms_ease-in_forwards]' : 'animate-[bid-ai-content-fade_360ms_ease-out_760ms_both]',
-            )}
-            style={{
-              borderColor: debugMode ? '#fa6b04' : '#d5ded9',
-              color: debugMode ? '#fa6b04' : '#60746b',
-              background: '#ffffff',
-            }}
-          >
-            Debug {debugMode ? 'on' : 'off'}
-          </button>
-          <button
-            type="button"
-            onClick={() => { onPreviewChange?.(null); onDismiss() }}
-            className={cn(
-              'relative z-10 ml-1 mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition',
-              isClosing ? 'animate-[bid-ai-content-hide_160ms_ease-in_forwards]' : 'animate-[bid-ai-content-fade_360ms_ease-out_760ms_both]',
-            )}
-            aria-label="Close assistant"
-            style={{ color: '#8a9e96' }}
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        {debugMode && (isSending || debugSteps.length > 0) && (
-          <div className="mt-2 rounded-2xl bg-white px-4 py-3 text-xs shadow" style={{ border: '1px solid #e2d9cf', color: '#4a6358' }}>
-            <div className="mb-2 flex items-center justify-between gap-3 font-semibold" style={{ color: '#1e3a2f' }}>
-              <span>Agent debug</span>
-              <span>{isSending ? `working ${elapsedSeconds}s` : 'ready'}</span>
-            </div>
-            <ol className="space-y-1">
-              {debugSteps.map((step, index) => (
-                <li key={`${index}-${step}`} className="flex gap-2">
-                  <span style={{ color: '#fa6b04' }}>{index + 1}.</span>
-                  <span>{step}</span>
-                </li>
+
+          {hasTranscript && (
+            <div ref={listRef} className="max-h-[min(52vh,460px)] space-y-3 overflow-y-auto px-3.5 py-3.5">
+              {messages.map((message) => (
+                <div key={message.id} className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+                  <div
+                    className="max-w-[88%] rounded-lg px-3 py-2 text-sm leading-6 shadow-sm"
+                    style={{
+                      background: message.role === 'user' ? '#1e3a2f' : message.tone === 'error' ? '#fff7ed' : '#f7faf8',
+                      border: message.role === 'assistant' ? '1px solid #dfe8e3' : '1px solid #1e3a2f',
+                      color: message.role === 'user' ? '#ffffff' : message.tone === 'error' ? '#a85c2a' : '#24463a',
+                    }}
+                  >
+                    <p className="whitespace-pre-wrap">{message.content}</p>
+                  </div>
+                </div>
               ))}
-            </ol>
-          </div>
-        )}
-        {(attachments.length > 0 || isExtractingFile) && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-2xl bg-white px-3 py-2 text-xs shadow" style={{ border: '1px solid #e2d9cf', color: '#4a6358' }}>
-            {attachments.map((attachment) => (
-              <span key={attachment.sourceId} className="inline-flex max-w-[15rem] items-center gap-1.5 rounded-full px-2.5 py-1 font-semibold" style={{ background: '#fef3c7', color: '#7c3f12' }}>
-                <Paperclip className="h-3 w-3 shrink-0" />
-                <span className="truncate">{attachment.filename}</span>
+              {isSending && (
+                <div className="flex justify-start">
+                  <div className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm shadow-sm" style={{ borderColor: '#dfe8e3', color: '#24463a', background: '#f7faf8' }}>
+                    <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: '#fa6b04' }} />
+                    Reading the sheet...
+                  </div>
+                </div>
+              )}
+              {proposal && (
+                <div className="rounded-lg border p-3" style={{ borderColor: '#dfe8e3', background: '#fbfcfb' }}>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.08em]" style={{ color: '#60746b' }}>Preview</p>
+                    <span className="text-xs" style={{ color: '#7b8d86' }}>{chips.length || 0} change{chips.length === 1 ? '' : 's'}</span>
+                  </div>
+                  {chips.length === 0 ? (
+                    <p className="text-xs" style={{ color: '#8a9e96' }}>Rialto is unsure what to change.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {chips.map((chip) => (
+                        <span key={chip.id} className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold" style={TONE_STYLES[chip.tone]}>
+                          {chip.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-3 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={applyProposal}
+                      disabled={isApplying || chips.length === 0}
+                      className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-xs font-semibold text-white transition-all disabled:scale-95 disabled:opacity-60"
+                      style={{ background: '#1e3a2f' }}
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      {isApplying ? 'Applying...' : 'Apply'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setProposal(null); setSummary(''); onPreviewChange?.(null) }}
+                      disabled={isApplying}
+                      className="rounded-md border px-3 py-2 text-xs font-semibold transition disabled:opacity-60"
+                      style={{ borderColor: '#d8e0db', color: '#4a6358', background: '#ffffff' }}
+                    >
+                      Discard
+                    </button>
+                  </div>
+                </div>
+              )}
+              {debugMode && debugSteps.length > 0 && (
+                <details className="rounded-lg border px-3 py-2" style={{ borderColor: '#eadfd4', background: '#fffaf6' }}>
+                  <summary className="cursor-pointer text-xs font-semibold" style={{ color: '#a85c2a' }}>Agent trace</summary>
+                  <ol className="mt-2 space-y-1 text-xs" style={{ color: '#5d7168' }}>
+                    {debugSteps.map((step, index) => (
+                      <li key={`${index}-${step}`} className="grid grid-cols-[1.5rem_1fr] gap-2">
+                        <span style={{ color: '#fa6b04' }}>{index + 1}.</span>
+                        <span>{step}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              )}
+            </div>
+          )}
+
+          <div className="border-t p-2.5" style={{ borderColor: '#edf1ee', background: '#ffffff' }}>
+            <div className="flex items-center gap-2 rounded-lg border bg-white px-2 py-2" style={{ borderColor: '#d8e0db' }}>
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  aria-label={`Remove ${attachment.filename}`}
-                  onClick={() => setAttachments((current) => current.filter((item) => item.sourceId !== attachment.sourceId))}
-                  className="rounded-full p-0.5"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isSending || isExtractingFile}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition disabled:opacity-50"
+                  aria-label="Attach file"
+                  title={isExtractingFile ? 'Reading file...' : 'Attach PDF, CSV, Excel, Word, or text file'}
+                  style={{ color: '#60746b', background: attachments.length ? '#fef3c7' : '#f4f7f5' }}
                 >
-                  <X className="h-3 w-3" />
+                  <Paperclip className="h-4 w-4" />
                 </button>
-              </span>
-            ))}
-            {isExtractingFile && <span>Reading file...</span>}
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                accept=".csv,.tsv,.txt,.pdf,.xlsx,.xls,.docx"
+                onChange={(event) => {
+                  if (event.currentTarget.files) void attachFiles(event.currentTarget.files)
+                }}
+              />
+              <input
+                ref={inputRef}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent py-1.5 text-sm outline-none"
+                style={{ color: '#1e3a2f' }}
+                placeholder="Ask about this sheet..."
+                onDragOver={(event) => {
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'copy'
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  if (event.dataTransfer.files.length) void attachFiles(event.dataTransfer.files)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') { event.preventDefault(); void askAssistant() }
+                  if (event.key === 'Escape') { event.preventDefault(); onDismiss() }
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !debugMode
+                  setDebugMode(next)
+                  try { localStorage.setItem('rialto:agent-debug', String(next)) } catch {}
+                  if (!next) setDebugSteps([])
+                }}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition"
+                style={{
+                  borderColor: debugMode ? '#fa6b04' : '#d5ded9',
+                  color: debugMode ? '#fa6b04' : '#60746b',
+                  background: '#ffffff',
+                }}
+                aria-label={debugMode ? 'Turn debug off' : 'Turn debug on'}
+                title={debugMode ? 'Debug on' : 'Debug off'}
+              >
+                <Bug className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={askAssistant}
+                disabled={!draft.trim() || isSending}
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-white transition-opacity disabled:opacity-60"
+                style={{ background: '#1e3a2f' }}
+              >
+                <Send className="h-3.5 w-3.5" />
+                {isSending ? 'Thinking' : 'Send'}
+              </button>
+            </div>
+            {(attachments.length > 0 || isExtractingFile) && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" style={{ color: '#4a6358' }}>
+                {attachments.map((attachment) => (
+                  <span key={attachment.sourceId} className="inline-flex max-w-[15rem] items-center gap-1.5 rounded-md px-2.5 py-1 font-semibold" style={{ background: '#fef3c7', color: '#7c3f12' }}>
+                    <Paperclip className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{attachment.filename}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${attachment.filename}`}
+                      onClick={() => setAttachments((current) => current.filter((item) => item.sourceId !== attachment.sourceId))}
+                      className="rounded-md p-0.5"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+                {isExtractingFile && <span>Reading file...</span>}
+              </div>
+            )}
           </div>
-        )}
-        {error && <p className="mt-2 rounded-full bg-white px-4 py-2 text-xs shadow" style={{ color: '#a85c2a' }}>{error}</p>}
-        {summary && !proposal && <p className="mt-2 rounded-full bg-white px-4 py-2 text-xs shadow" style={{ color: '#4a6358' }}>{summary}</p>}
+        </div>
       </section>
     </>
   )
