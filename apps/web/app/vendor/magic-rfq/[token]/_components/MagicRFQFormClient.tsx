@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { submitMagicRFQBidAction, submitMagicRFQMessageAction } from '@/lib/actions/vendor'
+import { uploadRequestAttachmentFile, type ClientUploadedFileResult } from '@/lib/files/blob-client-upload'
 import type { ContractorBid, ContractorRFQ, ContractorRFQLineItem } from '@/lib/types/contractor'
 import type { MagicRFQPreviewInput } from '@/lib/types/magic-rfq'
 import type { BidTerms, ComplianceDeclaration, NegotiationMessage, ProcurementLineItemAttribute } from '@/lib/types/procurement'
@@ -17,9 +18,12 @@ interface LineItemBid {
   quoted_unit: string
   units_available: string
   unit_price: string
+  total_price: string
   lead_time_days: string
   delivery_terms: string
   substitution_notes: string
+  substitution_difference: string
+  substitution_attachments: ClientUploadedFileResult[]
   quoted_product_details: string
   response_attributes: Record<string, string>
 }
@@ -33,6 +37,7 @@ const fieldClass = 'w-full rounded-md border bg-white px-3 py-2 text-sm outline-
 const compactFieldClass = 'w-full rounded-md border bg-white px-2.5 py-1.5 text-sm outline-none transition focus:ring-2'
 const fieldStyle = { borderColor: '#c8bdb2', color: '#1e3a2f' }
 const fieldFocusStyle = { '--tw-ring-color': '#fdc89a' } as React.CSSProperties
+const SUBSTITUTION_ATTACHMENTS_KEY = 'substitution_attachments'
 
 const PRODUCT_IDENTITY_KEYS = [
   'manufacturer',
@@ -57,6 +62,18 @@ function responseAttributeMap(response?: ContractorBid['line_item_responses'][nu
   return Object.fromEntries((response?.response_attributes ?? []).map((attribute) => [attribute.key, attribute.value]))
 }
 
+function parseSubstitutionAttachments(values: Record<string, string>): ClientUploadedFileResult[] {
+  const raw = values[SUBSTITUTION_ATTACHMENTS_KEY]
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as ClientUploadedFileResult[]
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((entry) => entry && typeof entry.url === 'string' && typeof entry.filename === 'string')
+  } catch {
+    return []
+  }
+}
+
 function visibleVendorResponseFields(rfq: ContractorRFQ) {
   return (rfq.vendor_response_fields ?? [])
     .filter((field) => field.visible !== false)
@@ -68,7 +85,7 @@ function makeResponseAttributes(fields: CustomLineItemFieldDefinition[], values:
   return fields
     .map((field) => ({
       key: field.key,
-      label: field.label,
+      label: titleCaseLabel(field.label),
       value: (values[field.key] ?? '').trim(),
       inputType: field.inputType,
       required: field.required,
@@ -80,10 +97,91 @@ function makeResponseAttributes(fields: CustomLineItemFieldDefinition[], values:
     .filter((attribute) => attribute.value)
 }
 
+function makeSubmissionResponseAttributes(fields: CustomLineItemFieldDefinition[], bid: LineItemBid): ProcurementLineItemAttribute[] {
+  const attrs = makeResponseAttributes(fields, bid.response_attributes)
+  if (bid.is_alternate && bid.substitution_attachments.length > 0) {
+    attrs.push({
+      key: SUBSTITUTION_ATTACHMENTS_KEY,
+      label: 'Substitution Attachments',
+      value: JSON.stringify(bid.substitution_attachments),
+      inputType: 'text',
+      source: 'user',
+      order: 10_000,
+    })
+  }
+  return attrs
+}
+
+function formatCurrencyInput(value: string) {
+  if (!value) return ''
+  const [whole, decimal] = value.split('.')
+  const formattedWhole = whole ? Number(whole).toLocaleString('en-US') : ''
+  return `$${formattedWhole}${decimal != null ? `.${decimal}` : ''}`
+}
+
+function parseCurrencyInput(value: string) {
+  const cleaned = value.replace(/[^\d.]/g, '')
+  const [whole, ...decimalParts] = cleaned.split('.')
+  const decimal = decimalParts.join('').slice(0, 2)
+  return decimalParts.length > 0 ? `${whole}.${decimal}` : whole
+}
+
+function moneyDisplay(value: string) {
+  const n = parseFloat(value)
+  if (!Number.isFinite(n)) return '-'
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function calculateQuotedTotalPrice(quantity: string, unitPrice: string) {
+  const parsedQuantity = parseFloat(quantity)
+  const parsedUnitPrice = parseFloat(unitPrice)
+  if (!Number.isFinite(parsedQuantity) || !Number.isFinite(parsedUnitPrice)) return ''
+  return (parsedQuantity * parsedUnitPrice).toFixed(2)
+}
+
+function titleCaseLabel(value: string) {
+  const acronyms = new Set(['SKU', 'USD', 'RFQ', 'RFP', 'ID', 'URL', 'PDF', 'GC', 'HVAC', 'EMT'])
+  return value
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+    .replace(/\b[A-Za-z]+\b/g, (word) => {
+      const upperWord = word.toUpperCase()
+      return acronyms.has(upperWord) ? upperWord : word
+    })
+}
+
+function isBuiltInMaterialAttribute(attribute: ProcurementLineItemAttribute) {
+  const normalized = `${attribute.key} ${attribute.label}`.toLowerCase().replace(/[_/-]+/g, ' ')
+  return [
+    'spec',
+    'certification',
+    'note',
+    'target budget',
+    'suggested lead',
+  ].some((token) => normalized.includes(token))
+}
+
+function emptySubstitutionFields(): Partial<LineItemBid> {
+  return {
+    is_alternate: false,
+    alternate_description: '',
+    vendor_sku: '',
+    substitution_difference: '',
+    substitution_notes: '',
+    substitution_attachments: [],
+    total_price: '',
+    quoted_product_details: '',
+    quoted_unit: '',
+  }
+}
+
 function defaultBids(rfq: ContractorRFQ, existingBid: ContractorBid | null): LineItemBid[] {
   return rfq.line_items.map((item) => {
     const response = existingBid?.line_item_responses.find((entry) => entry.line_item_id === item.id)
     const responseIsAlternate = Boolean(response?.is_alternate && isProductSpecific(item))
+    const responseAttributes = responseAttributeMap(response)
     return {
       line_item_id: item.id,
       vendor_sku: responseIsAlternate ? response?.sku ?? '' : response?.sku && response.sku !== item.sku ? response.sku : '',
@@ -91,14 +189,17 @@ function defaultBids(rfq: ContractorRFQ, existingBid: ContractorBid | null): Lin
       is_alternate: responseIsAlternate,
       availability: response?.availability === 'unavailable' ? 'unavailable' : 'in_stock',
       quoted_quantity: response?.quoted_quantity?.toString() ?? item.quantity.toString(),
-      quoted_unit: response?.unit && response.unit !== item.unit ? response.unit : '',
+      quoted_unit: response?.unit ?? item.unit,
       units_available: response?.units_available?.toString() ?? '',
       unit_price: response?.unit_price?.toString() ?? '',
+      total_price: response?.total_price?.toString() ?? '',
       lead_time_days: response?.lead_time_days?.toString() ?? item.suggested_lead_time_days?.toString() ?? '',
       delivery_terms: response?.delivery_terms ?? '',
       substitution_notes: response?.substitution_notes ?? '',
-      quoted_product_details: response?.quoted_product_details ?? '',
-      response_attributes: responseAttributeMap(response),
+      substitution_difference: responseIsAlternate ? response?.quoted_product_details ?? '' : '',
+      substitution_attachments: responseIsAlternate ? parseSubstitutionAttachments(responseAttributes) : [],
+      quoted_product_details: responseIsAlternate ? '' : response?.quoted_product_details ?? '',
+      response_attributes: responseAttributes,
     }
   })
 }
@@ -135,7 +236,7 @@ function LineItemCard({
             ))}
             {(item.attributes ?? []).filter((attribute) => attribute.value).map((attribute) => (
               <span key={attribute.key} className="rounded px-1.5 py-0.5 font-medium" style={{ background: '#ffffff', border: '1px solid #e2d9cf', color: '#4a6358' }}>
-                {attribute.label}: {attribute.value}
+                {titleCaseLabel(attribute.label)}: {attribute.value}
               </span>
             ))}
           </div>
@@ -408,7 +509,7 @@ function SheetHeaderCell({
       className="relative flex h-11 items-center truncate whitespace-nowrap border-r px-3"
       style={{ borderColor, background }}
     >
-      {label}
+      {titleCaseLabel(label)}
       {leftResizeKey && onLeftResizeStart && (
         <div
           aria-hidden="true"
@@ -427,14 +528,229 @@ function SheetHeaderCell({
   )
 }
 
+function SubstitutionModal({
+  item,
+  bid,
+  uploadFolder,
+  onClose,
+  onConfirm,
+  onRemove,
+}: {
+  item: ContractorRFQLineItem
+  bid: LineItemBid
+  uploadFolder: string
+  onClose: () => void
+  onConfirm: (partial: Partial<LineItemBid>) => void
+  onRemove: () => void
+}) {
+  const [draft, setDraft] = useState<LineItemBid>(() => ({
+    ...bid,
+    quoted_quantity: bid.quoted_quantity || item.quantity.toString(),
+    quoted_unit: bid.quoted_unit || item.unit,
+  }))
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState('')
+  const calculatedTotalPrice = calculateQuotedTotalPrice(draft.quoted_quantity, draft.unit_price)
+  const canConfirm = Boolean(
+    draft.alternate_description.trim() &&
+    draft.quoted_quantity.trim() &&
+    draft.quoted_unit.trim() &&
+    draft.unit_price.trim() &&
+    calculatedTotalPrice &&
+    draft.lead_time_days.trim(),
+  )
+
+  function setDraftValue(partial: Partial<LineItemBid>) {
+    setDraft((prev) => ({ ...prev, ...partial }))
+  }
+
+  async function uploadFiles(files: FileList | null) {
+    if (!files?.length) return
+    setUploading(true)
+    setError('')
+    try {
+      const uploaded = await Promise.all(Array.from(files).map((file) => uploadRequestAttachmentFile(file, uploadFolder)))
+      setDraft((prev) => ({ ...prev, substitution_attachments: [...prev.substitution_attachments, ...uploaded] }))
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : 'Failed to upload attachment.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  function confirm() {
+    if (!canConfirm) {
+      setError('Alternate item, quantity, unit, unit price, and lead time are required.')
+      return
+    }
+    onConfirm({
+      is_alternate: true,
+      availability: 'in_stock',
+      alternate_description: draft.alternate_description,
+      vendor_sku: '',
+      substitution_difference: draft.substitution_difference,
+      substitution_notes: draft.substitution_difference,
+      substitution_attachments: draft.substitution_attachments,
+      unit_price: draft.unit_price,
+      total_price: calculatedTotalPrice,
+      lead_time_days: draft.lead_time_days,
+      quoted_quantity: draft.quoted_quantity || item.quantity.toString(),
+      quoted_unit: draft.quoted_unit || item.unit,
+      quoted_product_details: '',
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
+      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border bg-white shadow-2xl" style={{ borderColor: '#e2d9cf' }}>
+        <div className="flex items-start justify-between gap-4 border-b px-6 py-5" style={{ borderColor: '#e2d9cf', background: '#f8faf9' }}>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em]" style={{ color: '#fa6b04' }}>Substitution</p>
+            <h3 className="mt-1 text-xl font-semibold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>
+              Provide alternate item
+            </h3>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-md border bg-white px-3 py-1.5 text-xs font-semibold" style={{ borderColor: '#e2d9cf', color: '#4a6358' }}>
+            Close
+          </button>
+        </div>
+
+        <div className="grid min-h-0 flex-1 overflow-auto lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <section className="border-b p-6 lg:border-b-0 lg:border-r" style={{ borderColor: '#e2d9cf', background: '#fbf8f5' }}>
+            <h4 className="text-sm font-bold" style={{ color: '#1e3a2f' }}>Original requested material</h4>
+            <div className="mt-4 rounded-xl border bg-white p-4" style={{ borderColor: '#e2d9cf' }}>
+              <p className="text-sm font-semibold" style={{ color: '#1e3a2f' }}>{item.sku || item.description || '-'}</p>
+              {item.sku && item.description ? <p className="mt-1 text-sm" style={{ color: '#4a6358' }}>{item.description}</p> : null}
+              <div className="mt-4 space-y-2 text-sm" style={{ color: '#4a6358' }}>
+                <p>
+                  <span className="font-bold" style={{ color: '#1e3a2f' }}>Quantity:</span>{' '}
+                  {item.quantity.toLocaleString()} {item.unit}
+                </p>
+                {item.specs && (
+                  <p><span className="font-bold" style={{ color: '#1e3a2f' }}>Specs:</span> {item.specs}</p>
+                )}
+                {item.certifications?.length ? (
+                  <p><span className="font-bold" style={{ color: '#1e3a2f' }}>Certifications:</span> {item.certifications.join(', ')}</p>
+                ) : null}
+                {item.notes && (
+                  <p><span className="font-bold" style={{ color: '#1e3a2f' }}>Notes:</span> {item.notes}</p>
+                )}
+                {item.contractor_budget != null && (
+                  <p><span className="font-bold" style={{ color: '#1e3a2f' }}>Target Budget:</span> ${item.contractor_budget.toLocaleString()}</p>
+                )}
+                {item.suggested_lead_time_days != null && (
+                  <p><span className="font-bold" style={{ color: '#1e3a2f' }}>Suggested Lead Time Days:</span> {item.suggested_lead_time_days}</p>
+                )}
+                {(item.attributes ?? []).filter((attribute) => attribute.value && !isBuiltInMaterialAttribute(attribute)).map((attribute) => (
+                  <p key={attribute.key}>
+                    <span className="font-bold" style={{ color: '#1e3a2f' }}>{titleCaseLabel(attribute.label)}:</span> {attribute.value}
+                  </p>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section className="space-y-4 p-6">
+            {error && (
+              <div className="rounded-lg border px-3 py-2 text-sm" style={{ borderColor: '#f5c6c6', background: '#fdeaea', color: '#c0392b' }}>
+                {error}
+              </div>
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="sm:col-span-2">
+                <span className="mb-1 block text-xs font-semibold" style={{ color: '#4a6358' }}>Alternate Item</span>
+                <input
+                  value={draft.alternate_description}
+                  onChange={(event) => setDraftValue({ alternate_description: event.target.value })}
+                  placeholder="Item Description/Manufacturer/SKU"
+                  className={fieldClass}
+                  style={{ ...fieldStyle, ...fieldFocusStyle }}
+                />
+              </label>
+              <label>
+                <span className="mb-1 block text-xs font-semibold" style={{ color: '#4a6358' }}>Quantity</span>
+                <input type="number" min={0} step="0.01" value={draft.quoted_quantity} onChange={(event) => setDraftValue({ quoted_quantity: event.target.value })} className={fieldClass} style={{ ...fieldStyle, ...fieldFocusStyle }} />
+              </label>
+              <label>
+                <span className="mb-1 block text-xs font-semibold" style={{ color: '#4a6358' }}>Units</span>
+                <input value={draft.quoted_unit} onChange={(event) => setDraftValue({ quoted_unit: event.target.value })} className={fieldClass} style={{ ...fieldStyle, ...fieldFocusStyle }} />
+              </label>
+              <label>
+                <span className="mb-1 block text-xs font-semibold" style={{ color: '#4a6358' }}>Unit Price</span>
+                <input inputMode="decimal" value={formatCurrencyInput(draft.unit_price)} onChange={(event) => setDraftValue({ unit_price: parseCurrencyInput(event.target.value) })} className={fieldClass} style={{ ...fieldStyle, ...fieldFocusStyle }} />
+              </label>
+              <div>
+                <span className="mb-1 block text-xs font-semibold" style={{ color: '#4a6358' }}>Total Price</span>
+                <div className="rounded-md border bg-white px-3 py-2 text-sm font-semibold" style={{ borderColor: '#c8bdb2', color: '#1e3a2f' }}>
+                  {calculatedTotalPrice ? formatCurrencyInput(calculatedTotalPrice) : '-'}
+                </div>
+                <p className="mt-1 text-[11px]" style={{ color: '#8a9e96' }}>Quantity x unit price</p>
+              </div>
+              <label>
+                <span className="mb-1 block text-xs font-semibold" style={{ color: '#4a6358' }}>Lead Time</span>
+                <input type="number" min={1} value={draft.lead_time_days} onChange={(event) => setDraftValue({ lead_time_days: event.target.value })} className={fieldClass} style={{ ...fieldStyle, ...fieldFocusStyle }} />
+              </label>
+              <label className="sm:col-span-2">
+                <span className="mb-1 block text-xs font-semibold" style={{ color: '#4a6358' }}>Difference/Reason</span>
+                <textarea rows={4} value={draft.substitution_difference} onChange={(event) => setDraftValue({ substitution_difference: event.target.value, substitution_notes: event.target.value })} className={fieldClass} style={{ ...fieldStyle, ...fieldFocusStyle }} />
+              </label>
+            </div>
+
+            <div className="rounded-xl border p-4" style={{ borderColor: '#e2d9cf', background: '#fbf8f5' }}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold" style={{ color: '#1e3a2f' }}>Attachments</p>
+                  <p className="text-xs" style={{ color: '#8a9e96' }}>Upload spec sheets, product data, or other support.</p>
+                </div>
+                <label className="cursor-pointer rounded-md border bg-white px-3 py-2 text-xs font-semibold" style={{ borderColor: '#fdc89a', color: '#a85c2a' }}>
+                  {uploading ? 'Uploading...' : 'Add files'}
+                  <input type="file" multiple disabled={uploading} className="sr-only" onChange={(event) => { void uploadFiles(event.target.files); event.target.value = '' }} />
+                </label>
+              </div>
+              {draft.substitution_attachments.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {draft.substitution_attachments.map((attachment) => (
+                    <span key={attachment.url} className="inline-flex items-center gap-2 rounded-full border bg-white px-3 py-1 text-xs font-medium" style={{ borderColor: '#e2d9cf', color: '#4a6358' }}>
+                      <a href={attachment.url} target="_blank" rel="noreferrer" className="max-w-[14rem] truncate">{attachment.filename}</a>
+                      <button type="button" onClick={() => setDraftValue({ substitution_attachments: draft.substitution_attachments.filter((entry) => entry.url !== attachment.url) })} className="font-bold" style={{ color: '#a85c2a' }}>
+                        x
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t px-6 py-4" style={{ borderColor: '#e2d9cf', background: '#f8faf9' }}>
+          <button type="button" onClick={onRemove} className="rounded-md border bg-white px-4 py-2 text-sm font-semibold" style={{ borderColor: '#f5c6c6', color: '#c0392b' }}>
+            Remove substitution
+          </button>
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} className="rounded-md border bg-white px-4 py-2 text-sm font-medium" style={{ borderColor: '#e2d9cf', color: '#4a6358' }}>
+              Cancel
+            </button>
+            <button type="button" onClick={confirm} disabled={!canConfirm || uploading} className="rounded-md px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" style={{ background: '#fa6b04' }}>
+              Confirm substitution
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function LineItemsWorkbook({
   rfq,
   bids,
   updateBid,
+  uploadFolder,
 }: {
   rfq: ContractorRFQ
   bids: LineItemBid[]
   updateBid: (id: string, partial: Partial<LineItemBid>) => void
+  uploadFolder: string
 }) {
   const vendorResponseFields = visibleVendorResponseFields(rfq)
   const requestAttributeColumns = rfq.line_items
@@ -451,7 +767,7 @@ function LineItemsWorkbook({
   const detailColumns = [
     ...requestAttributeColumns.map((attribute) => ({
       key: `detail:${attribute.key}`,
-      label: attribute.label,
+      label: titleCaseLabel(attribute.label),
       width: 170,
       minWidth: 24,
       attribute,
@@ -464,15 +780,16 @@ function LineItemsWorkbook({
     { key: 'response:lead-time', label: 'Lead Time', width: 96, minWidth: 24 },
     ...vendorResponseFields.map((field) => ({
       key: `response:${field.key}`,
-      label: field.label,
+      label: titleCaseLabel(field.label),
       width: 112,
       minWidth: 24,
       field,
     })),
-    { key: 'response:substitution', label: 'Provide Substition', width: 156, minWidth: 24 },
+    { key: 'response:substitution', label: 'Provide Substitution', width: 156, minWidth: 24 },
   ]
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [vendorPaneWidthOverride, setVendorPaneWidthOverride] = useState<number | null>(null)
+  const [substitutionLineItemId, setSubstitutionLineItemId] = useState<string | null>(null)
   const columnWidth = (key: string, fallback: number) => columnWidths[key] ?? fallback
   const requestPinnedGridTemplateColumns = requestPinnedColumns.map((col) => `${columnWidth(col.key, col.width)}px`).join(' ')
   const requestDetailsGridTemplateColumns = detailColumns.map((col) => `${columnWidth(col.key, col.width)}px`).join(' ')
@@ -542,20 +859,6 @@ function LineItemsWorkbook({
     window.addEventListener('mouseup', onUp)
   }
 
-  function formatCurrencyInput(value: string) {
-    if (!value) return ''
-    const [whole, decimal] = value.split('.')
-    const formattedWhole = whole ? Number(whole).toLocaleString('en-US') : ''
-    return `$${formattedWhole}${decimal != null ? `.${decimal}` : ''}`
-  }
-
-  function parseCurrencyInput(value: string) {
-    const cleaned = value.replace(/[^\d.]/g, '')
-    const [whole, ...decimalParts] = cleaned.split('.')
-    const decimal = decimalParts.join('').slice(0, 2)
-    return decimalParts.length > 0 ? `${whole}.${decimal}` : whole
-  }
-
   function updateResponseAttribute(bid: LineItemBid, key: string, value: string) {
     updateBid(bid.line_item_id, {
       response_attributes: {
@@ -565,7 +868,16 @@ function LineItemsWorkbook({
     })
   }
 
+  function removeSubstitution(id: string) {
+    updateBid(id, emptySubstitutionFields())
+    setSubstitutionLineItemId(null)
+  }
+
+  const substitutionItem = substitutionLineItemId ? rfq.line_items.find((item) => item.id === substitutionLineItemId) : undefined
+  const substitutionBid = substitutionLineItemId ? bids.find((bid) => bid.line_item_id === substitutionLineItemId) : undefined
+
   return (
+    <>
     <div className="overflow-hidden rounded-2xl border bg-white shadow-sm" style={{ borderColor: '#e2d9cf' }}>
       <div className="flex flex-col gap-2 border-b px-5 py-4 sm:flex-row sm:items-end sm:justify-between" style={{ borderColor: '#e2d9cf' }}>
         <div>
@@ -607,14 +919,15 @@ function LineItemsWorkbook({
 
               {rfq.line_items.map((item, index) => {
                 const bid = bids.find((entry) => entry.line_item_id === item.id) ?? bids[index]!
+                const originalTextStyle = bid.is_alternate ? { color: '#8a9e96', textDecoration: 'line-through' } : { color: '#1e3a2f' }
                 return (
                   <div key={`${item.id}-request-pinned-rows`}>
                     <div
                       className="grid h-16 items-stretch gap-0 border-b"
-                      style={{ gridTemplateColumns: requestPinnedGridTemplateColumns, borderColor: '#f0ebe6' }}
+                      style={{ gridTemplateColumns: requestPinnedGridTemplateColumns, borderColor: '#f0ebe6', background: bid.is_alternate ? '#f8faf9' : '#ffffff' }}
                     >
                       <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
-                        <div className="px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>
+                        <div className="px-2 py-1.5 text-sm" style={originalTextStyle}>
                           <p
                             className="text-xs"
                             style={{
@@ -630,10 +943,10 @@ function LineItemsWorkbook({
                         </div>
                       </div>
                       <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
-                        <div className="px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>{item.quantity.toLocaleString()}</div>
+                        <div className="px-2 py-1.5 text-sm" style={originalTextStyle}>{item.quantity.toLocaleString()}</div>
                       </div>
                       <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
-                        <div className="px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>{item.unit}</div>
+                        <div className="px-2 py-1.5 text-sm" style={originalTextStyle}>{item.unit}</div>
                       </div>
                     </div>
 
@@ -643,34 +956,25 @@ function LineItemsWorkbook({
                         style={{ gridTemplateColumns: requestPinnedGridTemplateColumns, borderColor: '#fa6b04', background: '#fffaf5' }}
                       >
                         <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f2c99d' }}>
-                          <input
-                            type="text"
-                            value={bid.alternate_description}
-                            onChange={(event) => updateBid(item.id, { alternate_description: event.target.value })}
-                            placeholder="Alternative item / SKU"
-                            className="h-full w-full rounded-md px-2 text-sm focus:outline-none"
-                            style={{ background: '#ffffff', border: '1px dashed #fa6b04', color: '#1e3a2f' }}
-                          />
+                          <button
+                            type="button"
+                            onClick={() => setSubstitutionLineItemId(item.id)}
+                            className="h-full w-full rounded-md border border-dashed px-2 text-left text-sm font-semibold"
+                            style={{ background: '#ffffff', borderColor: '#fa6b04', color: '#1e3a2f' }}
+                          >
+                            <span className="block truncate">{bid.alternate_description || 'Substitution'}</span>
+                            {bid.vendor_sku ? <span className="block truncate text-[11px] font-medium" style={{ color: '#8a9e96' }}>{bid.vendor_sku}</span> : null}
+                          </button>
                         </div>
                         <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f2c99d' }}>
-                          <input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={bid.quoted_quantity}
-                            onChange={(event) => updateBid(item.id, { quoted_quantity: event.target.value })}
-                            className="h-full w-full rounded-md px-2 text-sm focus:outline-none"
-                            style={{ background: '#ffffff', border: '1px dashed #fa6b04', color: '#1e3a2f' }}
-                          />
+                          <div className="h-full rounded-md border border-dashed px-2 py-4 text-sm" style={{ background: '#ffffff', borderColor: '#fa6b04', color: '#1e3a2f' }}>
+                            {(bid.quoted_quantity || item.quantity.toString()).toLocaleString()}
+                          </div>
                         </div>
                         <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f2c99d' }}>
-                          <input
-                            type="text"
-                            value={bid.quoted_unit || item.unit}
-                            onChange={(event) => updateBid(item.id, { quoted_unit: event.target.value })}
-                            className="h-full w-full rounded-md px-2 text-sm focus:outline-none"
-                            style={{ background: '#ffffff', border: '1px dashed #fa6b04', color: '#1e3a2f' }}
-                          />
+                          <div className="h-full rounded-md border border-dashed px-2 py-4 text-sm" style={{ background: '#ffffff', borderColor: '#fa6b04', color: '#1e3a2f' }}>
+                            {bid.quoted_unit || item.unit}
+                          </div>
                         </div>
                       </div>
                     )}
@@ -701,21 +1005,22 @@ function LineItemsWorkbook({
                 {rfq.line_items.map((item, index) => {
                   const bid = bids.find((entry) => entry.line_item_id === item.id) ?? bids[index]!
                   const attributeByKey = new Map((item.attributes ?? []).map((attribute) => [attribute.key, attribute]))
+                  const originalTextStyle = bid.is_alternate ? { color: '#8a9e96', textDecoration: 'line-through' } : { color: '#1e3a2f' }
                   return (
                     <div key={`${item.id}-request-detail-rows`}>
                       <div
                         className="grid h-16 items-stretch gap-0 border-b"
-                        style={{ gridTemplateColumns: requestDetailsGridTemplateColumns, borderColor: '#f0ebe6' }}
+                        style={{ gridTemplateColumns: requestDetailsGridTemplateColumns, borderColor: '#f0ebe6', background: bid.is_alternate ? '#f8faf9' : '#ffffff' }}
                       >
                         {requestAttributeColumns.map((attribute) => (
                           <div key={`${item.id}-request-${attribute.key}`} className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
-                            <div className="truncate px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>
+                            <div className="truncate px-2 py-1.5 text-sm" style={originalTextStyle}>
                               {attributeByKey.get(attribute.key)?.value || '-'}
                             </div>
                           </div>
                         ))}
                         <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
-                          <div className="truncate px-2 py-1.5 text-sm" style={{ color: '#1e3a2f' }}>
+                          <div className="truncate px-2 py-1.5 text-sm" style={originalTextStyle}>
                             {[item.specs, item.notes, item.certifications?.join(', ')].filter(Boolean).join(' · ') || '-'}
                           </div>
                         </div>
@@ -726,27 +1031,17 @@ function LineItemsWorkbook({
                           className="grid h-16 items-stretch gap-0 border-b border-t border-dashed"
                           style={{ gridTemplateColumns: requestDetailsGridTemplateColumns, borderColor: '#fa6b04', background: '#fffaf5' }}
                         >
-                          {requestAttributeColumns.map((attribute) => (
-                            <div key={`${item.id}-alternate-${attribute.key}`} className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f2c99d' }}>
-                              <input
-                                type="text"
-                                value={bid.response_attributes[`alternate:${attribute.key}`] ?? ''}
-                                onChange={(event) => updateResponseAttribute(bid, `alternate:${attribute.key}`, event.target.value)}
-                                placeholder={attribute.label}
-                                className="h-full w-full rounded-md px-2 text-sm focus:outline-none"
-                                style={{ background: '#ffffff', border: '1px dashed #fa6b04', color: '#1e3a2f' }}
-                              />
-                            </div>
-                          ))}
-                          <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f2c99d' }}>
-                            <input
-                              type="text"
-                              value={bid.quoted_product_details}
-                              onChange={(event) => updateBid(item.id, { quoted_product_details: event.target.value })}
-                              placeholder="Manufacturer, model, finish, specs..."
-                              className="h-full w-full rounded-md px-2 text-sm focus:outline-none"
-                              style={{ background: '#ffffff', border: '1px dashed #fa6b04', color: '#1e3a2f' }}
-                            />
+                          <div className="min-w-0 border-r p-1.5" style={{ gridColumn: '1 / -1', borderColor: '#f2c99d' }}>
+                            <button
+                              type="button"
+                              onClick={() => setSubstitutionLineItemId(item.id)}
+                              className="h-full w-full rounded-md border border-dashed px-2 text-left text-sm font-semibold"
+                              style={{ background: '#ffffff', borderColor: '#fa6b04', color: '#a85c2a' }}
+                            >
+                              <span className="sticky left-3 inline-flex items-center whitespace-nowrap">
+                                See Substitution Details →
+                              </span>
+                            </button>
                           </div>
                         </div>
                       )}
@@ -790,31 +1085,55 @@ function LineItemsWorkbook({
                 const bid = bids.find((entry) => entry.line_item_id === item.id) ?? bids[index]!
                 const unitPrice = parseFloat(bid.unit_price) || 0
                 const quotedQuantity = parseFloat(bid.quoted_quantity) || item.quantity || 0
-                const totalPrice = unitPrice * quotedQuantity
-                const responseCells = (
-                  <>
-                    <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                const computedTotalPrice = unitPrice * quotedQuantity
+                const totalPrice = computedTotalPrice
+                const renderResponseCells = (alternateRow: boolean) => {
+                  if (bid.is_alternate && !alternateRow) {
+                    return (
+                      <>
+                        <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                          <div className="h-full rounded-md px-2 py-4 text-xs font-semibold" style={{ background: '#f8faf9', color: '#8a9e96', textDecoration: 'line-through' }}>
+                            Replaced
+                          </div>
+                        </div>
+                        {Array.from({ length: 2 + vendorResponseFields.length }).map((_, cellIndex) => (
+                          <div key={`${item.id}-replaced-${cellIndex}`} className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                            <div className="h-full rounded-md" style={{ background: '#f8faf9' }} />
+                          </div>
+                        ))}
+                      </>
+                    )
+                  }
+                  return (
+                    <>
+                      <div className="overflow-hidden border-r p-1.5" style={{ borderColor: alternateRow ? '#f2c99d' : '#f0ebe6' }}>
                         <label className="sr-only">Unit Price</label>
                         <input
                           type="text"
                           inputMode="decimal"
                           value={formatCurrencyInput(bid.unit_price)}
-                          onChange={(event) => updateBid(item.id, { unit_price: parseCurrencyInput(event.target.value) })}
+                          onChange={(event) => {
+                            const nextUnitPrice = parseCurrencyInput(event.target.value)
+                            updateBid(item.id, {
+                              unit_price: nextUnitPrice,
+                              total_price: calculateQuotedTotalPrice(bid.quoted_quantity, nextUnitPrice),
+                            })
+                          }}
                           className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
-                          style={{ background: '#fbf8f5', border: '1px solid #e2d9cf', color: '#1e3a2f' }}
+                          style={{ background: '#fbf8f5', border: alternateRow ? '1px dashed #fa6b04' : '1px solid #e2d9cf', color: '#1e3a2f' }}
                         />
                       </div>
-                      <div className="min-w-0 overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                      <div className="min-w-0 overflow-hidden border-r p-1.5" style={{ borderColor: alternateRow ? '#f2c99d' : '#f0ebe6' }}>
                         <div
                           className="min-w-0 overflow-hidden rounded-md px-2 py-1.5 text-right text-sm font-semibold"
-                          style={{ background: '#fff', border: '1px solid #f2c99d', color: '#8a4615' }}
+                          style={{ background: '#fff', border: alternateRow ? '1px dashed #fa6b04' : '1px solid #f2c99d', color: '#8a4615' }}
                         >
                           <span className="block truncate">
                             {bid.unit_price ? `$${totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
                           </span>
                         </div>
                       </div>
-                      <div className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                      <div className="overflow-hidden border-r p-1.5" style={{ borderColor: alternateRow ? '#f2c99d' : '#f0ebe6' }}>
                         <label className="sr-only">Lead Time</label>
                         <input
                           type="number"
@@ -822,11 +1141,11 @@ function LineItemsWorkbook({
                           value={bid.lead_time_days}
                           onChange={(event) => updateBid(item.id, { lead_time_days: event.target.value })}
                           className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
-                          style={{ background: '#fbf8f5', border: '1px solid #e2d9cf', color: '#1e3a2f' }}
+                          style={{ background: '#fbf8f5', border: alternateRow ? '1px dashed #fa6b04' : '1px solid #e2d9cf', color: '#1e3a2f' }}
                         />
                       </div>
                       {vendorResponseFields.map((field) => (
-                        <div key={`${item.id}-${field.key}`} className="overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                        <div key={`${item.id}-${alternateRow ? 'alternate' : 'response'}-${field.key}`} className="overflow-hidden border-r p-1.5" style={{ borderColor: alternateRow ? '#f2c99d' : '#f0ebe6' }}>
                           <VendorResponseFieldInput
                             field={field}
                             value={bid.response_attributes[field.key] ?? ''}
@@ -834,24 +1153,26 @@ function LineItemsWorkbook({
                           />
                         </div>
                       ))}
-                  </>
-                )
+                    </>
+                  )
+                }
                 return (
                   <div key={`${item.id}-response-rows`}>
                     <div
                       className="grid h-16 items-stretch gap-0 border-b"
-                      style={{ gridTemplateColumns: vendorGridTemplateColumns, borderColor: '#f0ebe6' }}
+                      style={{ gridTemplateColumns: vendorGridTemplateColumns, borderColor: '#f0ebe6', background: bid.is_alternate ? '#f8faf9' : '#ffffff' }}
                     >
-                      {responseCells}
+                      {renderResponseCells(false)}
                       <div className="flex items-center overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
                         <button
                           type="button"
-                          onClick={() => updateBid(item.id, { is_alternate: true })}
-                          disabled={bid.is_alternate}
+                          onClick={() => setSubstitutionLineItemId(item.id)}
                           className="w-full rounded-md border px-2 py-1.5 text-xs font-semibold leading-tight transition-colors disabled:opacity-60"
-                          style={{ borderColor: '#fdc89a', background: '#fff3eb', color: '#a85c2a' }}
+                          style={bid.is_alternate
+                            ? { borderColor: '#e2d9cf', background: '#ffffff', color: '#4a6358' }
+                            : { borderColor: '#fdc89a', background: '#fff3eb', color: '#a85c2a' }}
                         >
-                          {bid.is_alternate ? 'Substitution added' : 'Substitution'}
+                          {bid.is_alternate ? 'Edit substitution' : 'Substitution'}
                         </button>
                       </div>
                     </div>
@@ -861,22 +1182,15 @@ function LineItemsWorkbook({
                         className="grid h-16 items-stretch gap-0 border-b border-t border-dashed"
                         style={{ gridTemplateColumns: vendorGridTemplateColumns, borderColor: '#fa6b04', background: '#fffaf5' }}
                       >
-                        {responseCells}
+                        {renderResponseCells(true)}
                         <div className="flex items-center overflow-hidden border-r p-1.5" style={{ borderColor: '#f2c99d' }}>
                           <button
                             type="button"
-                            onClick={() => updateBid(item.id, {
-                              is_alternate: false,
-                              alternate_description: '',
-                              quoted_product_details: '',
-                              substitution_notes: '',
-                              vendor_sku: '',
-                              quoted_unit: '',
-                            })}
+                            onClick={() => setSubstitutionLineItemId(item.id)}
                             className="w-full rounded-md border px-2 py-1.5 text-xs font-semibold leading-tight"
                             style={{ borderColor: '#fdc89a', background: '#ffffff', color: '#a85c2a' }}
                           >
-                            Remove alternative
+                            Substitution details
                           </button>
                         </div>
                       </div>
@@ -889,6 +1203,20 @@ function LineItemsWorkbook({
         </div>
       </div>
     </div>
+    {substitutionItem && substitutionBid && (
+      <SubstitutionModal
+        item={substitutionItem}
+        bid={substitutionBid}
+        uploadFolder={`${uploadFolder}/${substitutionItem.id}`}
+        onClose={() => setSubstitutionLineItemId(null)}
+        onConfirm={(partial) => {
+          updateBid(substitutionItem.id, partial)
+          setSubstitutionLineItemId(null)
+        }}
+        onRemove={() => removeSubstitution(substitutionItem.id)}
+      />
+    )}
+    </>
   )
 }
 
@@ -947,7 +1275,7 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
     const missing = bids.some((bid) => bid.availability !== 'unavailable' && (!bid.unit_price || !bid.lead_time_days))
     const missingAlternate = bids.some((bid) => {
       if (!bid.is_alternate || bid.availability === 'unavailable') return false
-      return !bid.vendor_sku.trim() && !bid.alternate_description.trim() && !bid.quoted_product_details.trim()
+      return !bid.alternate_description.trim() || !bid.quoted_quantity.trim() || !bid.quoted_unit.trim() || !bid.unit_price.trim() || !bid.lead_time_days.trim()
     })
     if (!vendorName.trim()) {
       setError('Company name is required.')
@@ -962,7 +1290,7 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
       return
     }
     if (missingAlternate) {
-      setError('For alternate items, add an alternate SKU, product description, or product details.')
+      setError('For substitutions, add an alternate item, quantity, unit, unit price, and lead time.')
       return
     }
 
@@ -974,7 +1302,8 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
       const quotedQuantity = parseFloat(bid.quoted_quantity) || 0
       const unitsAvailable = bid.units_available ? parseFloat(bid.units_available) : undefined
       const pricedQuantity = unitsAvailable && unitsAvailable > 0 ? unitsAvailable : quotedQuantity
-      const isAlternate = bid.is_alternate && isProductSpecific(item) && bid.availability !== 'unavailable'
+      const isAlternate = bid.is_alternate && bid.availability !== 'unavailable'
+      const calculatedAlternateTotalPrice = calculateQuotedTotalPrice(bid.quoted_quantity, bid.unit_price)
       return {
         line_item_id: bid.line_item_id,
         sku: isAlternate ? bid.vendor_sku.trim() : item.sku,
@@ -982,15 +1311,15 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
         quantity: item.quantity,
         unit: isAlternate && bid.quoted_unit.trim() ? bid.quoted_unit.trim() : item.unit,
         unit_price: unitPrice,
-        total_price: unitPrice * pricedQuantity,
+        total_price: isAlternate ? parseFloat(calculatedAlternateTotalPrice) || 0 : unitPrice * pricedQuantity,
         quoted_quantity: quotedQuantity,
         lead_time_days: parseInt(bid.lead_time_days, 10) || 0,
         availability: bid.availability,
         units_available: unitsAvailable,
         delivery_terms: bid.delivery_terms || undefined,
         substitution_notes: isAlternate ? bid.substitution_notes || undefined : undefined,
-        quoted_product_details: isAlternate ? bid.quoted_product_details || undefined : undefined,
-        response_attributes: makeResponseAttributes(vendorResponseFields, bid.response_attributes),
+        quoted_product_details: isAlternate ? bid.substitution_difference || undefined : bid.quoted_product_details || undefined,
+        response_attributes: makeSubmissionResponseAttributes(vendorResponseFields, bid),
         is_alternate: isAlternate,
       }
     })
@@ -1228,7 +1557,7 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
       )}
 
       <div className="space-y-4">
-        <LineItemsWorkbook rfq={rfq} bids={bids} updateBid={updateBid} />
+        <LineItemsWorkbook rfq={rfq} bids={bids} updateBid={updateBid} uploadFolder={`magic-rfq/${rfq.id}/${vendorEmail || 'vendor'}`} />
       </div>
 
       <div className="mt-5 rounded-2xl border bg-white p-6 shadow-sm" style={{ borderColor: '#e2d9cf' }}>

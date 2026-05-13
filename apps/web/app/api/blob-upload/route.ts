@@ -100,8 +100,13 @@ export async function POST(request: NextRequest) {
     let session: Awaited<ReturnType<typeof getSession>> = null
 
     if (body.type === 'blob.generate-client-token') {
+      const tokenBody = body as unknown as { payload?: { pathname?: unknown } }
+      const requestedPath = typeof tokenBody.payload?.pathname === 'string'
+        ? tokenBody.payload.pathname.replace(/\\/g, '/')
+        : ''
+      const isRequestAttachment = requestedPath.startsWith('request-attachments/')
       session = await getSession()
-      if (!session) return Response.json({ error: 'Not authenticated.' }, { status: 401 })
+      if (!session && !isRequestAttachment) return Response.json({ error: 'Not authenticated.' }, { status: 401 })
     }
 
     const result = await handleUpload({
