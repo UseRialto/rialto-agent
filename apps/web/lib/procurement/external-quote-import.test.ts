@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import * as XLSX from 'xlsx'
-import { createExternalQuoteImport } from './external-quote-import'
+import { createExternalQuoteImport, createExternalQuoteImportFromFiles } from './external-quote-import'
 import { extractExternalQuoteImportText } from './external-quote-file-text'
 import { InMemoryUserContextProvider } from '../../../../src/context/user-context-provider.js'
 import { RialtoAgentCore } from '../../../../src/agent/core.js'
@@ -59,6 +59,18 @@ A011,HM-DOOR,18ga flush hollow metal door,36,EA,Metro Door Hardware,207.2,7459.2
 A012,LOCK-SET,Classroom lockset,44,EA,Metro Door Hardware,207.27,9119.88,5 weeks,best lead time
 `
 
+const acmeSingleVendorText = `
+Line #,Part No,Material Name,Required Qty,UOM,Vendor,Quoted Unit Cost,Extended Cost,ETA,Clarifications
+A001,250CH-33,2 1/2 in 22ga CH Stud 10 ft,2420,LF,Acme Drywall Supply,1.18,2855.6,2-3 weeks,
+A002,250JR-33,2 1/2 in 20ga J Track 12 ft,458,LF,Acme Drywall Supply,1.25,572.5,2-3 weeks,
+`
+
+const buildCoSingleVendorText = `
+Line #,Part No,Material Name,Required Qty,UOM,Vendor,Quoted Unit Cost,Extended Cost,ETA,Clarifications
+A001,250CH-33,2 1/2 in 22ga CH Stud 10 ft,2420,LF,BuildCo Materials,1.06,2565.2,4 weeks,
+A002,250JR-33,2 1/2 in 20ga J Track 12 ft,458,LF,BuildCo Materials,1.13,517.54,4 weeks,alternate manufacturer
+`
+
 const repeatedSupplierBlocksText = `
 Item,SKU,Description,Qty,Unit,Active,Supplier,Unit Price,Total,Variation,Active,Supplier,Unit Price,Total,Variation,Active,Supplier,Unit Price,Total,Variation,Active,Supplier,Unit Price,Total,Variation
 A001,250CH-33,2 1/2 in 22ga CH Stud 10 ft,2420,LF,TRUE,Foundation - San Diego,320.000,774400,+0%,TRUE,L n W Supply - San Diego,350.000,847000,+9%,TRUE,Action Gypsum Supply,310.000,750200,-3%,TRUE,J n B Materials - Perris,315.000,762300,-2%
@@ -66,8 +78,11 @@ A002,250JR-33,2 1/2 in 20ga J Track 12 ft,458,LF,TRUE,Foundation - San Diego,92.
 A003,250JS-33,2 1/2 in 20ga Jamb Strut 10 ft,1094,LF,TRUE,Foundation - San Diego,205.000,224270,+0%,TRUE,L n W Supply - San Diego,230.000,251620,+12%,TRUE,Action Gypsum Supply,195.000,213330,-5%,TRUE,J n B Materials - Perris,193.000,211142,-6%
 `
 
+const generatedFixtureDir = path.resolve(process.cwd(), 'data/test_files')
+const hasGeneratedFixtures = fs.existsSync(generatedFixtureDir)
+
 function extractWorkbookTextLikeImportRoute(filename: string) {
-  const workbook = XLSX.readFile(path.join('/Users/tomasz/Desktop/rialto/data/test_files', filename), { cellDates: false })
+  const workbook = XLSX.readFile(path.join(generatedFixtureDir, filename), { cellDates: false })
   return workbook.SheetNames
     .map((sheetName) => {
       const sheet = workbook.Sheets[sheetName]
@@ -102,7 +117,7 @@ describe('External Quote Import', () => {
     expect(result.rfq.line_items).toHaveLength(5)
     expect(result.bid.vendor_name).toBe('L n W Supply - San Diego')
     expect(result.bid.source).toBe('external_workbook')
-    expect(result.bid.total_price).toBeCloseTo(11271.63)
+    expect(result.bid.total_price).toBeCloseTo(11932.17)
     expect(result.bid.line_item_responses[0]).toMatchObject({
       sku: '250CH-33',
       quantity: 2420,
@@ -112,8 +127,8 @@ describe('External Quote Import', () => {
     })
     expect(result.bid.line_item_responses[3]).toMatchObject({
       sku: '362S125-30',
-      quantity: -606,
-      total_price: -330.27,
+      quantity: 606,
+      total_price: 330.27,
     })
     expect(result.warnings).toContainEqual(expect.objectContaining({
       message: expect.stringContaining('single vendor'),
@@ -172,6 +187,42 @@ describe('External Quote Import', () => {
     expect(metro?.line_item_responses).not.toContainEqual(expect.objectContaining({ sku: '250CH-33' }))
   })
 
+  it('creates one RFQ comparison from multiple separate vendor quote files', () => {
+    const result = createExternalQuoteImportFromFiles({
+      projectId: 'project-1',
+      projectName: 'MCRD P-314',
+      title: 'MCRD P-314 Metal Framing',
+      now: '2026-05-11T12:00:00.000Z',
+      files: [
+        {
+          filename: 'acme-drywall.pdf',
+          sourceKind: 'pdf',
+          text: acmeSingleVendorText,
+        },
+        {
+          filename: 'buildco-materials.pdf',
+          sourceKind: 'pdf',
+          text: buildCoSingleVendorText,
+        },
+      ],
+    })
+
+    expect(result.rfq.title).toBe('MCRD P-314 Metal Framing')
+    expect(result.rfq.status).toBe('active')
+    expect(result.rfq.line_items).toHaveLength(2)
+    expect(result.bids.map((bid) => bid.vendor_name)).toEqual(['Acme Drywall Supply', 'BuildCo Materials'])
+    expect(result.bids).toHaveLength(2)
+    expect(result.bids.every((bid) => bid.rfq_id === result.rfq.id)).toBe(true)
+    expect(result.bids.every((bid) => bid.line_item_responses.length === 2)).toBe(true)
+    expect(new Set(result.bids.flatMap((bid) => bid.line_item_responses.map((line) => line.line_item_id)))).toEqual(
+      new Set(result.rfq.line_items.map((line) => line.id)),
+    )
+    expect(result.rfq.invites?.map((invite) => invite.vendor_name)).toEqual(['Acme Drywall Supply', 'BuildCo Materials'])
+    expect(result.warnings).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('Imported 2 vendor quote responses from 2 files'),
+    }))
+  })
+
   it('imports repeated supplier blocks like customer comparison screenshots', () => {
     const result = createExternalQuoteImport({
       projectId: 'project-1',
@@ -200,8 +251,8 @@ describe('External Quote Import', () => {
     }))
   })
 
-  it('imports generated stress fixture files as base quote comparisons', () => {
-    const fixtureDir = path.resolve(process.cwd(), '../data/test_files')
+  it.skipIf(!hasGeneratedFixtures)('imports generated stress fixture files as base quote comparisons', () => {
+    const fixtureDir = generatedFixtureDir
     const fixtures = [
       {
         filename: '01-multi-supplier-wide-comparison.csv',
@@ -237,7 +288,7 @@ describe('External Quote Import', () => {
     }
   })
 
-  it('imports a workbook with a base comparison tab plus vendor tabs without duplicate line items', () => {
+  it.skipIf(!hasGeneratedFixtures)('imports a workbook with a base comparison tab plus vendor tabs without duplicate line items', () => {
     const result = createExternalQuoteImport({
       projectId: 'project-1',
       projectName: 'MCRD P-314',
@@ -271,8 +322,8 @@ describe('External Quote Import', () => {
     ])
   })
 
-  it('imports every generated stress fixture into a quote comparison shape', async () => {
-    const fixtureDir = '/Users/tomasz/Desktop/rialto/data/test_files'
+  it.skipIf(!hasGeneratedFixtures)('imports every generated stress fixture into a quote comparison shape', async () => {
+    const fixtureDir = generatedFixtureDir
     const filenames = fs.readdirSync(fixtureDir)
       .filter((filename) => /\.(?:csv|tsv|txt|xlsx|pdf)$/i.test(filename))
       .sort()
@@ -310,8 +361,8 @@ describe('External Quote Import', () => {
     expect(failures).toEqual([])
   })
 
-  it('lets the agent run edits and queries on every imported stress fixture comparison', async () => {
-    const fixtureDir = '/Users/tomasz/Desktop/rialto/data/test_files'
+  it.skipIf(!hasGeneratedFixtures)('lets the agent run edits and queries on every imported stress fixture comparison', async () => {
+    const fixtureDir = generatedFixtureDir
     const filenames = fs.readdirSync(fixtureDir)
       .filter((filename) => /\.(?:csv|tsv|txt|xlsx|pdf)$/i.test(filename))
       .sort()

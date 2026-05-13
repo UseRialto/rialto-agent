@@ -23,6 +23,20 @@ export interface ExternalQuoteImportResult {
   warnings: ExternalQuoteImportWarning[]
 }
 
+export interface ExternalQuoteImportFileInput {
+  filename: string
+  sourceKind: ExternalQuoteImportSourceKind
+  text: string
+}
+
+export interface ExternalQuoteImportBatchInput {
+  projectId: string
+  projectName: string
+  title: string
+  files: ExternalQuoteImportFileInput[]
+  now?: string
+}
+
 interface ParsedQuoteLine {
   sourceRow: number
   itemNumber: string
@@ -88,8 +102,8 @@ function numberFromText(value: string) {
   return negative ? -parsed : parsed
 }
 
-function moneyFromText(value: string) {
-  return numberFromText(value.replace(/\$\s*/g, ''))
+function quoteRowNumberFromText(value: string) {
+  return Math.abs(numberFromText(value))
 }
 
 function optionalNumberFromText(value: unknown) {
@@ -129,6 +143,27 @@ function titleFromFilename(filename: string) {
     .replace(/^\d+\s*-\s*/, '')
     .replace(/\s+/g, ' ')
     .trim() || 'Imported Quote Comparison'
+}
+
+function comparisonKeyForLineItem(line: Pick<ContractorRFQLineItem, 'sku' | 'description' | 'unit'>) {
+  const sku = normalizeSku(line.sku ?? '').toLowerCase()
+  if (sku) return `sku:${sku}`
+  return `desc:${compact(line.description).toLowerCase()}|unit:${normalizeUnit(line.unit)}`
+}
+
+function uniqueId(base: string, used: Set<string>) {
+  let id = base
+  let suffix = 2
+  while (used.has(id)) {
+    id = `${base}-${suffix}`
+    suffix += 1
+  }
+  used.add(id)
+  return id
+}
+
+function uniqueBidId(base: string, used: Set<string>) {
+  return uniqueId(base, used)
 }
 
 function extractSupplier(text: string) {
@@ -172,12 +207,12 @@ function parseQuoteLine(rawLine: string, sourceRow: number): ParsedQuoteLine | n
     itemNumber: prefix[1],
     sku: normalizeSku(prefix[2]),
     description: compact(descriptionChunk),
-    quantity: numberFromText(quantityText),
+    quantity: quoteRowNumberFromText(quantityText),
     unit: normalizeUnit(unit),
-    unitPrice: numberFromText(unitPriceText),
-    pricePerQuantity: priceBasis ? numberFromText(priceBasis[1]) : undefined,
+    unitPrice: quoteRowNumberFromText(unitPriceText),
+    pricePerQuantity: priceBasis ? quoteRowNumberFromText(priceBasis[1]) : undefined,
     pricePerUnit: priceBasis ? normalizeUnit(priceBasis[2]) : undefined,
-    totalPrice: moneyFromText(totalText),
+    totalPrice: quoteRowNumberFromText(totalText.replace(/\$\s*/g, '')),
     rawText: line,
   }
 }
@@ -234,10 +269,10 @@ function parseCompactQuoteLine(rawLine: string, sourceRow: number): ParsedQuoteL
     itemNumber,
     sku: normalizeSku(sku),
     description: compact(description),
-    quantity: numberFromText(quantityText),
+    quantity: quoteRowNumberFromText(quantityText),
     unit: normalizeUnit(unit),
-    unitPrice: numberFromText(unitPriceText),
-    totalPrice: moneyFromText(totalText),
+    unitPrice: quoteRowNumberFromText(unitPriceText),
+    totalPrice: quoteRowNumberFromText(totalText.replace(/\$\s*/g, '')),
     rawText: line,
   }
 }
@@ -771,6 +806,136 @@ export function createExternalQuoteImport(input: ExternalQuoteImportInput): Exte
       {
         message: 'Imported as a single vendor quote comparison. Review extracted quantities, pricing, and price basis before relying on totals.',
       },
+    ],
+  }
+}
+
+export function createExternalQuoteImportFromFiles(input: ExternalQuoteImportBatchInput): ExternalQuoteImportResult {
+  const now = input.now ?? new Date().toISOString()
+  const title = compact(input.title) || 'Imported Vendor Quotes'
+  const rfqId = `rfq-import-${idPart(title)}-${idPart(now)}`
+  const importedFiles = input.files.filter((file) => file.text.trim())
+
+  if (importedFiles.length === 0) {
+    throw new Error('Upload at least one readable vendor quote file.')
+  }
+
+  const lineItems: ContractorRFQLineItem[] = []
+  const lineItemByKey = new Map<string, ContractorRFQLineItem>()
+  const lineItemIdBySourceId = new Map<string, string>()
+  const usedLineItemIds = new Set<string>()
+  const usedBidIds = new Set<string>()
+  const bids: ContractorBid[] = []
+  const warnings: ExternalQuoteImportWarning[] = []
+  const sourceFilenames = importedFiles.map((file) => file.filename)
+
+  importedFiles.forEach((file, fileIndex) => {
+    const imported = createExternalQuoteImport({
+      projectId: input.projectId,
+      projectName: input.projectName,
+      filename: file.filename,
+      sourceKind: file.sourceKind,
+      text: file.text,
+      now: `${now}-${fileIndex + 1}`,
+    })
+
+    warnings.push(
+      ...imported.warnings.map((warning) => ({
+        ...warning,
+        message: `${file.filename}: ${warning.message}`,
+      })),
+    )
+
+    for (const sourceLineItem of imported.rfq.line_items) {
+      const key = comparisonKeyForLineItem(sourceLineItem)
+      const existing = lineItemByKey.get(key)
+      if (existing) {
+        lineItemIdBySourceId.set(sourceLineItem.id, existing.id)
+        if (
+          existing.quantity !== sourceLineItem.quantity ||
+          normalizeUnit(existing.unit) !== normalizeUnit(sourceLineItem.unit)
+        ) {
+          warnings.push({
+            message: `${file.filename}: ${sourceLineItem.sku || sourceLineItem.description} matched an existing line item with a different quantity or unit.`,
+          })
+        }
+        continue
+      }
+
+      const canonicalId = uniqueId(`${rfqId}-line-${idPart(sourceLineItem.sku || sourceLineItem.description)}`, usedLineItemIds)
+      const canonicalLineItem: ContractorRFQLineItem = {
+        ...sourceLineItem,
+        id: canonicalId,
+      }
+      lineItems.push(canonicalLineItem)
+      lineItemByKey.set(key, canonicalLineItem)
+      lineItemIdBySourceId.set(sourceLineItem.id, canonicalId)
+    }
+
+    for (const sourceBid of imported.bids) {
+      const bidId = uniqueBidId(`bid-import-${idPart(sourceBid.vendor_name)}-${idPart(now)}`, usedBidIds)
+      const line_item_responses = sourceBid.line_item_responses.flatMap((response) => {
+        const canonicalLineItemId = lineItemIdBySourceId.get(response.line_item_id)
+        if (!canonicalLineItemId) return []
+        return [{
+          ...response,
+          line_item_id: canonicalLineItemId,
+          notes: compact([response.notes, `Source file: ${file.filename}.`].filter(Boolean).join(' ')),
+        }]
+      })
+
+      bids.push({
+        ...sourceBid,
+        id: bidId,
+        rfq_id: rfqId,
+        submitted_at: now,
+        total_price: Number(line_item_responses.reduce((sum, line) => sum + line.total_price, 0).toFixed(2)),
+        line_item_responses,
+        notes: `Imported from ${file.filename}.`,
+      })
+    }
+  })
+
+  if (lineItems.length === 0 || bids.length === 0) {
+    throw new Error('No priced vendor quote rows were found across the uploaded files.')
+  }
+
+  const rfq: ContractorRFQ = {
+    id: rfqId,
+    project_id: input.projectId,
+    title,
+    request_type: 'rfq',
+    status: 'active',
+    category: undefined,
+    rfp_details: {
+      attachments_summary: `Created by External Quote Import from ${sourceFilenames.join(', ')}.`,
+    },
+    procurement_requirements: [],
+    commodity_watch: [],
+    risk_flags: [],
+    vendor_response_fields: [],
+    attachment_urls: [],
+    line_items: lineItems,
+    invites: bids.map((bid) => ({
+      vendor_email: '',
+      vendor_name: bid.vendor_name,
+      on_platform: false,
+    })),
+    invited_vendor_ids: [],
+    invited_vendor_emails: [],
+    visibility: 'invited_only',
+    created_at: now,
+    published_at: now,
+  }
+
+  return {
+    rfq,
+    bid: bids[0],
+    bids,
+    warnings: [
+      ...warnings,
+      { message: `Imported ${bids.length} vendor quote response${bids.length === 1 ? '' : 's'} from ${importedFiles.length} file${importedFiles.length === 1 ? '' : 's'}.` },
+      { message: 'Review normalized line-item matches, no-bid rows, alternates, and totals before relying on comparisons.' },
     ],
   }
 }

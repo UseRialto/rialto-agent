@@ -1497,14 +1497,20 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
         const rule = h.selector.rule
         if (rule === 'fastest-lead-per-row') {
           for (const item of visibleItems) {
-            let bestVendorId: string | null = null
+            const bestVendorIds = new Set<string>()
             let bestLead = Infinity
             for (const bid of bids) {
               const r = bid.line_item_responses.find((x) => x.line_item_id === item.id)
               if (!r || r.availability === 'unavailable') continue
-              if (r.lead_time_days < bestLead) { bestLead = r.lead_time_days; bestVendorId = bid.id }
+              if (r.lead_time_days < bestLead) {
+                bestLead = r.lead_time_days
+                bestVendorIds.clear()
+                bestVendorIds.add(bid.id)
+              } else if (r.lead_time_days === bestLead) {
+                bestVendorIds.add(bid.id)
+              }
             }
-            if (bestVendorId) map.set(`${item.id}|vendor:${bestVendorId}:lead`, h.color)
+            for (const vendorId of bestVendorIds) map.set(`${item.id}|vendor:${vendorId}:lead`, h.color)
           }
         } else if (rule === 'lowest-price-per-row') {
           for (const item of visibleItems) {
@@ -1542,14 +1548,20 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
         const rule = h.selector.rule
         if (rule === 'fastest-lead-per-row') {
           for (const item of visibleItems) {
-            let bestVendorId: string | null = null
+            const bestVendorIds = new Set<string>()
             let bestLead = Infinity
             for (const bid of bids) {
               const r = bid.line_item_responses.find((x) => x.line_item_id === item.id)
               if (!r || r.availability === 'unavailable') continue
-              if (r.lead_time_days < bestLead) { bestLead = r.lead_time_days; bestVendorId = bid.id }
+              if (r.lead_time_days < bestLead) {
+                bestLead = r.lead_time_days
+                bestVendorIds.clear()
+                bestVendorIds.add(bid.id)
+              } else if (r.lead_time_days === bestLead) {
+                bestVendorIds.add(bid.id)
+              }
             }
-            if (bestVendorId) map.set(`${item.id}|vendor:${bestVendorId}:lead`, '#fef3c7')
+            for (const vendorId of bestVendorIds) map.set(`${item.id}|vendor:${vendorId}:lead`, '#fef3c7')
           }
         } else if (rule === 'lowest-price-per-row') {
           for (const item of visibleItems) {
@@ -1572,10 +1584,10 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
   }, [previewPatch, visibleItems, bids])
 
   const bestByItem = useMemo(() => {
-    const map = new Map<string, { totalVendorId?: string; leadVendorId?: string }>()
+    const map = new Map<string, { totalVendorId?: string; leadVendorIds: Set<string> }>()
     for (const item of visibleItems) {
       let totalVendorId: string | undefined
-      let leadVendorId: string | undefined
+      const leadVendorIds = new Set<string>()
       let bestTotal = Infinity
       let bestLead = Infinity
       for (const bid of bids) {
@@ -1587,10 +1599,13 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
         }
         if (response.lead_time_days < bestLead) {
           bestLead = response.lead_time_days
-          leadVendorId = bid.id
+          leadVendorIds.clear()
+          leadVendorIds.add(bid.id)
+        } else if (response.lead_time_days === bestLead) {
+          leadVendorIds.add(bid.id)
         }
       }
-      map.set(item.id, { totalVendorId, leadVendorId })
+      map.set(item.id, { totalVendorId, leadVendorIds })
     }
     return map
   }, [visibleItems, bids])
@@ -1603,6 +1618,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
   const [draftValue, setDraftValue] = useState('')
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; rowKey?: string; colKey?: string } | null>(null)
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const [exportError, setExportError] = useState('')
   const [historyMenuOpen, setHistoryMenuOpen] = useState(false)
   const [rangeStart, setRangeStart] = useState<{ r: number; c: number } | null>(null)
   const [isDraggingRange, setIsDraggingRange] = useState(false)
@@ -1840,17 +1856,23 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
 
   function exportRows(): (string | number)[][] {
     return [
-      visibleCols.map((col) => col.label),
+      visibleCols.map((col, index) => col.kind === 'vendor' ? `${groupLabelForColumn(col, index)} ${col.label}` : col.label),
       ...visibleItems.map((item) => visibleCols.map((col) => getCellText(item, col))),
     ]
   }
 
-  function exportViaServer(format: ComparisonExportFormat) {
-    submitComparisonExport({
-      format,
-      title: rfq.title,
-      rows: exportRows(),
-    })
+  async function exportViaServer(format: ComparisonExportFormat) {
+    setExportError('')
+    try {
+      const result = await submitComparisonExport({
+        format,
+        title: rfq.title,
+        rows: exportRows(),
+      })
+      downloadBlob(result.blob, result.filename)
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : 'Export failed.')
+    }
   }
 
   async function restoreWorkbookVersion(versionId: number) {
@@ -1931,7 +1953,12 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     return () => window.removeEventListener('mouseup', stop)
   }, [isDraggingRange])
 
-  function moveSel(dr: number, dc: number) {
+  function moveSel(dr: number, dc: number, extendRange = false) {
+    if (!extendRange) {
+      setRangeStart(null)
+    } else {
+      setRangeStart((start) => start ?? sel)
+    }
     setSel((s) => {
       let r = s.r + dr
       let c = s.c + dc
@@ -1991,14 +2018,14 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
         return
       }
     }
-    if (e.key === 'ArrowDown') { e.preventDefault(); moveSel(1, 0) }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); moveSel(-1, 0) }
-    else if (e.key === 'ArrowRight' || e.key === 'Tab') { e.preventDefault(); moveSel(0, 1) }
-    else if (e.key === 'ArrowLeft') { e.preventDefault(); moveSel(0, -1) }
-    else if (e.key === 'Home') { e.preventDefault(); setSel((s) => ({ ...s, c: 0 })) }
-    else if (e.key === 'End') { e.preventDefault(); setSel((s) => ({ ...s, c: totalGridCols - 1 })) }
-    else if (e.key === 'PageDown') { e.preventDefault(); moveSel(10, 0) }
-    else if (e.key === 'PageUp') { e.preventDefault(); moveSel(-10, 0) }
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveSel(1, 0, e.shiftKey) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveSel(-1, 0, e.shiftKey) }
+    else if (e.key === 'ArrowRight' || e.key === 'Tab') { e.preventDefault(); moveSel(0, 1, e.shiftKey) }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); moveSel(0, -1, e.shiftKey) }
+    else if (e.key === 'Home') { e.preventDefault(); setRangeStart(e.shiftKey ? (rangeStart ?? sel) : null); setSel((s) => ({ ...s, c: 0 })) }
+    else if (e.key === 'End') { e.preventDefault(); setRangeStart(e.shiftKey ? (rangeStart ?? sel) : null); setSel((s) => ({ ...s, c: totalGridCols - 1 })) }
+    else if (e.key === 'PageDown') { e.preventDefault(); moveSel(10, 0, e.shiftKey) }
+    else if (e.key === 'PageUp') { e.preventDefault(); moveSel(-10, 0, e.shiftKey) }
   }
 
   // Compute formula-bar value
@@ -2251,12 +2278,17 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
               </button>
               {exportMenuOpen && (
                 <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-40 rounded-md border bg-white p-1 shadow-xl" style={{ borderColor: '#d9e0dc' }}>
-                  <button type="button" onClick={() => { exportViaServer('csv'); setExportMenuOpen(false) }} className="block w-full rounded px-3 py-2 text-left text-xs font-semibold hover:bg-[#edf3f0]" style={{ color: '#1e3a2f' }}>CSV</button>
-                  <button type="button" onClick={() => { exportViaServer('xlsx'); setExportMenuOpen(false) }} className="block w-full rounded px-3 py-2 text-left text-xs font-semibold hover:bg-[#edf3f0]" style={{ color: '#1e3a2f' }}>Excel</button>
-                  <button type="button" onClick={() => { exportViaServer('pdf'); setExportMenuOpen(false) }} className="block w-full rounded px-3 py-2 text-left text-xs font-semibold hover:bg-[#edf3f0]" style={{ color: '#1e3a2f' }}>PDF</button>
+                  <button type="button" onClick={() => { void exportViaServer('csv'); setExportMenuOpen(false) }} className="block w-full rounded px-3 py-2 text-left text-xs font-semibold hover:bg-[#edf3f0]" style={{ color: '#1e3a2f' }}>CSV</button>
+                  <button type="button" onClick={() => { void exportViaServer('xlsx'); setExportMenuOpen(false) }} className="block w-full rounded px-3 py-2 text-left text-xs font-semibold hover:bg-[#edf3f0]" style={{ color: '#1e3a2f' }}>Excel</button>
+                  <button type="button" onClick={() => { void exportViaServer('pdf'); setExportMenuOpen(false) }} className="block w-full rounded px-3 py-2 text-left text-xs font-semibold hover:bg-[#edf3f0]" style={{ color: '#1e3a2f' }}>PDF</button>
                 </div>
               )}
             </div>
+            {exportError && (
+              <span className="rounded-md border bg-white px-2.5 py-1 text-xs font-semibold" style={{ borderColor: '#f0c4c4', color: '#9f2d2d' }}>
+                {exportError}
+              </span>
+            )}
           </div>
         </div>
 
@@ -2578,7 +2610,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                   const cellState = isQuoteValueMetric ? state : { tone: 'normal' as const, tooltip: '' }
                   const best = bestByItem.get(item.id)
                   const isLowestPrice = col.kind === 'vendor' && col.vendorMetric === 'total' && col.vendorId === best?.totalVendorId
-                  const isFastestLead = col.kind === 'vendor' && col.vendorMetric === 'lead' && col.vendorId === best?.leadVendorId
+                  const isFastestLead = col.kind === 'vendor' && col.vendorMetric === 'lead' && Boolean(col.vendorId && best?.leadVendorIds.has(col.vendorId))
                   const autoHighlight = isLowestPrice ? '#dcfce7' : isFastestLead ? '#dbeafe' : undefined
                   const highlight = previewHighlightMap.get(cellKey) ?? (hasPreview ? '#fef3c7' : highlightMap.get(cellKey) ?? autoHighlight)
                   const isSelected = sel.r === r && sel.c === c
