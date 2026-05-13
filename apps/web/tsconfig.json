@@ -21,7 +21,14 @@
     ],
     "paths": {
       "@/*": ["./*"],
-      "@rialto-agent/*": ["../../src/*"]
+      "@rialto-agent/*": ["../../src/*"],
+      "@openai/agents": ["./node_modules/@openai/agents"],
+      "@openai/agents-openai": ["./node_modules/@openai/agents-openai"],
+      "exceljs": ["./node_modules/exceljs"],
+      "mammoth": ["./node_modules/mammoth"],
+      "openai": ["./node_modules/openai"],
+      "pdf-parse": ["./node_modules/pdf-parse"],
+      "zod": ["./node_modules/zod"]
     }
   },
   "include": [
