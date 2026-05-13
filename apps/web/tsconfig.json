@@ -22,6 +22,7 @@
     "paths": {
       "@/*": ["./*"],
       "@rialto-agent/*": ["../../src/*"],
+      "@napi-rs/canvas": ["./node_modules/@napi-rs/canvas"],
       "@openai/agents": ["./node_modules/@openai/agents"],
       "@openai/agents-openai": ["./node_modules/@openai/agents-openai"],
       "exceljs": ["./node_modules/exceljs"],
