@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import ExcelJS from 'exceljs'
 import { buildServer } from './server.js'
 import type { ProductAgentRuntime } from './agent/core.js'
+import { clearUploadedWorkbooksForTests } from './agent/workbook-attachments.js'
 
 const originalApiKey = process.env.OPENAI_API_KEY
 
 afterEach(() => {
   if (originalApiKey == null) delete process.env.OPENAI_API_KEY
   else process.env.OPENAI_API_KEY = originalApiKey
+  clearUploadedWorkbooksForTests()
 })
 
 describe('/agent/turn', () => {
@@ -183,6 +186,51 @@ describe('/agent/turn', () => {
     })
   })
 
+  it('passes first-class workbook attachment references to the Product Agent Runtime', async () => {
+    process.env.OPENAI_API_KEY = 'test-key'
+    const seen: unknown[] = []
+    const runtime: ProductAgentRuntime = {
+      async runTurn(request) {
+        seen.push(request)
+        return { status: 'completed', reply: 'Done.' }
+      },
+    }
+    const app = buildServer({ runtime })
+
+    await app.inject({
+      method: 'POST',
+      url: '/agent/turn',
+      payload: {
+        user: {
+          id: 'user-1',
+          contractorOrganizationId: 'org-1',
+          role: 'estimator',
+          name: 'Estimator One',
+          email: 'estimator@example.com',
+        },
+        messages: [{ role: 'user', content: 'merge attached workbook' }],
+        quoteComparison: {
+          snapshot: { columns: [], rows: [] },
+          attachments: [{
+            id: 'att-1',
+            filename: 'BuildCo.xlsx',
+            sourceKind: 'excel',
+            workbookId: 'wb-1',
+            summary: { sheetCount: 1 },
+          }],
+        },
+      },
+    })
+
+    expect(seen[0]).toMatchObject({
+      requestContext: {
+        quoteComparison: {
+          attachments: [{ id: 'att-1', sourceKind: 'excel', workbookId: 'wb-1' }],
+        },
+      },
+    })
+  })
+
   it('returns a structured tool error when the Product Agent Runtime throws', async () => {
     process.env.OPENAI_API_KEY = 'test-key'
     const runtime: ProductAgentRuntime = {
@@ -212,6 +260,54 @@ describe('/agent/turn', () => {
     expect(response.json()).toMatchObject({
       status: 'tool_error',
       error: 'Rialto Agent could not reach the OpenAI model API. Check network/DNS and retry.',
+    })
+  })
+})
+
+describe('/tools/document/extract', () => {
+  it('returns workbook attachment context for Excel uploads', async () => {
+    const app = buildServer()
+    const boundary = '----rialto-test-boundary'
+    const workbook = new ExcelJS.Workbook()
+    workbook.addWorksheet('Quote').addRows([
+      ['Item', 'Description', 'Total'],
+      ['X', 'Drywall 5/8 Type X', '$1,500'],
+    ])
+    const xlsx = Buffer.from(await workbook.xlsx.writeBuffer())
+    const payload = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="BuildCo.xlsx"\r\nContent-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n`),
+      xlsx,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ])
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/tools/document/extract',
+      headers: {
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+        'x-rialto-user': JSON.stringify({
+          id: 'user-1',
+          contractorOrganizationId: 'org-1',
+          role: 'estimator',
+          name: 'Estimator One',
+          email: 'estimator@example.com',
+        }),
+      },
+      payload,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toMatchObject({
+      data: {
+        filename: 'BuildCo.xlsx',
+        sourceKind: 'excel',
+        attachment: {
+          filename: 'BuildCo.xlsx',
+          sourceKind: 'excel',
+          workbookId: expect.stringMatching(/^wb-/),
+          summary: { sheetCount: 1, sheets: [{ name: 'Quote', rowCount: 2, columnCount: 3 }] },
+        },
+      },
     })
   })
 })

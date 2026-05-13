@@ -119,8 +119,8 @@ export function quoteComparisonArchitectureScenarios(): QuoteComparisonArchitect
     scenario('mark missing lead yellow notes', 'Mark all rows with missing lead time in yellow and add a note.', ['quoteComparison.inspectSnapshot', 'quoteComparison.proposeMissingLeadTimeReview'], ['add-highlight', 'set-cell'], ['missing lead time']),
     scenario('recommendation column', 'Add a recommendation column and fill it with Buy / Review / Exclude.', ['quoteComparison.inspectSnapshot', 'quoteComparison.proposeRecommendationColumn'], ['insert-column', 'set-cell'], ['Buy', 'Review', 'Exclude']),
     scenario('undo last ai change', 'Undo the last AI change.', ['quoteComparison.inspectSnapshot', 'quoteComparison.proposeUndoLastAgentChange'], ['set-cell'], ['Undo']),
-    clarificationScenario('make cleaner', 'Make this cleaner.', ['quoteComparison.inspectSnapshot'], ['normalize headers', 'format prices', 'highlight missing']),
-    clarificationScenario('pick best quote', 'Pick the best quote.', ['quoteComparison.inspectSnapshot'], ['best']),
+    clarificationScenario('make cleaner', 'Make this cleaner.', ['quoteComparison.inspectSnapshot', 'quoteComparison.analyzeWork'], ['normalize headers', 'format prices', 'highlight missing']),
+    clarificationScenario('pick best quote', 'Pick the best quote.', ['quoteComparison.inspectSnapshot', 'quoteComparison.analyzeWork'], ['best']),
     answerScenario('compare quotes', 'Compare the quotes.', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['summary', 'ranking']),
     answerScenario('mixed lf units', 'Compare unit prices across LF, linear ft, and feet.', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['LF', 'linear ft', 'ft', 'incompatible']),
     answerScenario('ignore total bids', 'Ignore total bids and compare itemized prices only.', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['excluded', 'lump sum']),
@@ -129,6 +129,7 @@ export function quoteComparisonArchitectureScenarios(): QuoteComparisonArchitect
     answerScenario('weird anomalies', 'What’s weird about this quote comparison?', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['missing lead times', 'outliers', 'unit mismatches']),
     scenario('multi step leveling patch', 'Add normalized price, calculate unit price per 1k LF, highlight cheapest quote per item, and summarize the winner.', ['quoteComparison.inspectSnapshot', 'quoteComparison.proposeNormalizedPriceColumn', 'quoteComparison.proposeUnitPricePerThousandColumn', 'quoteComparison.proposeCheapestQuoteHighlights'], ['insert-column', 'set-cell', 'add-highlight'], ['multi-step']),
     scenario('drywall studs track explanation', 'For drywall, studs, and track, tell me the cheapest partial quote and then add a column explaining why.', ['quoteComparison.inspectSnapshot', 'quoteComparison.proposeCheapestPartialExplanationColumn'], ['insert-column', 'set-cell'], ['Drywall', 'studs', 'track']),
+    scenario('chat upload fills vendor cells', 'I uploaded this vendor CSV in chat: Supplier,Item,Description,Unit Price,Lead Time\\nAcme Drywall Supply,A,Drywall 5/8 Type X,1785,2 weeks\\nAcme Drywall Supply,B,Metal studs 20ga,990,10 days\\nFill those Acme values into the comparison sheet with provenance notes.', ['quoteComparison.inspectSnapshot', 'document.readSource', 'quoteComparison.proposeDocumentGroundedEdits'], ['set-cell'], ['document-grounded']),
     answerScenario('bid leveling summary', 'Create a bid leveling summary.', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['vendor', 'total comparable price', 'missing items', 'recommendation']),
     ...extraArchitectureScenarios(),
   ]
@@ -156,6 +157,7 @@ function extraArchitectureScenarios(): QuoteComparisonArchitectureScenario[] {
     answerScenario('scope exclusions summary', 'Summarize scope exclusions by vendor.', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['scope exclusions']),
     scenario('highlight missing comparable rows', 'Highlight rows that are not comparable across all vendors.', ['quoteComparison.inspectSnapshot', 'quoteComparison.proposeComparableRowHighlights'], ['add-highlight'], ['not comparable']),
     answerScenario('recommend next action', 'What should I ask vendors to clarify next?', ['quoteComparison.inspectSnapshot', 'quoteComparison.answerQuoteComparisonAnalysis'], ['clarify']),
+    clarificationScenario('level the bid', 'Level this bid and tell me who we should use.', ['quoteComparison.inspectSnapshot', 'quoteComparison.analyzeWork'], ['level', 'lowest price', 'lead time']),
   ]
 }
 
@@ -182,6 +184,7 @@ export class QuoteComparisonArchitectureRuntime implements ProductAgentRuntime {
     record(calls, results, 'quoteComparison.inspectSnapshot', {}, inspect)
 
     if (/\bmake this cleaner\b/.test(lower)) {
+      record(calls, results, 'quoteComparison.analyzeWork', { prompt }, planningAnalysis(snapshot, prompt))
       return {
         status: 'needs_clarification',
         reply: 'I can make this cleaner by proposing a non-destructive plan: normalize headers, format prices, highlight missing values, and add a summary. Which of those should I prepare?',
@@ -191,10 +194,21 @@ export class QuoteComparisonArchitectureRuntime implements ProductAgentRuntime {
       }
     }
     if (/\bpick the best quote\b/.test(lower)) {
+      record(calls, results, 'quoteComparison.analyzeWork', { prompt }, planningAnalysis(snapshot, prompt))
       return {
         status: 'needs_clarification',
         reply: '“Best” is ambiguous. Do you want lowest price, fastest lead time, cleanest scope, or a weighted score?',
         clarification: { question: 'What should “best” optimize for?' },
+        toolCalls: calls,
+        toolResults: results,
+      }
+    }
+    if (/\blevel this bid\b/.test(lower)) {
+      record(calls, results, 'quoteComparison.analyzeWork', { prompt }, planningAnalysis(snapshot, prompt))
+      return {
+        status: 'needs_clarification',
+        reply: 'Bid leveling needs a decision rule before I change the sheet. Should I optimize for lowest price, lead time, clean scope, or a weighted score?',
+        clarification: { question: 'What should bid leveling optimize for?' },
         toolCalls: calls,
         toolResults: results,
       }
@@ -242,6 +256,12 @@ export class QuoteComparisonArchitectureRuntime implements ProductAgentRuntime {
       plan.push('Filter drywall, studs, and track; add explanations for cheapest partial quote decisions.')
       fragments.push(explanationFragment(snapshot))
       recordFragment(calls, results, 'quoteComparison.proposeCheapestPartialExplanationColumn', {}, fragments.at(-1)!)
+    }
+    if (lower.includes('uploaded') && lower.includes('fill') && lower.includes('provenance')) {
+      plan.push('Read the uploaded chat source, map supplier rows to visible comparison cells, and prepare document-grounded provenance notes for each filled value.')
+      record(calls, results, 'document.readSource', { sourceId: 'chat-upload', text: prompt }, { action: 'document-read', sourceId: 'chat-upload', text: prompt })
+      fragments.push(documentGroundedEditsFragment(snapshot, prompt))
+      recordFragment(calls, results, 'quoteComparison.proposeDocumentGroundedEdits', { sourceId: 'chat-upload' }, fragments.at(-1)!)
     }
     if (lower.includes('review notes') && lower.includes('exclusions')) {
       plan.push('Add review notes for quote cells with exclusions.')
@@ -335,6 +355,22 @@ function inspectSnapshot(snapshot: Snapshot) {
   }
 }
 
+function planningAnalysis(snapshot: Snapshot, prompt: string) {
+  return {
+    action: 'quote-comparison-work-analysis',
+    complexity: 'needs-planning',
+    ambiguity: 'material-choice',
+    suggestedNextStep: 'Ask one concise clarification before proposing material sheet edits.',
+    recommendedToolFamilies: ['quoteComparison.answerSheetQuestion', 'quoteComparison.proposeDerivedColumns', 'quoteComparison.proposeHighlights', 'quoteComparison.proposeCellEdits'],
+    sheetSignals: {
+      rowCount: snapshot.rows.length,
+      columnCount: snapshot.columns.length,
+      vendorColumnCount: snapshot.columns.filter((column) => column.vendorId).length,
+    },
+    prompt,
+  }
+}
+
 function mentionsQtyThousands(lower: string) {
   return /\bqty|quantity\b/.test(lower) && /\bthousand|1k|k lf|linear ft\b/.test(lower) && /\badd|create|new column|populate\b/.test(lower)
 }
@@ -415,6 +451,38 @@ function explanationFragment(snapshot: Snapshot): ComparisonPatchFragment {
     operations.push({ kind: 'set-cell', rowKey: row.id, colKey: 'cheapest-partial-explanation', value: clean ? `${clean.vendor} is lowest clean partial quote.` : 'No clean partial quote found.' })
   }
   return { summary: 'Added explanations for drywall, studs, and track.', operations }
+}
+
+function documentGroundedEditsFragment(snapshot: Snapshot, prompt: string): ComparisonPatchFragment {
+  const operations: ComparisonOperation[] = []
+  const provenanceNotes: ComparisonPatchFragment['provenanceNotes'] = []
+  const sourceLines = prompt.split(/\n|\\n/).map((line) => line.trim()).filter(Boolean)
+  for (const row of snapshot.rows) {
+    const sourceLine = sourceLines.find((line) => line.toLowerCase().includes(row.description.toLowerCase()))
+    if (!sourceLine) continue
+    const cells = sourceLine.split(',').map((cell) => cell.trim())
+    const supplier = cells[0] ?? ''
+    const unitPrice = cells[3] ?? ''
+    const leadTime = cells[4] ?? ''
+    const vendorPrefix = supplier.toLowerCase().includes('acme') ? 'acme' : supplier.toLowerCase().includes('l n w') ? 'lnw' : supplier.toLowerCase().includes('build') ? 'build' : ''
+    if (!vendorPrefix) continue
+    if (unitPrice) {
+      const colKey = `${vendorPrefix}-price`
+      operations.push({ kind: 'set-cell', rowKey: row.id, colKey, value: `$${unitPrice}`, note: `From uploaded chat file: ${sourceLine}` })
+      provenanceNotes.push({ rowKey: row.id, colKey, sourceId: 'chat-upload', note: sourceLine })
+    }
+    if (leadTime) {
+      const colKey = `${vendorPrefix}-lead`
+      operations.push({ kind: 'set-cell', rowKey: row.id, colKey, value: leadTime, note: `From uploaded chat file: ${sourceLine}` })
+      provenanceNotes.push({ rowKey: row.id, colKey, sourceId: 'chat-upload', note: sourceLine })
+    }
+  }
+  return {
+    summary: 'Prepared document-grounded edits from uploaded chat file.',
+    operations,
+    provenanceNotes,
+    warnings: ['Review filled values against the uploaded source before approval.'],
+  }
 }
 
 function exclusionReviewNotesFragment(snapshot: Snapshot): ComparisonPatchFragment {

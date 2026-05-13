@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { RialtoAgentCore, type ProductAgentRuntime } from './agent/core.js'
 import { OpenAIAgentsProductRuntime } from './agent/openai-agents-runtime.js'
+import { registerUploadedWorkbook } from './agent/workbook-attachments.js'
 import { evaluateQuoteComparison } from './comparison/evaluate.js'
 import { InMemoryUserContextProvider } from './context/user-context-provider.js'
 import type { AgentProgressEvent } from './domain/types.js'
@@ -40,6 +41,16 @@ const turnRequestSchema = z.object({
     currentView: z.unknown().optional(),
     sheetSchema: z.unknown().optional(),
     snapshot: z.unknown().optional(),
+    pendingProposal: z.unknown().optional(),
+    pendingPreviewPatch: z.unknown().optional(),
+    attachments: z.array(z.object({
+      id: z.string(),
+      filename: z.string(),
+      sourceKind: z.enum(['pdf', 'excel', 'csv', 'docx', 'text']),
+      workbookId: z.string().optional(),
+      textId: z.string().optional(),
+      summary: z.unknown().optional(),
+    })).optional(),
   }).optional(),
 })
 
@@ -155,8 +166,11 @@ export function buildServer(options: BuildServerOptions = {}) {
     const file = await request.file()
     if (!file) return reply.status(400).send({ error: 'Upload a file.' })
     const buffer = await file.toBuffer()
+    const uploadedWorkbook = isExcelFile(file.filename, file.mimetype)
+      ? await registerUploadedWorkbook({ filename: file.filename, buffer })
+      : undefined
     const context = await new InMemoryUserContextProvider().buildForUser(user.data)
-    return defaultToolRegistry.execute('direct-document-extract', 'document.extract_line_items', {
+    const extracted = await defaultToolRegistry.execute('direct-document-extract', 'document.extract_line_items', {
       filename: file.filename,
       mimeType: file.mimetype,
       bytesBase64: buffer.toString('base64'),
@@ -164,9 +178,34 @@ export function buildServer(options: BuildServerOptions = {}) {
       userContext: context,
       requestId: crypto.randomUUID(),
     })
+    if (uploadedWorkbook && extracted.data && typeof extracted.data === 'object') {
+      return {
+        ...extracted,
+        data: {
+          ...extracted.data,
+          attachment: {
+            id: uploadedWorkbook.id,
+            filename: uploadedWorkbook.filename,
+            sourceKind: uploadedWorkbook.sourceKind,
+            workbookId: uploadedWorkbook.workbookId,
+            summary: uploadedWorkbook.summary,
+          },
+        },
+      }
+    }
+    return extracted
   })
 
   return app
+}
+
+function isExcelFile(filename: string, mimeType?: string) {
+  const lower = filename.toLowerCase()
+  return lower.endsWith('.xlsx')
+    || lower.endsWith('.xls')
+    || mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    || mimeType === 'application/vnd.ms-excel'
+    || /spreadsheet|excel/i.test(mimeType ?? '')
 }
 
 function agentRuntimeFailureMessage(error: unknown) {

@@ -19,7 +19,7 @@ const user = {
 describe('Quote Comparison spreadsheet AI architecture contract', () => {
   it('passes the requested scenarios plus 20 additional non-similar robustness scenarios', async () => {
     const scenarios = quoteComparisonArchitectureScenarios()
-    expect(scenarios).toHaveLength(43)
+    expect(scenarios).toHaveLength(45)
 
     const core = new RialtoAgentCore(new InMemoryUserContextProvider(), new QuoteComparisonArchitectureRuntime())
     const failures: string[] = []

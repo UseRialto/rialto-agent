@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth/session'
-import { getRFQById, saveRFQ } from '@/lib/store/contractor-store'
+import { getRFQById, updateRFQTitle } from '@/lib/store/contractor-store'
 
 export async function PATCH(
   request: NextRequest,
@@ -17,6 +17,6 @@ export async function PATCH(
   const rfq = await getRFQById(rfqId)
   if (!rfq) return NextResponse.json({ error: 'RFQ not found.' }, { status: 404 })
 
-  await saveRFQ({ ...rfq, title })
+  await updateRFQTitle(rfq.id, title)
   return NextResponse.json({ rfqId, title })
 }

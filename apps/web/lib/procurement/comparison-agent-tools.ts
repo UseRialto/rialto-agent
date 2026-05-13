@@ -53,7 +53,7 @@ export interface ComparisonViewPatch {
     color: string
     note?: string
   }>
-  addManualColumns?: Array<{ key: string; label: string; insertAfterColKey?: string }>
+  addManualColumns?: Array<{ key: string; label: string; insertAfterColKey?: string; groupLabel?: string; vendorMetric?: 'unit_price' | 'total' | 'lead' | 'alternate' | 'response_attr' }>
   addManualLineItems?: Array<{ id: string; sku: string; description: string; quantity: number; unit: string; insertAfterLineItemId?: string }>
   addDerivedColumns?: Array<{ key: string; label: string; formula: string; insertAfterColKey?: string }>
   setCells?: Array<{ rowKey: string; colKey: string; value: string }>
@@ -278,22 +278,31 @@ export function comparisonViewPatchFromProposal(proposal: ComparisonPatchProposa
     summary: proposal.summary || 'Prepared comparison changes.',
     agentProposal: proposal,
   }
+  const insertedColumnKeys = new Set(
+    (proposal.operations ?? [])
+      .filter((operation): operation is Extract<ComparisonProposalOperation, { kind: 'insert-column' }> => operation.kind === 'insert-column')
+      .map((operation) => operation.colKey),
+  )
+  const renderedColumnKey = (colKey: string) => insertedColumnKeys.has(colKey) ? `manual:${colKey}` : colKey
   for (const operation of proposal.operations ?? []) {
     if (operation.kind === 'set-cell') {
       patch = {
         ...patch,
         setCells: append(patch.setCells, {
           rowKey: operation.rowKey,
-          colKey: operation.colKey,
+          colKey: renderedColumnKey(operation.colKey),
           value: operation.value == null ? '' : String(operation.value),
         }),
       }
     } else if (operation.kind === 'add-highlight') {
+      const selector = operation.selector.kind === 'cell'
+        ? { ...operation.selector, colKey: renderedColumnKey(operation.selector.colKey) }
+        : operation.selector
       patch = {
         ...patch,
         addHighlights: append(patch.addHighlights, {
           id: operation.id,
-          selector: operation.selector,
+          selector,
           color: proposalColor(operation.color),
           note: operation.note,
         }),
@@ -307,12 +316,15 @@ export function comparisonViewPatchFromProposal(proposal: ComparisonPatchProposa
     else if (operation.kind === 'set-column-label') {
       patch = { ...patch, setColumnLabels: append(patch.setColumnLabels, { colKey: operation.colKey, label: operation.label }) }
     } else if (operation.kind === 'insert-column') {
+      const vendorColumn = vendorManualColumnFromProposal(operation.colKey, operation.label)
       patch = {
         ...patch,
         addManualColumns: append(patch.addManualColumns, {
           key: operation.colKey,
-          label: operation.label,
-          insertAfterColKey: operation.afterColKey,
+          label: vendorColumn?.label ?? operation.label,
+          insertAfterColKey: operation.afterColKey ? renderedColumnKey(operation.afterColKey) : undefined,
+          groupLabel: vendorColumn?.groupLabel,
+          vendorMetric: vendorColumn?.vendorMetric,
         }),
       }
     } else if (operation.kind === 'insert-row') {
@@ -334,7 +346,7 @@ export function comparisonViewPatchFromProposal(proposal: ComparisonPatchProposa
           key: operation.colKey,
           label: operation.label,
           formula: operation.formula,
-          insertAfterColKey: operation.afterColKey,
+          insertAfterColKey: operation.afterColKey ? renderedColumnKey(operation.afterColKey) : undefined,
         }),
       }
     } else if (operation.kind === 'sort-rows') {
@@ -344,6 +356,32 @@ export function comparisonViewPatchFromProposal(proposal: ComparisonPatchProposa
     }
   }
   return patch
+}
+
+function vendorManualColumnFromProposal(colKey: string, label: string): { label: string; groupLabel: string; vendorMetric: 'unit_price' | 'total' | 'lead' | 'alternate' } | null {
+  const match = colKey.match(/^vendor-[^:]+:(unit_price|total|lead|alternate)$/)
+  if (!match) return null
+  const vendorMetric = match[1] as 'unit_price' | 'total' | 'lead' | 'alternate'
+  const metricLabel = vendorMetric === 'unit_price'
+    ? 'Unit Price'
+    : vendorMetric === 'total'
+      ? 'Total Price'
+      : vendorMetric === 'lead'
+        ? 'Lead Time'
+        : 'Alt'
+  const metricPattern = vendorMetric === 'unit_price'
+    ? /\s+unit\s+price\s*$/i
+    : vendorMetric === 'total'
+      ? /\s+total(?:\s+price)?\s*$/i
+      : vendorMetric === 'lead'
+        ? /\s+lead\s+time\s*$/i
+        : /\s+(?:alternate\s*\/\s*notes|alternate|alt|notes)\s*$/i
+  const groupLabel = label.replace(metricPattern, '').trim()
+  return {
+    label: metricLabel,
+    groupLabel: groupLabel || label,
+    vendorMetric,
+  }
 }
 
 export function workbookVersionMetadataFromApprovedComparisonPatch(

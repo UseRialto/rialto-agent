@@ -20,6 +20,8 @@ export interface ManualColumn {
   key: string
   label: string
   insertAfterColKey?: string
+  groupLabel?: string
+  vendorMetric?: 'unit_price' | 'total' | 'lead' | 'alternate' | 'response_attr'
 }
 
 export interface ManualLineItem {

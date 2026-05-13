@@ -1175,7 +1175,7 @@ interface SheetColumn {
   defaultWidth: number
   vendorId?: string
   vendorName?: string
-  vendorMetric?: 'unit_price' | 'total' | 'lead' | 'response_attr'
+  vendorMetric?: 'unit_price' | 'total' | 'lead' | 'alternate' | 'response_attr'
   responseFieldKey?: string
   derivedFormula?: string
 }
@@ -1186,6 +1186,47 @@ function insertColumnAfter(cols: SheetColumn[], col: SheetColumn, insertAfterCol
   const idx = cols.findIndex((entry) => entry.key === insertAfterColKey)
   if (idx === -1) return [...cols, col]
   return [...cols.slice(0, idx + 1), col, ...cols.slice(idx + 1)]
+}
+
+function appendUniqueByKey<T extends { key: string }>(base: T[], additions: T[] = []): T[] {
+  const seen = new Set(base.map((entry) => entry.key))
+  const uniqueAdditions = additions.filter((entry) => {
+    if (seen.has(entry.key)) return false
+    seen.add(entry.key)
+    return true
+  })
+  return [...base, ...uniqueAdditions]
+}
+
+function manualVendorColumnInfo(column: ManualColumn): { groupLabel: string; vendorId: string; vendorMetric: SheetColumn['vendorMetric']; label: string } | null {
+  const keyMatch = column.key.match(/^(vendor-[^:]+):(unit_price|total|lead|alternate)$/)
+  const metric = column.vendorMetric ?? (keyMatch?.[2] as SheetColumn['vendorMetric'] | undefined)
+  if (!column.groupLabel && !keyMatch) return null
+  const labelFromMetric =
+    metric === 'unit_price' ? 'Unit Price'
+      : metric === 'total' ? 'Total Price'
+        : metric === 'lead' ? 'Lead Time'
+          : metric === 'alternate' ? 'Alt'
+            : column.label
+  const groupLabel = column.groupLabel ?? inferVendorGroupLabel(column.label, metric)
+  return {
+    groupLabel,
+    vendorId: `manual:${keyMatch?.[1] ?? manualGroupSlug(column.groupLabel ?? column.key)}`,
+    vendorMetric: metric,
+    label: column.groupLabel || keyMatch ? labelFromMetric : column.label,
+  }
+}
+
+function inferVendorGroupLabel(label: string, metric: SheetColumn['vendorMetric']) {
+  if (metric === 'unit_price') return label.replace(/\s+unit\s+price\s*$/i, '').trim() || label
+  if (metric === 'total') return label.replace(/\s+total(?:\s+price)?\s*$/i, '').trim() || label
+  if (metric === 'lead') return label.replace(/\s+lead\s+time\s*$/i, '').trim() || label
+  if (metric === 'alternate') return label.replace(/\s+(?:alternate\s*\/\s*notes|alternate|alt|notes)\s*$/i, '').trim() || label
+  return label
+}
+
+function manualGroupSlug(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'vendor'
 }
 
 function buildColumns(rfq: ContractorRFQ, bids: ContractorBid[], derivedColumns: { key: string; label: string; formula: string; insertAfterColKey?: string }[], manualColumns: ManualColumn[] = []): SheetColumn[] {
@@ -1214,7 +1255,19 @@ function buildColumns(rfq: ContractorRFQ, bids: ContractorBid[], derivedColumns:
   }
 
   for (const mc of manualColumns) {
-    const col: SheetColumn = { key: `manual:${mc.key}`, label: mc.label, kind: 'manual', align: 'left', defaultWidth: 130 }
+    const vendorInfo = manualVendorColumnInfo(mc)
+    const col: SheetColumn = vendorInfo
+      ? {
+          key: `manual:${mc.key}`,
+          label: vendorInfo.label,
+          kind: 'vendor',
+          align: vendorInfo.vendorMetric === 'alternate' || vendorInfo.vendorMetric === 'lead' ? 'left' : 'right',
+          defaultWidth: vendorInfo.vendorMetric === 'alternate' ? 150 : 130,
+          vendorId: vendorInfo.vendorId,
+          vendorName: vendorInfo.groupLabel,
+          vendorMetric: vendorInfo.vendorMetric,
+        }
+      : { key: `manual:${mc.key}`, label: mc.label, kind: 'manual', align: 'left', defaultWidth: 130 }
     const anchor = mc.insertAfterColKey?.startsWith('manual:') ? mc.insertAfterColKey : mc.insertAfterColKey
     cols.splice(0, cols.length, ...insertColumnAfter(cols, col, anchor))
   }
@@ -1380,6 +1433,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
   const baseItems = rfq.line_items
 
   const { view, versions, replaceView, deleteColumns, hideColumns, showColumns, deleteLineItems, hideLineItems, showLineItems, addHighlights, removeHighlights, clearHighlights, addDerivedColumns, removeDerivedColumns, setColumnWidth, addManualColumns, addManualLineItems, setCellOverride, setColumnLabel, setLineItemOrder, restoreVersion } = useComparisonSheetView(userKey, rfq.id)
+  const [previewPatch, setPreviewPatch] = useState<ComparisonViewPatch | null>(null)
 
   const items = useMemo(() => {
     let next = [...baseItems]
@@ -1396,10 +1450,18 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     return next
   }, [baseItems, view.manualLineItems])
 
+  const previewManualColumns = useMemo(
+    () => appendUniqueByKey(view.manualColumns ?? [], previewPatch?.addManualColumns ?? []),
+    [view.manualColumns, previewPatch],
+  )
+  const previewDerivedColumns = useMemo(
+    () => appendUniqueByKey(view.derivedColumns, previewPatch?.addDerivedColumns ?? []),
+    [view.derivedColumns, previewPatch],
+  )
   const allCols = useMemo(() => {
-    const cols = buildColumns(rfq, bids, view.derivedColumns, view.manualColumns)
+    const cols = buildColumns(rfq, bids, previewDerivedColumns, previewManualColumns)
     return cols.map((col) => ({ ...col, label: view.columnLabelOverrides?.[col.key] ?? col.label }))
-  }, [rfq, bids, view.derivedColumns, view.manualColumns, view.columnLabelOverrides])
+  }, [rfq, bids, previewDerivedColumns, previewManualColumns, view.columnLabelOverrides])
   const activeCols = useMemo(() => allCols.filter((c) => !(view.deletedColumnKeys ?? []).includes(c.key)), [allCols, view.deletedColumnKeys])
   const visibleCols = useMemo(() => activeCols.filter((c) => !view.hiddenColumnKeys.includes(c.key)), [activeCols, view.hiddenColumnKeys])
   const visibleItems = useMemo(() => {
@@ -1464,6 +1526,51 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     return map
   }, [view.highlights, visibleItems, bids])
 
+  const previewCellMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const cell of previewPatch?.setCells ?? []) {
+      map.set(`${cell.rowKey}|${cell.colKey}`, cell.value)
+    }
+    return map
+  }, [previewPatch])
+  const previewHighlightMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const h of previewPatch?.addHighlights ?? []) {
+      if (h.selector.kind === 'cell') {
+        map.set(`${h.selector.rowKey}|${h.selector.colKey}`, '#fef3c7')
+      } else {
+        const rule = h.selector.rule
+        if (rule === 'fastest-lead-per-row') {
+          for (const item of visibleItems) {
+            let bestVendorId: string | null = null
+            let bestLead = Infinity
+            for (const bid of bids) {
+              const r = bid.line_item_responses.find((x) => x.line_item_id === item.id)
+              if (!r || r.availability === 'unavailable') continue
+              if (r.lead_time_days < bestLead) { bestLead = r.lead_time_days; bestVendorId = bid.id }
+            }
+            if (bestVendorId) map.set(`${item.id}|vendor:${bestVendorId}:lead`, '#fef3c7')
+          }
+        } else if (rule === 'lowest-price-per-row') {
+          for (const item of visibleItems) {
+            let bestVendorId: string | null = null
+            let bestTotal = Infinity
+            for (const bid of bids) {
+              const r = bid.line_item_responses.find((x) => x.line_item_id === item.id)
+              if (!r || r.availability === 'unavailable') continue
+              if (r.total_price < bestTotal) { bestTotal = r.total_price; bestVendorId = bid.id }
+            }
+            if (bestVendorId) {
+              map.set(`${item.id}|vendor:${bestVendorId}:total`, '#fef3c7')
+              map.set(`${item.id}|vendor:${bestVendorId}:unit_price`, '#fef3c7')
+            }
+          }
+        }
+      }
+    }
+    return map
+  }, [previewPatch, visibleItems, bids])
+
   const bestByItem = useMemo(() => {
     const map = new Map<string, { totalVendorId?: string; leadVendorId?: string }>()
     for (const item of visibleItems) {
@@ -1492,6 +1599,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
 
   const [editingCell, setEditingCell] = useState<{ rowKey: string; colKey: string } | null>(null)
   const [editingHeader, setEditingHeader] = useState<{ colKey: string } | null>(null)
+  const [editingGroupHeader, setEditingGroupHeader] = useState<{ groupKey: string } | null>(null)
   const [draftValue, setDraftValue] = useState('')
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; rowKey?: string; colKey?: string } | null>(null)
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
@@ -1519,6 +1627,31 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     if (!editingHeader) return
     setColumnLabel(editingHeader.colKey, draftValue)
     setEditingHeader(null)
+  }
+
+  function groupOverrideKey(groupKey: string) {
+    return `group:${groupKey}`
+  }
+
+  function groupKeyForColumn(col: SheetColumn, fallbackIndex = 0) {
+    return col.vendorId ? `vendor:${col.vendorId}` : `requested:${fallbackIndex}`
+  }
+
+  function groupLabelForColumn(col: SheetColumn, fallbackIndex = 0) {
+    const groupKey = groupKeyForColumn(col, fallbackIndex)
+    return view.columnLabelOverrides?.[groupOverrideKey(groupKey)] ?? (col.vendorName || 'Requested Item')
+  }
+
+  function startGroupHeaderEdit(col: SheetColumn, fallbackIndex = 0) {
+    const groupKey = groupKeyForColumn(col, fallbackIndex)
+    setEditingGroupHeader({ groupKey })
+    setDraftValue(groupLabelForColumn(col, fallbackIndex))
+  }
+
+  function commitGroupHeaderEdit() {
+    if (!editingGroupHeader) return
+    setColumnLabel(groupOverrideKey(editingGroupHeader.groupKey), draftValue)
+    setEditingGroupHeader(null)
   }
 
   function makeManualColumn(anchorKey: string | undefined, side: 'left' | 'right') {
@@ -1809,8 +1942,8 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    if (editingCell || editingHeader) {
-      if (e.key === 'Escape') { e.preventDefault(); setEditingCell(null); setEditingHeader(null) }
+    if (editingCell || editingHeader || editingGroupHeader) {
+      if (e.key === 'Escape') { e.preventDefault(); setEditingCell(null); setEditingHeader(null); setEditingGroupHeader(null) }
       return
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); dispatchAssistant(true); return }
@@ -1832,12 +1965,19 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     if (e.key === 'Enter') {
       const col = visibleCols[sel.c]
       const item = visibleItems[sel.r - dataStartRow]
+      if (col && sel.r === groupHeaderRowIdx) { e.preventDefault(); startGroupHeaderEdit(col, sel.c); return }
       if (col && sel.r === fieldHeaderRowIdx) { e.preventDefault(); startHeaderEdit(col); return }
       if (col && item) { e.preventDefault(); startCellEdit(item, col); return }
     }
     if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) {
       const col = visibleCols[sel.c]
       const item = visibleItems[sel.r - dataStartRow]
+      if (col && sel.r === groupHeaderRowIdx) {
+        e.preventDefault()
+        setEditingGroupHeader({ groupKey: groupKeyForColumn(col, sel.c) })
+        setDraftValue(e.key)
+        return
+      }
       if (col && sel.r === fieldHeaderRowIdx) {
         e.preventDefault()
         setEditingHeader({ colKey: col.key })
@@ -1868,8 +2008,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     if (!col) return ''
     if (r === 0) return colLetter(c)
     if (r === groupHeaderRowIdx) {
-      if (col.kind === 'vendor') return col.vendorName ?? ''
-      return 'Requested Item'
+      return groupLabelForColumn(col, c)
     }
     if (r === fieldHeaderRowIdx) return col.label
     if (r === totalsRow) {
@@ -1883,6 +2022,8 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     }
     const item = visibleItems[r - dataStartRow]
     if (!item) return ''
+    const previewValue = previewCellMap.get(`${item.id}|${col.key}`)
+    if (previewValue !== undefined) return previewValue
     return getCellText(item, col)
   }
 
@@ -1922,6 +2063,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
         setAssistantClosing(false)
         setAssistantOpen(true)
       } else {
+        setPreviewPatch(null)
         setAssistantClosing(true)
         closingTimerRef.current = setTimeout(() => {
           setAssistantOpen(false)
@@ -1982,6 +2124,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
       }
     }
     replaceView(nextView, workbookVersionMetadataFromApprovedComparisonPatch(patch))
+    setPreviewPatch(null)
     dispatchAssistant(false)
   }
 
@@ -2255,6 +2398,8 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
               const col = visibleCols[i]
               if (col.kind === 'vendor' && col.vendorId) {
                 const vendorId = col.vendorId
+                const groupKey = groupKeyForColumn(col, i)
+                const groupLabel = groupLabelForColumn(col, i)
                 const accent = vendorColors[vendorId] ?? '#1e3a2f'
                 let span = 0
                 while (i + span < visibleCols.length && visibleCols[i + span].vendorId === vendorId) span++
@@ -2262,6 +2407,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                   <div
                     key={`gh-vendor-${vendorId}-${i}`}
                     onClick={() => setSel((s) => ({ ...s, r: groupHeaderRowIdx, c: i }))}
+                    onDoubleClick={() => startGroupHeaderEdit(col, i)}
                     style={{
                       ...groupHeaderBase,
                       gridRow: groupHeaderRowIdx + 1,
@@ -2271,18 +2417,36 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                       zIndex: 4,
                       background: accent,
                     }}
+                    title={groupLabel}
                   >
-                    {col.vendorName}
+                    {editingGroupHeader?.groupKey === groupKey ? (
+                      <input
+                        autoFocus
+                        value={draftValue}
+                        onChange={(event) => setDraftValue(event.target.value)}
+                        onBlur={commitGroupHeaderEdit}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') { event.preventDefault(); commitGroupHeaderEdit() }
+                          if (event.key === 'Escape') { event.preventDefault(); setEditingGroupHeader(null) }
+                        }}
+                        style={{ width: '100%', height: ROW_H - 6, border: '1px solid #2563eb', borderRadius: 3, padding: '0 6px', fontSize: 12, outline: 'none', background: '#ffffff', color: '#111827', fontWeight: 800, textAlign: 'center', textTransform: 'none' }}
+                      />
+                    ) : (
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{groupLabel}</span>
+                    )}
                   </div>,
                 )
                 i += span
               } else {
                 let span = 0
                 while (i + span < visibleCols.length && visibleCols[i + span].kind !== 'vendor') span++
+                const groupKey = groupKeyForColumn(col, i)
+                const groupLabel = groupLabelForColumn(col, i)
                 cells.push(
                   <div
                     key={`gh-mr-${i}`}
                     onClick={() => setSel((s) => ({ ...s, r: groupHeaderRowIdx, c: i }))}
+                    onDoubleClick={() => startGroupHeaderEdit(col, i)}
                     style={{
                       ...groupHeaderBase,
                       gridRow: groupHeaderRowIdx + 1,
@@ -2291,8 +2455,23 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                       top: GROUP_HEADER_TOP,
                       zIndex: 4,
                     }}
+                    title={groupLabel}
                   >
-                    Requested Item
+                    {editingGroupHeader?.groupKey === groupKey ? (
+                      <input
+                        autoFocus
+                        value={draftValue}
+                        onChange={(event) => setDraftValue(event.target.value)}
+                        onBlur={commitGroupHeaderEdit}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') { event.preventDefault(); commitGroupHeaderEdit() }
+                          if (event.key === 'Escape') { event.preventDefault(); setEditingGroupHeader(null) }
+                        }}
+                        style={{ width: '100%', height: ROW_H - 6, border: '1px solid #2563eb', borderRadius: 3, padding: '0 6px', fontSize: 12, outline: 'none', background: '#ffffff', color: '#111827', fontWeight: 800, textAlign: 'center', textTransform: 'none' }}
+                      />
+                    ) : (
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{groupLabel}</span>
+                    )}
                   </div>,
                 )
                 i += span
@@ -2384,7 +2563,10 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                   {r + 1}
                 </div>
                 {visibleCols.map((col, c) => {
-                  const value = getCellText(item, col)
+                  const cellKey = `${item.id}|${col.key}`
+                  const previewValue = previewCellMap.get(cellKey)
+                  const value = previewValue ?? getCellText(item, col)
+                  const hasPreview = previewValue !== undefined || previewHighlightMap.has(cellKey)
                   const bid = col.vendorId ? bids.find((entry) => entry.id === col.vendorId) : undefined
                   const response = bid?.line_item_responses.find((entry) => entry.line_item_id === item.id)
                   const state = bid ? vendorCellState(item, bid, response) : { tone: 'normal' as const, tooltip: '' }
@@ -2398,7 +2580,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                   const isLowestPrice = col.kind === 'vendor' && col.vendorMetric === 'total' && col.vendorId === best?.totalVendorId
                   const isFastestLead = col.kind === 'vendor' && col.vendorMetric === 'lead' && col.vendorId === best?.leadVendorId
                   const autoHighlight = isLowestPrice ? '#dcfce7' : isFastestLead ? '#dbeafe' : undefined
-                  const highlight = highlightMap.get(`${item.id}|${col.key}`) ?? autoHighlight
+                  const highlight = previewHighlightMap.get(cellKey) ?? (hasPreview ? '#fef3c7' : highlightMap.get(cellKey) ?? autoHighlight)
                   const isSelected = sel.r === r && sel.c === c
                   const inRange = isInSelectedRange(r, c)
                   const isFrozen = col.key === frozenColumnKey
@@ -2436,6 +2618,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                         fontVariantNumeric: col.align === 'right' ? 'tabular-nums' : 'normal',
                         ...(isLowestPrice || isFastestLead ? { boxShadow: `inset 0 -2px 0 ${isLowestPrice ? '#16a34a' : '#2563eb'}` } : {}),
                         ...(isFrozen ? { position: 'sticky', left: GUTTER_W, zIndex: 2, borderRight: strongBorder } : {}),
+                        ...(hasPreview ? { boxShadow: 'inset 0 0 0 2px #f59e0b' } : {}),
                         ...(isSelected ? { boxShadow: 'inset 0 0 0 2px #2563eb' } : inRange ? { boxShadow: 'inset 0 0 0 1px #93c5fd' } : {}),
                       }}
                     >
@@ -2633,6 +2816,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
         sheetSchema={sheetSchema}
         snapshot={comparisonSheetSnapshot}
         onApply={applyPatchToView}
+        onPreviewChange={setPreviewPatch}
         onDismiss={() => dispatchAssistant(false)}
       />
     </div>

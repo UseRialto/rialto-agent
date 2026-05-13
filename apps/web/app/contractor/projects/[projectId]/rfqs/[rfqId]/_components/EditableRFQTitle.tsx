@@ -1,6 +1,5 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
 import type { CSSProperties } from 'react'
 import { useState } from 'react'
 
@@ -15,7 +14,6 @@ export function EditableRFQTitle({
   className?: string
   style?: CSSProperties
 }) {
-  const router = useRouter()
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(initialTitle)
   const [draft, setDraft] = useState(initialTitle)
@@ -36,7 +34,6 @@ export function EditableRFQTitle({
       setDraft(title)
       return
     }
-    router.refresh()
   }
 
   if (editing) {

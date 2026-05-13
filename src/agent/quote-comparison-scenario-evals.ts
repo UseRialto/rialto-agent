@@ -161,7 +161,7 @@ function realRuntimeToolIdsFor(name: string): string[] {
       return ['quoteComparison.inspectSnapshot', 'quoteComparison.proposeDerivedColumns', 'quoteComparison.proposeHighlights']
     case 'make cleaner':
     case 'pick best quote':
-      return ['quoteComparison.inspectSnapshot']
+      return ['quoteComparison.inspectSnapshot', 'quoteComparison.analyzeWork']
     default:
       return ['quoteComparison.inspectSnapshot']
   }

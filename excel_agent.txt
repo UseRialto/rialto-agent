@@ -1,0 +1,312 @@
+We are overhauling the current agentic architecture for our spreadsheet/Excel AI system.
+
+Context:
+We are building a production-grade agentic spreadsheet system for Rialto. Users upload an Excel spreadsheet, especially quote-comparison / RFQ / vendor quote spreadsheets. The AI should be able to both:
+1. Answer insight/query questions about what is present in the spreadsheet.
+2. Safely make or propose spreadsheet changes, such as adding columns, filling formulas, normalizing quote data, comparing vendors, highlighting lowest prices, detecting missing quotes, etc.
+
+Current direction:
+We are using the OpenAI Agents SDK as the core orchestrator. We do NOT want to build everything from scratch if useful open-source projects already have good patterns. We want to inspect and borrow the best architectural ideas from existing spreadsheet-agent projects, while keeping OpenAI Agents SDK as the primary system.
+
+Relevant open-source projects to research / inspect:
+- tmustier/pi-for-excel
+- SylvianAI/sv-excel-agent
+- jenyss/ExcelWorkerLLMToolCallAgent
+- iOfficeAI/OfficeCLI
+- colonel-aureliano/Excel-Agent
+- parthvadhadiya/ExcelFlow
+- martinsione/opensheets
+
+Your goal:
+Analyze the current codebase and propose/implement a better agentic architecture inspired by the strongest ideas from these repositories.
+
+Important product behavior:
+The agent should NOT directly mutate spreadsheets recklessly. It should:
+- Understand user intent.
+- Inspect workbook structure.
+- Build a structured plan.
+- Execute deterministic tools.
+- Verify the result.
+- Return a patch preview for risky/destructive edits.
+- Apply only approved patches where appropriate.
+- Support rollback/history.
+
+Target architecture:
+A single OpenAI Agents SDK orchestrator with deterministic tools underneath.
+
+Desired high-level loop:
+1. User uploads spreadsheet or asks question.
+2. System parses workbook and builds workbook context/schema.
+3. Agent classifies request as:
+   - insight/query only
+   - edit request
+   - mixed insight + edit
+   - ambiguous/risky request
+4. Agent creates a structured plan.
+5. Agent calls backend spreadsheet tools.
+6. System verifies outputs.
+7. Agent returns answer and/or proposed patch preview.
+8. User can apply patch.
+9. System stores history and supports rollback.
+
+The agent should have access to tools roughly like:
+
+Workbook/context tools:
+- inspect_workbook
+- get_workbook_overview
+- list_sheets
+- inspect_sheet
+- detect_tables
+- get_table_schema
+- find_column
+- search_workbook
+- read_range
+
+Insight/query tools:
+- query_table_duckdb
+- query_dataframe
+- summarize_sheet
+- detect_missing_values
+- detect_outliers
+- compute_basic_stats
+- identify_quote_columns
+- identify_line_items
+- identify_vendor_columns
+- normalize_currency_columns
+- compare_vendors_by_line_item
+- detect_missing_quotes
+- detect_partial_vs_total_quotes
+- find_lowest_valid_quote
+- recommend_vendor
+
+Edit/patch tools:
+- create_patch
+- add_column
+- delete_column
+- rename_column
+- set_cell
+- set_range_values
+- set_range_formula
+- fill_formula
+- format_cells
+- conditional_format
+- highlight_cells
+- sort_table
+- create_summary_sheet
+- apply_patch
+- rollback_patch
+
+Verification tools:
+- verify_patch
+- verify_column_added
+- verify_formula_range
+- verify_no_unintended_overwrites
+- verify_row_count_stable
+- verify_query_result
+- maybe render_workbook_preview if OfficeCLI or another rendering strategy is useful
+
+Key design requirement:
+Separate “planning” from “execution.” The LLM should produce structured plans/tool calls. Spreadsheet mutations should happen through deterministic backend functions, not arbitrary free-form LLM-generated Python.
+
+Patch format:
+Design or improve a JSON patch representation like:
+
+{
+  "patch_id": "...",
+  "summary": "...",
+  "risk_level": "safe | medium | destructive",
+  "requires_approval": true,
+  "operations": [
+    {
+      "op": "add_column",
+      "sheet": "Vendor Quotes",
+      "after": "Qty",
+      "name": "Qty (k linear ft)"
+    },
+    {
+      "op": "set_formula_range",
+      "sheet": "Vendor Quotes",
+      "range": "F2:F82",
+      "formula": "=E2/1000"
+    }
+  ],
+  "preview": {
+    "changed_cells": 81,
+    "sample_before_after": [
+      {
+        "row": 2,
+        "before": {"Qty": 2500},
+        "after": {"Qty (k linear ft)": 2.5}
+      }
+    ]
+  }
+}
+
+Risk rules:
+Require approval for:
+- deleting columns/rows/sheets
+- overwriting non-empty cells
+- changing formulas
+- changing vendor recommendations / award decisions
+- large batch edits
+- structural workbook changes
+
+Can auto-apply or lightly confirm:
+- read-only questions
+- harmless formatting
+- adding a new computed column when source is clear
+- creating a new summary sheet
+
+Domain-specific Rialto behavior:
+This is for construction material procurement / quote comparison. The system should understand spreadsheets with:
+- RFQ line items
+- quantities
+- units
+- vendors
+- vendor quote prices
+- lead times
+- exclusions
+- alternates
+- total quotes vs partial quotes
+- missing quote values
+- notes/terms
+
+The system should handle questions like:
+- “Which vendor is cheapest for each line item?”
+- “What’s the lowest partial quote for X, Y, Z items, ignoring total package quotes?”
+- “Which items are missing quotes from Vendor A?”
+- “Add a recommendation column choosing the lowest vendor, but ignore vendors with missing lead times.”
+- “Add a new column called Qty in thousands linear ft and populate it from Qty.”
+- “Highlight the lowest valid price in each row.”
+- “Create a quote comparison summary sheet.”
+- “Which vendor has the best coverage across all requested items?”
+- “What quotes look suspiciously high or low?”
+- “Which line items have unit mismatches?”
+- “Normalize all prices into numeric currency values.”
+
+Implementation expectations:
+1. Inspect the current codebase first.
+2. Identify the current architecture and pain points.
+3. Compare against the listed open-source repos conceptually and extract useful patterns.
+4. Propose a concrete v1 architecture.
+5. Implement the minimal useful version, not a giant overbuilt framework.
+6. Preserve OpenAI Agents SDK as the main orchestrator.
+7. Prefer deterministic, testable tool functions.
+8. Add tests for complex spreadsheet-agent tasks.
+9. Add clear logs/audit trail for agent tool calls and patch application.
+10. Avoid browser-navigation style agents. We own the app and should call backend functions directly.
+
+Specific things to look for in the reference repos:
+- From tmustier/pi-for-excel:
+  Study workbook overview, read/write cells, formula fill, search, structure modification, formatting, dependency tracing, explain formula, and workbook history patterns.
+
+- From SylvianAI/sv-excel-agent:
+  Study Excel MCP server / tool-server separation, file input/output handling, and the set of Excel editing tools. Decide whether to borrow the tool design or adapt the tool server into OpenAI Agents SDK functions.
+
+- From jenyss/ExcelWorkerLLMToolCallAgent:
+  Study DuckDB/pandas query tools, spreadsheet preview, metadata extraction, and validation of query results.
+
+- From iOfficeAI/OfficeCLI:
+  Study whether rendering workbooks to HTML/PNG or using CLI-based document manipulation can help with preview/verification. Do not make this core unless genuinely useful.
+
+- From colonel-aureliano/Excel-Agent:
+  Study planner/action/reflection/memory ideas, but avoid immediately auto-saving destructive changes.
+
+- From parthvadhadiya/ExcelFlow:
+  Study React/FastAPI/WebSocket spreadsheet UI patterns if useful, but prioritize backend architecture.
+
+- From martinsione/opensheets:
+  Briefly inspect for any useful ideas, but likely do not base architecture on it unless surprisingly strong.
+
+Deliverables:
+1. A concise architecture proposal.
+2. A tool interface design for the OpenAI Agents SDK implementation.
+3. A patch/preview/rollback design.
+4. An implementation plan.
+5. Actual code changes for the highest-leverage parts.
+6. Tests for complex behavior.
+
+Testing:
+Create tests that are more complex than trivial column deletion. Include cases like:
+
+Test 1:
+User says: “Add a new column called Qty (k LF), convert the Qty column from linear feet into thousands of linear feet, and populate it.”
+Expected:
+- Agent finds Qty / Quantity / LF source column.
+- Adds new column.
+- Populates values as Qty / 1000.
+- Verifies row count unchanged.
+- Shows sample before/after.
+
+Test 2:
+User says: “What’s the lowest partial quote for items X, Y, Z, without taking total package quotes into account?”
+Expected:
+- Agent identifies item rows.
+- Identifies vendor quote columns.
+- Excludes total/package quotes.
+- Computes lowest valid quote per requested item.
+- Explains exclusions/assumptions.
+
+Test 3:
+User says: “Highlight the cheapest valid vendor price in every row.”
+Expected:
+- Agent identifies vendor price columns.
+- Ignores blanks, non-numeric values, exclusions, and total-only quote columns.
+- Creates patch with conditional formatting or direct formatting.
+- Verifies highlighted cells match computed minima.
+
+Test 4:
+User says: “Add a recommendation column picking the cheapest vendor, but ignore vendors with missing lead times.”
+Expected:
+- Agent maps vendor price columns to vendor lead-time columns.
+- Excludes vendors with missing lead times.
+- Adds recommendation column.
+- Populates recommended vendor.
+- Returns patch preview.
+
+Test 5:
+User says: “Which vendors didn’t quote all the requested items?”
+Expected:
+- Agent computes coverage by vendor.
+- Returns missing item counts and item names.
+- Does not mutate spreadsheet.
+
+Test 6:
+User says: “Clean up this quote comparison sheet.”
+Expected:
+- Agent recognizes ambiguity.
+- Asks for clarification or proposes a safe plan instead of blindly editing.
+
+Test 7:
+User says: “Delete all columns that are probably unnecessary.”
+Expected:
+- Agent marks as destructive/risky.
+- Does not apply immediately.
+- Produces proposed patch with rationale and requires approval.
+
+Test 8:
+User says: “Create a summary sheet comparing vendors by total price, coverage, average lead time, and missing quotes.”
+Expected:
+- Agent creates summary sheet patch.
+- Computes metrics.
+- Verifies formulas/data.
+- Does not overwrite existing summary sheet without approval.
+
+Test 9:
+User says: “Normalize all dollar amounts.”
+Expected:
+- Agent converts strings like “$1,200”, “1200 USD”, “1.2k”, “TBD”, “included”, “N/A” carefully.
+- Preserves ambiguous values or flags them.
+- Requires approval if overwriting original cells; otherwise creates normalized columns.
+
+Test 10:
+User says: “Tell me what’s weird in this spreadsheet.”
+Expected:
+- Agent detects missing quotes, extreme outliers, unit mismatches, duplicated line items, suspicious totals, and ambiguous vendor columns.
+- Returns insight report only.
+
+Be pragmatic:
+Do not overbuild multi-agent orchestration unless there is a real reason. Prefer one orchestrator agent with strong deterministic tools, a clean patch system, and verification.
+
+Final goal:
+After this overhaul, the spreadsheet agent should be able to reliably answer questions and propose safe spreadsheet edits for uploaded Excel quote comparison files in a way that is production-quality enough for a real client demo.

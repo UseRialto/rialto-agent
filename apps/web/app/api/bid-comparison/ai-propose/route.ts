@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth/session'
-import {
-  comparisonViewPatchFromAgentToolPatch,
-  comparisonViewPatchFromProposal,
-  type ComparisonAgentToolPatch,
-  type ComparisonPatchProposal,
-} from '@/lib/procurement/comparison-agent-tools'
+import { comparisonAssistantPayloadFromAgentTurn, type AgentTurnData } from '@/lib/procurement/comparison-agent-response'
+import { comparisonFastCommandPatch } from '@/lib/procurement/comparison-fast-commands'
 import { agentTurnFailureMessage, postAgentTurnWithRetry } from '@/lib/procurement/comparison-agent-api-client'
-import type { ComparisonAgentDebugTrace } from '@/lib/procurement/comparison-agent-debug'
 
 interface SchemaColumn {
   key: string
@@ -15,7 +10,7 @@ interface SchemaColumn {
   kind: 'rfq-core' | 'rfq-attribute' | 'rfq-standard' | 'vendor' | 'derived' | 'manual'
   vendorId?: string
   vendorName?: string
-  metric?: 'unit_price' | 'total' | 'lead'
+  metric?: 'unit_price' | 'total' | 'lead' | 'alternate'
   isEmpty?: boolean
 }
 
@@ -34,22 +29,23 @@ interface RequestBody {
   message?: string
   currentView?: unknown
   snapshot?: unknown
+  pendingProposal?: unknown
+  pendingPreviewPatch?: unknown
   debug?: boolean
   stream?: boolean
+  attachments?: Array<{
+    sourceId?: string
+    filename: string
+    text: string
+    sourceKind?: 'pdf' | 'excel' | 'csv' | 'docx' | 'text'
+    workbookId?: string
+    summary?: unknown
+  }>
   sheetSchema?: {
     columns?: SchemaColumn[]
     lineItems?: SchemaItem[]
     vendors?: SchemaVendor[]
   }
-}
-
-interface AgentTurnData {
-  error?: string
-  status?: string
-  plan?: string[]
-  debugTrace?: ComparisonAgentDebugTrace
-  proposal?: ComparisonPatchProposal
-  toolResults?: Array<{ toolId?: string; status?: string; summary?: string; data?: { action?: string; patch?: ComparisonAgentToolPatch } }>
 }
 
 function debugPayload(data: Pick<AgentTurnData, 'plan' | 'debugTrace' | 'toolResults'>) {
@@ -62,6 +58,17 @@ function debugPayload(data: Pick<AgentTurnData, 'plan' | 'debugTrace' | 'toolRes
 
 function agentPayload(body: RequestBody, session: Awaited<ReturnType<typeof getSession>>, message: string) {
   if (!session) throw new Error('Not authenticated.')
+  const attachmentText = (body.attachments ?? [])
+    .filter((attachment) => attachment.text.trim())
+    .map((attachment, index) => [
+      `Attachment ${index + 1}: ${attachment.filename}`,
+      `Source id: ${attachment.sourceId ?? attachment.filename}`,
+      attachment.text,
+    ].join('\n'))
+    .join('\n\n')
+  const content = attachmentText
+    ? `${message}\n\nUploaded document text for document.readSource:\n\n${attachmentText}`
+    : message
   return {
     user: {
       id: session.userId,
@@ -70,7 +77,7 @@ function agentPayload(body: RequestBody, session: Awaited<ReturnType<typeof getS
       name: session.name || 'Estimator',
       email: session.email || 'estimator@example.com',
     },
-    messages: [{ role: 'user' as const, content: message }],
+    messages: [{ role: 'user' as const, content }],
     currentPage: {
       path: '/contractor/quote-comparison',
       title: 'Quote Comparison',
@@ -79,31 +86,44 @@ function agentPayload(body: RequestBody, session: Awaited<ReturnType<typeof getS
       currentView: body.currentView,
       sheetSchema: body.sheetSchema,
       snapshot: body.snapshot,
+      pendingProposal: body.pendingProposal,
+      pendingPreviewPatch: body.pendingPreviewPatch,
+      attachments: (body.attachments ?? []).map((attachment) => ({
+        id: attachment.sourceId ?? attachment.filename,
+        filename: attachment.filename,
+        sourceKind: attachment.sourceKind ?? 'text',
+        workbookId: attachment.workbookId,
+        textId: attachment.text.trim() ? (attachment.sourceId ?? attachment.filename) : undefined,
+        summary: attachment.summary,
+      })),
     },
     debug: body.debug,
   }
 }
 
 function proposalResponsePayload(data: AgentTurnData, sheetSchema: RequestBody['sheetSchema']) {
-  if (data.proposal?.kind === 'comparison-patch-proposal') {
-    return {
-      patch: comparisonViewPatchFromProposal(data.proposal),
-      usedFallback: false,
-      ...debugPayload(data),
-    }
-  }
-
-  const toolPatch = data.toolResults?.find((result) => result.data?.action === 'preview-spreadsheet-patch')?.data?.patch
-  if (!toolPatch) throw new Error(data.error ?? 'Rialto Agent did not return a Quote Comparison tool patch.')
-  return {
-    patch: comparisonViewPatchFromAgentToolPatch(toolPatch, sheetSchema ?? {}),
-    usedFallback: false,
-    ...debugPayload(data),
-  }
+  return comparisonAssistantPayloadFromAgentTurn(data, sheetSchema ?? {})
 }
 
 function sseEvent(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+}
+
+function fastCommandPayload(body: RequestBody, message: string) {
+  const patch = comparisonFastCommandPatch(message, body.sheetSchema ?? {})
+  if (!patch) return null
+  return {
+    patch,
+    usedFallback: false,
+    usedFastCommand: true,
+    plan: ['Matched a deterministic visible Comparison Sheet command.', 'Prepared a previewable Comparison Sheet patch without calling the Product Agent Runtime.'],
+    toolResults: [{
+      toolId: 'quoteComparison.fastCommand',
+      status: 'ok',
+      summary: patch.summary,
+      data: { action: 'comparison-fast-command', patch },
+    }],
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -121,6 +141,19 @@ export async function POST(request: NextRequest) {
   if (!message) return NextResponse.json({ error: 'message is required.' }, { status: 400 })
 
   try {
+    const fastPayload = fastCommandPayload(body, message)
+    if (fastPayload) {
+      if (body.stream) {
+        return new Response(sseEvent('final', fastPayload), {
+          headers: {
+            'content-type': 'text/event-stream; charset=utf-8',
+            'cache-control': 'no-cache, no-transform',
+          },
+        })
+      }
+      return NextResponse.json(fastPayload)
+    }
+
     const payload = agentPayload(body, session, message)
     if (body.stream) return streamAgentProposal(payload, body.sheetSchema)
 
