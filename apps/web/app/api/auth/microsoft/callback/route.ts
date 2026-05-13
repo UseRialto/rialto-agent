@@ -35,6 +35,11 @@ function renderRedirectPage(message: string, success: boolean, destination: stri
 </html>`
 }
 
+function withStatusParam(destination: string, key: string, value: string) {
+  const separator = destination.includes('?') ? '&' : '?'
+  return `${destination}${separator}${key}=${encodeURIComponent(value)}`
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url)
   const error = url.searchParams.get('error')
@@ -54,6 +59,9 @@ export async function GET(request: Request) {
       }),
   )
   const expectedState = cookies[OAUTH_STATE_COOKIE]
+  const returnTo = cookies[OAUTH_RETURN_COOKIE]?.startsWith('/contractor/')
+    ? cookies[OAUTH_RETURN_COOKIE]
+    : '/contractor/settings'
 
   const clearCookies = (response: NextResponse) => {
     response.cookies.delete(OAUTH_STATE_COOKIE)
@@ -74,15 +82,17 @@ export async function GET(request: Request) {
 
     const redirectUri = cookies[OAUTH_REDIRECT_URI_COOKIE] ?? new URL('/api/auth/microsoft/callback', request.url).toString()
     const { emailAddress } = await attachMicrosoftMailbox(code, session.userId, redirectUri)
+    const destination = withStatusParam(returnTo, 'microsoft_connected', '1')
 
     const response = new NextResponse(
-      renderRedirectPage(`Connected as ${emailAddress}. Returning to Rialto now.`, true, '/contractor/settings?microsoft_connected=1'),
+      renderRedirectPage(`Connected as ${emailAddress}. Returning to Rialto now.`, true, destination),
       { headers: { 'Content-Type': 'text/html; charset=utf-8' } },
     )
     return clearCookies(response)
   } catch (caught) {
+    const destination = withStatusParam(returnTo, 'microsoft_error', humanizeMailError(caught))
     const response = new NextResponse(
-      renderRedirectPage(humanizeMailError(caught), false, `/contractor/settings?microsoft_error=${encodeURIComponent(humanizeMailError(caught))}`),
+      renderRedirectPage(humanizeMailError(caught), false, destination),
       { status: 500, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
     )
     return clearCookies(response)

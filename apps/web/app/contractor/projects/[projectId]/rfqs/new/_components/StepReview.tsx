@@ -1,11 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { buildMagicFormPreviewUrl } from '@/lib/mail/rfq-email-draft'
 import { MagicRFQFormClient } from '@/app/vendor/magic-rfq/[token]/_components/MagicRFQFormClient'
 import type { ContractorRFQ } from '@/lib/types/contractor'
 import type { ItemRow, RFQCreationFieldVisibility } from './StepItems'
-import type { VendorInvite } from './StepInviteVendors'
+import { EditableEmailBody, type EditableEmailBodyHandle, type VendorInvite } from './StepInviteVendors'
 import type { CommodityWatch, ProcurementRequirement, RequestType, RFPDetails } from '@/lib/types/procurement'
 
 const SECTION_HEADING_STYLE = { color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)', fontWeight: 700 } as const
@@ -29,6 +29,8 @@ interface Props {
   invites: VendorInvite[]
   emailSubject: string
   emailBody: string
+  onEmailSubjectChange: (subject: string) => void
+  onEmailBodyChange: (body: string) => void
   onEditItems: () => void
   onSaveDraft: () => Promise<void>
   onPublish: () => Promise<void>
@@ -53,6 +55,8 @@ export function StepReview({
   invites,
   emailSubject,
   emailBody,
+  onEmailSubjectChange,
+  onEmailBodyChange,
   onEditItems,
   onSaveDraft,
   onPublish,
@@ -60,6 +64,7 @@ export function StepReview({
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [magicFormModalOpen, setMagicFormModalOpen] = useState(false)
+  const emailEditorRef = useRef<EditableEmailBodyHandle>(null)
   const requestLabel = requestType === 'rfp' ? 'RFP' : 'RFQ'
 
   const offPlatformInvites = invites.filter((invite) => !invite.onPlatform)
@@ -190,22 +195,6 @@ export function StepReview({
       className: '',
     }] : []),
   ]
-
-  function renderEmailPreviewLine(line: string, lineIndex: number) {
-    const normalizedLine = line.replaceAll('{{vendor_name}}', '{{vendor_first_name}}')
-    const parts = normalizedLine.split('{{vendor_first_name}}')
-
-    return parts.map((part, partIndex) => (
-      <span key={`${lineIndex}-${partIndex}`}>
-        {part}
-        {partIndex < parts.length - 1 && (
-          <span className="mx-0.5 inline-flex items-center rounded-md border px-2 py-0.5 align-middle text-xs font-semibold" style={{ background: '#fff3eb', color: '#fa6b04', borderColor: '#fdc89a' }}>
-            First Name
-          </span>
-        )}
-      </span>
-    ))
-  }
 
   async function handleSave() {
     setSaving(true)
@@ -402,17 +391,41 @@ export function StepReview({
         )}
 
         <div className="rounded-xl p-4" style={{ background: '#ede8e2', border: '1px solid #e2d9cf' }}>
-          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#8a9e96' }}>Email Summary</p>
+          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#8a9e96' }}>Email Draft</p>
           <div className="mt-3 rounded-xl p-4 shadow-sm" style={{ background: '#ffffff', border: '1px solid #e2d9cf' }}>
-            <p className="text-sm font-semibold" style={{ color: '#1e3a2f' }}>{emailSubject || `Request for ${requestLabel}`}</p>
-            <div className="mt-3 space-y-2 text-sm leading-6" style={{ color: '#4a6358' }}>
-              {emailBody.trim() ? (
-                emailBody.trim().split(/\n+/).map((line, lineIndex) => (
-                  <p key={`${lineIndex}-${line}`}>{renderEmailPreviewLine(line, lineIndex)}</p>
-                ))
-              ) : (
-                <p className="italic" style={{ color: '#8a9e96' }}>No email draft generated yet.</p>
-              )}
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wider" style={{ color: '#8a9e96' }}>Subject</span>
+              <input
+                type="text"
+                value={emailSubject}
+                onChange={(event) => onEmailSubjectChange(event.target.value)}
+                placeholder={`Request for ${requestLabel}`}
+                className="w-full rounded-lg px-3 py-2 text-sm font-semibold focus:outline-none"
+                style={{ border: '1px solid #e2d9cf', background: '#f8f5f1', color: '#1e3a2f', fontFamily: 'inherit' }}
+              />
+            </label>
+            <div className="mt-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#8a9e96' }}>Body</span>
+                {!emailBody.includes('{{vendor_first_name}}') && (
+                  <button
+                    type="button"
+                    onClick={() => emailEditorRef.current?.insertFirstNameChip()}
+                    className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition-opacity hover:opacity-70"
+                    style={{ borderColor: '#fdc89a', background: '#fff3eb', color: '#fa6b04' }}
+                  >
+                    First Name
+                  </button>
+                )}
+              </div>
+              <div className="rounded-xl px-4 py-3" style={{ border: '1px solid #e2d9cf', background: '#ede8e2' }}>
+                <EditableEmailBody
+                  ref={emailEditorRef}
+                  value={emailBody}
+                  onChange={onEmailBodyChange}
+                  initKey={0}
+                />
+              </div>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-3">
               <button

@@ -1498,16 +1498,22 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
           }
         } else if (rule === 'lowest-price-per-row') {
           for (const item of visibleItems) {
-            let bestVendorId: string | null = null
+            const bestVendorIds = new Set<string>()
             let bestTotal = Infinity
             for (const bid of bids) {
               const r = bid.line_item_responses.find((x) => x.line_item_id === item.id)
               if (!r || r.availability === 'unavailable') continue
-              if (r.total_price < bestTotal) { bestTotal = r.total_price; bestVendorId = bid.id }
+              if (r.total_price < bestTotal) {
+                bestTotal = r.total_price
+                bestVendorIds.clear()
+                bestVendorIds.add(bid.id)
+              } else if (r.total_price === bestTotal) {
+                bestVendorIds.add(bid.id)
+              }
             }
-            if (bestVendorId) {
-              map.set(`${item.id}|vendor:${bestVendorId}:total`, h.color)
-              map.set(`${item.id}|vendor:${bestVendorId}:unit_price`, h.color)
+            for (const vendorId of bestVendorIds) {
+              map.set(`${item.id}|vendor:${vendorId}:total`, h.color)
+              map.set(`${item.id}|vendor:${vendorId}:unit_price`, h.color)
             }
           }
         }
@@ -1549,16 +1555,22 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
           }
         } else if (rule === 'lowest-price-per-row') {
           for (const item of visibleItems) {
-            let bestVendorId: string | null = null
+            const bestVendorIds = new Set<string>()
             let bestTotal = Infinity
             for (const bid of bids) {
               const r = bid.line_item_responses.find((x) => x.line_item_id === item.id)
               if (!r || r.availability === 'unavailable') continue
-              if (r.total_price < bestTotal) { bestTotal = r.total_price; bestVendorId = bid.id }
+              if (r.total_price < bestTotal) {
+                bestTotal = r.total_price
+                bestVendorIds.clear()
+                bestVendorIds.add(bid.id)
+              } else if (r.total_price === bestTotal) {
+                bestVendorIds.add(bid.id)
+              }
             }
-            if (bestVendorId) {
-              map.set(`${item.id}|vendor:${bestVendorId}:total`, '#fef3c7')
-              map.set(`${item.id}|vendor:${bestVendorId}:unit_price`, '#fef3c7')
+            for (const vendorId of bestVendorIds) {
+              map.set(`${item.id}|vendor:${vendorId}:total`, '#fef3c7')
+              map.set(`${item.id}|vendor:${vendorId}:unit_price`, '#fef3c7')
             }
           }
         }
@@ -1568,9 +1580,9 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
   }, [previewPatch, visibleItems, bids])
 
   const bestByItem = useMemo(() => {
-    const map = new Map<string, { totalVendorId?: string; leadVendorIds: Set<string> }>()
+    const map = new Map<string, { totalVendorIds: Set<string>; leadVendorIds: Set<string> }>()
     for (const item of visibleItems) {
-      let totalVendorId: string | undefined
+      const totalVendorIds = new Set<string>()
       const leadVendorIds = new Set<string>()
       let bestTotal = Infinity
       let bestLead = Infinity
@@ -1579,7 +1591,10 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
         if (!response || response.availability === 'unavailable') continue
         if (response.total_price < bestTotal) {
           bestTotal = response.total_price
-          totalVendorId = bid.id
+          totalVendorIds.clear()
+          totalVendorIds.add(bid.id)
+        } else if (response.total_price === bestTotal) {
+          totalVendorIds.add(bid.id)
         }
         if (response.lead_time_days < bestLead) {
           bestLead = response.lead_time_days
@@ -1589,7 +1604,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
           leadVendorIds.add(bid.id)
         }
       }
-      map.set(item.id, { totalVendorId, leadVendorIds })
+      map.set(item.id, { totalVendorIds, leadVendorIds })
     }
     return map
   }, [visibleItems, bids])
@@ -2600,7 +2615,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                   )
                   const cellState = isQuoteValueMetric ? state : { tone: 'normal' as const, tooltip: '' }
                   const best = bestByItem.get(item.id)
-                  const isLowestPrice = col.kind === 'vendor' && col.vendorMetric === 'total' && col.vendorId === best?.totalVendorId
+                  const isLowestPrice = col.kind === 'vendor' && col.vendorMetric === 'total' && Boolean(col.vendorId && best?.totalVendorIds.has(col.vendorId))
                   const isFastestLead = col.kind === 'vendor' && col.vendorMetric === 'lead' && Boolean(col.vendorId && best?.leadVendorIds.has(col.vendorId))
                   const autoHighlight = isLowestPrice ? '#dcfce7' : isFastestLead ? '#dbeafe' : undefined
                   const highlight = previewHighlightMap.get(cellKey) ?? (hasPreview ? '#fef3c7' : highlightMap.get(cellKey) ?? autoHighlight)

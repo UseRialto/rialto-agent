@@ -1,10 +1,9 @@
 'use client'
 
 import { useActionState, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Bot, Check, Paperclip, Plus, Send, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bot, Check, Mail, Paperclip, Plus, Send, X } from 'lucide-react'
 import {
   saveContractorOnboardingAction,
-  skipContractorOnboardingAction,
   switchToVendorOnboardingAction,
 } from '@/lib/actions/auth'
 import {
@@ -19,6 +18,7 @@ import {
   type ContractorCustomizationSettings,
   type CustomLineItemFieldDefinition,
 } from '@/lib/contractor-customization'
+import type { ContractorMailboxSummary } from '@/lib/types/contractor'
 
 const TRADE_OPTIONS = [
   'Structural Steel',
@@ -85,9 +85,18 @@ function titleCaseColumnLabel(value: string) {
 export function ContractorOnboardingForm({
   initialCompanyName,
   initialTrade,
+  mailbox,
+  oauthStatus,
 }: {
   initialCompanyName: string
   initialTrade: string
+  mailbox: ContractorMailboxSummary
+  oauthStatus?: {
+    googleConnected?: boolean
+    googleError?: string
+    microsoftConnected?: boolean
+    microsoftError?: string
+  }
 }) {
   const [state, action, pending] = useActionState(saveContractorOnboardingAction, undefined)
   const initialTrades = initialTrade ? initialTrade.split(',').map((entry) => entry.trim()).filter(Boolean) : []
@@ -112,7 +121,7 @@ export function ContractorOnboardingForm({
   const vendorResponseColumns = [...VENDOR_RESPONSE_COLUMNS, ...vendorResponseFields.map((field) => field.label)]
   const spreadsheetWidth = 240 + 120 + 120 + (visibleFields.length * 180) + (vendorResponseColumns.length * 150)
   const spreadsheetColumns = `240px 120px 120px ${visibleFields.map(() => '180px').join(' ')} ${vendorResponseColumns.map(() => '150px').join(' ')}`
-  const totalSteps = accountType === 'subcontractor' ? 2 : 1
+  const totalSteps = accountType === 'subcontractor' ? 3 : 1
   const progress = ((Math.min(step, totalSteps - 1) + 1) / totalSteps) * 100
 
   useEffect(() => {
@@ -132,7 +141,7 @@ export function ContractorOnboardingForm({
   }
 
   function goNext() {
-    if (accountType === 'subcontractor' && step === 0) setStep(1)
+    if (accountType === 'subcontractor') setStep((current) => Math.min(current + 1, totalSteps - 1))
   }
 
   function updateLineItemFields(nextFields: CustomLineItemFieldDefinition[]) {
@@ -579,6 +588,77 @@ export function ContractorOnboardingForm({
               </div>
             </section>
           )}
+
+          {step === 2 && accountType === 'subcontractor' && (
+            <section className="mx-auto max-w-4xl text-center">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em]" style={{ color: '#8a9e96' }}>Question 3 of 3</p>
+              <h2 className="mt-3 text-3xl font-semibold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>Connect your email.</h2>
+              <p className="mx-auto mt-2 max-w-2xl text-sm" style={{ color: '#4a6358' }}>
+                Connect Gmail or Microsoft 365 so Rialto can send RFQ invites from your mailbox and sync vendor replies.
+              </p>
+
+              <div className="mx-auto mt-8 max-w-2xl rounded-2xl border bg-white p-6 text-left shadow-sm" style={{ borderColor: '#e2d9cf' }}>
+                <div className="flex items-start gap-4">
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white" style={{ background: mailbox.connected ? '#2d6a4f' : '#1e3a2f' }}>
+                    {mailbox.connected ? <Check className="h-5 w-5" /> : <Mail className="h-5 w-5" />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold" style={{ color: '#1e3a2f' }}>
+                      {mailbox.connected ? 'Mailbox connected' : 'No mailbox connected yet'}
+                    </p>
+                    <p className="mt-1 text-sm" style={{ color: '#4a6358' }}>
+                      {mailbox.connected
+                        ? `${mailbox.provider === 'microsoft_365' ? 'Microsoft 365' : 'Google Workspace'} is connected as ${mailbox.emailAddress}.`
+                        : 'This step is optional for setup. You can connect now or finish and connect later from Settings.'}
+                    </p>
+                  </div>
+                </div>
+
+                {(oauthStatus?.googleConnected || oauthStatus?.microsoftConnected) && (
+                  <div className="mt-4 rounded-md border px-4 py-3" style={{ borderColor: '#a8d5ba', background: '#e8f4ee' }}>
+                    <p className="text-sm" style={{ color: '#2d6a4f' }}>
+                      {oauthStatus.googleConnected ? 'Google account connected successfully.' : 'Microsoft 365 account connected successfully.'}
+                    </p>
+                  </div>
+                )}
+
+                {(oauthStatus?.googleError || oauthStatus?.microsoftError) && (
+                  <div className="mt-4 rounded-md border px-4 py-3" style={{ borderColor: '#f5c6c6', background: '#fdeaea' }}>
+                    <p className="text-sm" style={{ color: '#c0392b' }}>{oauthStatus.googleError ?? oauthStatus.microsoftError}</p>
+                  </div>
+                )}
+
+                {!mailbox.availableProviders.length && (
+                  <div className="mt-4 rounded-md border px-4 py-3" style={{ borderColor: '#e8c4a0', background: '#fdf0e8' }}>
+                    <p className="text-sm" style={{ color: '#a85c2a' }}>
+                      Mailbox OAuth is not configured yet. You can finish setup and connect this later once Google or Microsoft credentials are configured.
+                    </p>
+                  </div>
+                )}
+
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                  <a
+                    href="/api/auth/google/start?from=/contractor/onboarding"
+                    className="rounded-xl px-4 py-2 text-sm font-semibold text-white"
+                    style={mailbox.availableProviders.includes('google')
+                      ? { background: '#1e3a2f' }
+                      : { background: '#8a9e96', pointerEvents: 'none' }}
+                  >
+                    {mailbox.provider === 'google' && mailbox.connected ? 'Reconnect Google' : 'Connect Gmail'}
+                  </a>
+                  <a
+                    href="/api/auth/microsoft/start?from=/contractor/onboarding"
+                    className="rounded-xl px-4 py-2 text-sm font-semibold text-white"
+                    style={mailbox.availableProviders.includes('microsoft_365')
+                      ? { background: '#4a6358' }
+                      : { background: '#8a9e96', pointerEvents: 'none' }}
+                  >
+                    {mailbox.provider === 'microsoft_365' && mailbox.connected ? 'Reconnect Microsoft 365' : 'Connect Outlook'}
+                  </a>
+                </div>
+              </div>
+            </section>
+          )}
         </div>
 
         <div className="mt-8 border-t pt-5" style={{ borderColor: '#ede8e2' }}>
@@ -596,18 +676,7 @@ export function ContractorOnboardingForm({
               Back
             </button>
             <div className="flex items-center gap-3">
-              {step === 1 && accountType === 'subcontractor' && (
-                <form action={skipContractorOnboardingAction}>
-                  <button
-                    type="submit"
-                    className="text-sm font-medium"
-                    style={{ color: '#8a9e96' }}
-                  >
-                    Skip
-                  </button>
-                </form>
-              )}
-              {accountType === 'subcontractor' && step === 0 ? (
+              {accountType === 'subcontractor' && step < totalSteps - 1 ? (
                 <button
                   type="button"
                   onClick={goNext}

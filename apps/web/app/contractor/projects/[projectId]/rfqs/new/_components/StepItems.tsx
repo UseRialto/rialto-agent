@@ -146,7 +146,6 @@ interface Props {
   bidDeadline: string
   deliveryRequiredBy: string
   category: string
-  attachmentUrls: string[]
   anonymousPublicListing: boolean
   rfpDetails: RFPDetails
   procurementRequirements: ProcurementRequirement[]
@@ -163,7 +162,6 @@ interface Props {
   onBidDeadlineChange: (v: string) => void
   onDeliveryRequiredByChange: (v: string) => void
   onCategoryChange: (v: string) => void
-  onAttachmentUrlsChange: (urls: string[]) => void
   onAnonymousPublicListingChange: (v: boolean) => void
   onRfpDetailsChange: (value: RFPDetails) => void
   onProcurementRequirementsChange: (items: ProcurementRequirement[]) => void
@@ -190,7 +188,6 @@ export function StepItems({
   bidDeadline,
   deliveryRequiredBy,
   category,
-  attachmentUrls,
   rfpDetails,
   fieldTemplate = [],
   vendorResponseFields = [],
@@ -205,7 +202,6 @@ export function StepItems({
   onBidDeadlineChange,
   onDeliveryRequiredByChange,
   onCategoryChange,
-  onAttachmentUrlsChange,
   onRfpDetailsChange,
   onTemplateFieldAdd,
   onTemplateFieldRemove,
@@ -241,7 +237,6 @@ export function StepItems({
   const spreadsheetViewportRef = useRef<HTMLDivElement>(null)
   const spreadsheetScrollbarRef = useRef<HTMLDivElement>(null)
   const [spreadsheetScrollWidth, setSpreadsheetScrollWidth] = useState(1)
-  const [uploadFolder] = useState(() => `request-attachments/${crypto.randomUUID().slice(0, 8)}`)
   const requestLabel = requestType === 'rfp' ? 'RFP' : 'RFQ'
   const isVisible = (field: RFQCreationFieldKey) => fieldVisibility[field] !== false
   const removeField = (field: RFQCreationFieldKey) => onFieldRemove?.(field)
@@ -389,21 +384,6 @@ export function StepItems({
     setSkuDropdowns((prev) => ({ ...prev, [key]: [] }))
   }
 
-  async function uploadAttachment(file: File) {
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('folder', uploadFolder)
-    const response = await fetch('/api/upload', {
-      method: 'POST',
-      body: formData,
-    })
-    const json = await response.json() as { url?: string; error?: string }
-    if (!response.ok || !json.url) {
-      throw new Error(json.error ?? 'Failed to upload file.')
-    }
-    return json.url
-  }
-
   async function inferTemplateFromImport(file: File) {
     const formData = new FormData()
     formData.append('file', file)
@@ -490,13 +470,6 @@ export function StepItems({
       if (parsed.length === 0) throw new Error('No usable material line items were found in this file.')
       onItemsChange(parsed)
       setMaterialEntryMode('manual')
-
-      try {
-        const uploadedUrl = await uploadAttachment(file)
-        onAttachmentUrlsChange([...attachmentUrls, uploadedUrl])
-      } catch (uploadError) {
-        console.warn('Import source attachment upload failed after import:', uploadError)
-      }
     } catch (error) {
       setImportError(error instanceof Error ? error.message : 'Failed to import file.')
     } finally {

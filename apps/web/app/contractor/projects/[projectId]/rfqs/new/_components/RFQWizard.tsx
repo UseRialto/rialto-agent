@@ -211,6 +211,8 @@ export function RFQWizard({
   const [customizeAssistantClosing, setCustomizeAssistantClosing] = useState(false)
   const [error, setError] = useState('')
   const fieldSettingsAnchorRef = useRef<HTMLDivElement>(null)
+  const wizardTopRef = useRef<HTMLDivElement>(null)
+  const stepScrollReadyRef = useRef(false)
   const saveDefaultResetRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoSaveDefaultRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const customizeAssistantCloseRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -253,6 +255,14 @@ export function RFQWizard({
   useEffect(() => {
     setFieldVisibility(sanitizeFieldVisibility(fieldVisibility))
   }, [])
+
+  useEffect(() => {
+    if (!stepScrollReadyRef.current) {
+      stepScrollReadyRef.current = true
+      return
+    }
+    wizardTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [step])
 
   useEffect(() => {
     if (!fieldSettingsOpen) {
@@ -488,7 +498,7 @@ export function RFQWizard({
           vendor_id: invite.id,
           vendor_email: invite.email,
           vendor_name: invite.name || invite.email || invite.id || '',
-          vendor_first_name: invite.nickname?.trim() || invite.firstName?.trim() || undefined,
+          vendor_first_name: invite.firstName?.trim() || undefined,
           vendor_last_name: invite.lastName?.trim() || undefined,
           on_platform: invite.onPlatform,
         })),
@@ -530,7 +540,7 @@ export function RFQWizard({
   }
 
   return (
-    <div>
+    <div ref={wizardTopRef}>
       {/* Main content */}
       <div className="flex-1 min-w-0">
         {/* Step indicator */}
@@ -699,7 +709,6 @@ export function RFQWizard({
             bidDeadline={bidDeadline}
             deliveryRequiredBy={deliveryRequiredBy}
             category={category}
-            attachmentUrls={attachmentUrls}
             anonymousPublicListing={anonymousPublicListing}
             rfpDetails={rfpDetails}
             procurementRequirements={procurementRequirements}
@@ -720,7 +729,6 @@ export function RFQWizard({
             onBidDeadlineChange={setBidDeadline}
             onDeliveryRequiredByChange={setDeliveryRequiredBy}
             onCategoryChange={setCategory}
-            onAttachmentUrlsChange={setAttachmentUrls}
             onAnonymousPublicListingChange={setAnonymousPublicListing}
             onRfpDetailsChange={setRfpDetails}
             onProcurementRequirementsChange={setProcurementRequirements}
@@ -794,6 +802,14 @@ export function RFQWizard({
             invites={invites}
             emailSubject={emailSubject}
             emailBody={emailBody}
+            onEmailSubjectChange={(value) => {
+              setEmailSubject(value)
+              setEmailSubjectCustomized(true)
+            }}
+            onEmailBodyChange={(value) => {
+              setEmailBody(value)
+              setEmailBodyCustomized(true)
+            }}
             projectId={projectId}
             rfqId={rfqId}
             onEditItems={() => setStep(0)}

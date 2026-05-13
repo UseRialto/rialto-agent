@@ -29,9 +29,9 @@ node scripts/seed.js
 ## Core Flows
 
 - Contractor creates Quote Request: `app/contractor/projects/[projectId]/rfqs/new/_components/RFQWizard.tsx`.
-- Items step: `StepItems.tsx`. CSV line items import into item cards. Reference files are uploaded from the AI Spec Assistant panel and saved in `attachment_urls`. Item-card fields and the AI Spec Assistant are customizable from the wizard settings control in `RFQWizard.tsx`; settings are persisted in localStorage.
+- Items step: `StepItems.tsx`. CSV line items import into item cards without automatically attaching the source file to vendor emails. Reference files are only saved in `attachment_urls` when explicitly attached from the vendor outreach email composer. Item-card fields and the AI Spec Assistant are customizable from the wizard settings control in `RFQWizard.tsx`; settings are persisted in localStorage.
 - Invite step: `StepInviteVendors.tsx`. Vendor search/invites live here. AI vendor outreach draft calls `/api/generate-email-draft`.
-- Review step: `StepReview.tsx`. Saves drafts and publishes requests. Email subject/body editing is intentionally not present on Review; the page shows a compact email summary, secure quote-form preview, and PDF preview. Do not re-add expanded specs/constraints or full email-body rendering here.
+- Review step: `StepReview.tsx`. Saves drafts and publishes requests. Email subject/body editing is intentionally present on Review so final wording can be adjusted immediately before publish; keep the secure quote-form preview and PDF preview available there. Do not re-add expanded specs/constraints here.
 - Draft quote requests should reopen the creation wizard using `?rfqId=...&step=review`, not the comparison page.
 - Contractor comparison page: `app/contractor/projects/[projectId]/rfqs/[rfqId]/_components/`.
 - Off-platform magic quote form: `app/vendor/magic-rfq/[token]/_components/MagicRFQFormClient.tsx`.
@@ -65,6 +65,6 @@ AI request authoring lives in `lib/ai/request-authoring.ts`.
 
 ## Mailbox and Magic Links
 
-- Mailbox OAuth is connect-only from contractor settings. It is not login.
+- Mailbox OAuth is connect-only from contractor settings or the optional contractor onboarding email step. It is not login.
 - Gmail and Microsoft sends use `lib/mail/service.ts`.
 - Off-platform invite sends create unique magic links in `rfq_magic_links`; schema enforces unique token hashes and one link per vendor request.

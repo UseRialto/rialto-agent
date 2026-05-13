@@ -1,14 +1,32 @@
 import { getSession } from '@/lib/auth/session'
 import { findUserById } from '@/lib/auth/users'
+import { getContractorMailboxSummary } from '@/lib/mail/service'
 import { ContractorOnboardingForm } from './_components/ContractorOnboardingForm'
 
 export const metadata = {
   title: 'Contractor Setup - Rialto',
 }
 
-export default async function ContractorOnboardingPage() {
+export default async function ContractorOnboardingPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{
+    google_connected?: string
+    google_error?: string
+    microsoft_connected?: string
+    microsoft_error?: string
+  }>
+}) {
   const session = await getSession()
   const user = session ? await findUserById(session.userId) : null
+  const mailbox = session ? await getContractorMailboxSummary(session.userId) : {
+    connected: false,
+    emailAddress: '',
+    senderName: '',
+    oauthAvailable: false,
+    availableProviders: [],
+  }
+  const params = searchParams ? await searchParams : undefined
   const name = user?.name ?? session?.name ?? 'there'
 
   return (
@@ -26,6 +44,13 @@ export default async function ContractorOnboardingPage() {
       <ContractorOnboardingForm
         initialCompanyName={user?.company_info?.company_name ?? ''}
         initialTrade={user?.company_info?.contractor_trade ?? ''}
+        mailbox={mailbox}
+        oauthStatus={{
+          googleConnected: params?.google_connected === '1',
+          googleError: params?.google_error,
+          microsoftConnected: params?.microsoft_connected === '1',
+          microsoftError: params?.microsoft_error,
+        }}
       />
     </div>
   )

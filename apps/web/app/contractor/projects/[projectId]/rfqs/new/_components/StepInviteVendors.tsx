@@ -10,7 +10,6 @@ export interface VendorInvite {
   email: string
   firstName?: string
   lastName?: string
-  nickname?: string
   onPlatform: boolean
 }
 
@@ -96,11 +95,21 @@ function extractText(el: HTMLElement): string {
 
 // --- Editable email body ----------------------------------------------------
 
-interface EditableEmailBodyHandle {
+export interface EditableEmailBodyHandle {
   insertFirstNameChip: () => void
 }
 
-function EditableEmailBody({
+export function normalizeVendorEmailDraft(value: string) {
+  const normalized = value
+    .replaceAll('{{vendor_name}}', '{{vendor_first_name}}')
+    .replaceAll('{{vendor_full_name}}', '{{vendor_first_name}}')
+    .trim()
+  if (!normalized) return normalized
+  if (normalized.includes('{{vendor_first_name}}')) return normalized
+  return normalized.replace(/^(hi|hello)(,|\s+)/i, 'Hello {{vendor_first_name}},\n\n')
+}
+
+export function EditableEmailBody({
   value,
   onChange,
   initKey,
@@ -204,32 +213,33 @@ export function StepInviteVendors({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  function callDraftApi(body: object) {
+  async function callDraftApi(body: object) {
     setGeneratingDraft(true)
     setDraftError('')
-    fetch('/api/generate-email-draft', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-      .then((res) => res.json())
-      .then((data: { draft?: string }) => {
-        if (data.draft) {
-          onEmailBodyChange(data.draft)
-          setInitKey((k) => k + 1)
-        } else {
-          setDraftError('Failed to generate draft. You can write one manually.')
-        }
+    try {
+      const response = await fetch('/api/generate-email-draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       })
-      .catch(() => setDraftError('Failed to generate draft. You can write one manually.'))
-      .finally(() => setGeneratingDraft(false))
+      const data = await response.json() as { draft?: string; error?: string }
+      if (!response.ok || !data.draft) {
+        throw new Error(data.error ?? 'Failed to generate draft.')
+      }
+      onEmailBodyChange(normalizeVendorEmailDraft(data.draft))
+      setInitKey((k) => k + 1)
+    } catch (error) {
+      setDraftError(error instanceof Error ? error.message : 'Failed to generate draft. You can write one manually.')
+    } finally {
+      setGeneratingDraft(false)
+    }
   }
 
   function refineDraft() {
-    if (!refinementPrompt.trim() || !emailBody) return
-    callDraftApi({
+    if (!refinementPrompt.trim()) return
+    void callDraftApi({
       rfqTitle, projectName, projectLocation, senderName, items, bidDeadline,
-      currentDraft: emailBody,
+      currentDraft: emailBody || undefined,
       refinementPrompt: refinementPrompt.trim(),
     })
     setRefinementPrompt('')
@@ -410,16 +420,6 @@ export function StepInviteVendors({
                             onBlur={(e) => (e.target.style.borderColor = '#e2d9cf')}
                           />
                         </div>
-                        <input
-                          type="text"
-                          value={inv.nickname ?? ''}
-                          onChange={(e) => updateInvite(inv.email, { nickname: e.target.value })}
-                          placeholder="Nickname (optional — used in email greeting)"
-                          className="w-full rounded-xl px-2.5 py-1.5 text-xs focus:outline-none transition-colors"
-                          style={{ border: '1px solid #e2d9cf', background: '#ffffff', color: '#1e3a2f', fontFamily: 'inherit' }}
-                          onFocus={(e) => (e.target.style.borderColor = '#fa6b04')}
-                          onBlur={(e) => (e.target.style.borderColor = '#e2d9cf')}
-                        />
                       </div>
                     )}
                     {!inv.onPlatform && (!(inv.firstName ?? '').trim() || !(inv.lastName ?? '').trim()) && (

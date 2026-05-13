@@ -8,6 +8,9 @@ const OAUTH_REDIRECT_URI_COOKIE = 'insiteai_google_oauth_redirect_uri'
 
 export async function GET(request: Request) {
   const session = await getSession()
+  const url = new URL(request.url)
+  const from = url.searchParams.get('from')
+  const returnTo = from?.startsWith('/contractor/') ? from : '/contractor/settings'
   if (!session) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
@@ -30,7 +33,7 @@ export async function GET(request: Request) {
       path: '/',
       maxAge: 60 * 10,
     })
-    response.cookies.set(OAUTH_RETURN_COOKIE, '/contractor/settings', {
+    response.cookies.set(OAUTH_RETURN_COOKIE, returnTo, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
@@ -40,7 +43,7 @@ export async function GET(request: Request) {
     return response
   } catch (error) {
     return NextResponse.redirect(
-      new URL(`/contractor/settings?google_error=${encodeURIComponent(humanizeMailError(error))}`, request.url),
+      new URL(`${returnTo}?google_error=${encodeURIComponent(humanizeMailError(error))}`, request.url),
     )
   }
 }

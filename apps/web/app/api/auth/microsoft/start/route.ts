@@ -11,7 +11,8 @@ export async function GET(request: Request) {
   const url = new URL(request.url)
   const from = url.searchParams.get('from')
   const isReconnect = Boolean(session?.role === 'contractor')
-  const returnTo = isReconnect ? '/contractor/settings' : (from || '/contractor/projects')
+  const safeFrom = from?.startsWith('/contractor/') ? from : undefined
+  const returnTo = safeFrom ?? (isReconnect ? '/contractor/settings' : '/contractor/projects')
 
   try {
     const redirectUri = new URL('/api/auth/microsoft/callback', request.url).toString()

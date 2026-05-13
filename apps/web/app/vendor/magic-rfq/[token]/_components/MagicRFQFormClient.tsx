@@ -193,7 +193,7 @@ function defaultBids(rfq: ContractorRFQ, existingBid: ContractorBid | null): Lin
       units_available: response?.units_available?.toString() ?? '',
       unit_price: response?.unit_price?.toString() ?? '',
       total_price: response?.total_price?.toString() ?? '',
-      lead_time_days: response?.lead_time_days?.toString() ?? item.suggested_lead_time_days?.toString() ?? '',
+      lead_time_days: response?.lead_time_days?.toString() ?? '',
       delivery_terms: response?.delivery_terms ?? '',
       substitution_notes: response?.substitution_notes ?? '',
       substitution_difference: responseIsAlternate ? response?.quoted_product_details ?? '' : '',
@@ -1246,8 +1246,8 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
   const existingBid = isPreview ? null : props.existingBid
   const initialMessages = isPreview ? [] : props.initialMessages ?? []
   const submittedAt = isPreview ? undefined : props.submittedAt
-  const [vendorName, setVendorName] = useState(initialVendorName)
-  const [designerName, setDesignerName] = useState(existingBid?.designer_name ?? '')
+  const [vendorName, setVendorName] = useState(existingBid?.vendor_name ?? '')
+  const [designerName, setDesignerName] = useState(existingBid?.designer_name ?? initialVendorName)
   const [overallNotes, setOverallNotes] = useState(existingBid?.notes ?? '')
   const [terms, setTerms] = useState<BidTerms>(existingBid?.terms ?? {})
   const [complianceCodes, setComplianceCodes] = useState<string[]>(
@@ -1264,6 +1264,13 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
   const [sendingMessage, setSendingMessage] = useState(false)
   const [messageError, setMessageError] = useState('')
   const [messageComposerOpen, setMessageComposerOpen] = useState(false)
+  const successRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!submitted) return
+    successRef.current?.focus()
+    successRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [submitted])
 
   function updateBid(id: string, partial: Partial<LineItemBid>) {
     setBids((prev) => prev.map((entry) => (entry.line_item_id === id ? { ...entry, ...partial } : entry)))
@@ -1334,18 +1341,20 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
         : 'does_not_match',
     }))
 
-    const result = await submitMagicRFQBidAction(props.token, vendorName, responses, overallNotes, {
-      terms,
-      complianceDeclarations,
-      designerName,
-    })
-    if (!result.success) {
-      setError(result.error ?? 'Failed to submit quote.')
+    try {
+      const result = await submitMagicRFQBidAction(props.token, vendorName, responses, overallNotes, {
+        terms,
+        complianceDeclarations,
+        designerName,
+      })
+      if (!result.success) {
+        setError(result.error ?? 'Failed to submit quote.')
+        return
+      }
+      setSubmitted(true)
+    } finally {
       setSubmitting(false)
-      return
     }
-    setSubmitted(true)
-    setSubmitting(false)
   }
 
   async function handleSendMessage() {
@@ -1354,7 +1363,8 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
     if (!trimmed) return
     setSendingMessage(true)
     setMessageError('')
-    const result = await submitMagicRFQMessageAction(props.token, vendorName || initialVendorName || vendorEmail, trimmed)
+    const authorName = designerName || vendorName || initialVendorName || vendorEmail
+    const result = await submitMagicRFQMessageAction(props.token, authorName, trimmed)
     if (!result.success) {
       setMessageError(result.error ?? 'Failed to send message.')
       setSendingMessage(false)
@@ -1365,7 +1375,7 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
       rfq_id: rfq.id,
       vendor_email: vendorEmail,
       author_role: 'vendor',
-      author_name: vendorName || initialVendorName || vendorEmail,
+      author_name: authorName,
       message: trimmed,
       created_at: new Date().toISOString(),
     }
@@ -1500,8 +1510,13 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
       </div>
 
       {submitted ? (
-        <div className="mb-6 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
-          Quote submitted. You can continue editing and resubmit from this same link until the RFQ deadline.
+        <div
+          ref={successRef}
+          tabIndex={-1}
+          className="mb-6 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 outline-none"
+        >
+          <p className="font-semibold">Quote submitted successfully.</p>
+          <p className="mt-1">You can continue editing and resubmit from this same link until the RFQ deadline.</p>
         </div>
       ) : null}
 
