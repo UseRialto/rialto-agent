@@ -2458,18 +2458,19 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                 while (i + span < visibleCols.length && visibleCols[i + span].kind !== 'vendor') span++
                 const groupKey = groupKeyForColumn(col, i)
                 const groupLabel = groupLabelForColumn(col, i)
-                cells.push(
+                const renderRequestedGroupCell = (start: number, cellSpan: number, stickyFrozen = false) => (
                   <div
-                    key={`gh-mr-${i}`}
-                    onClick={() => setSel((s) => ({ ...s, r: groupHeaderRowIdx, c: i }))}
+                    key={`gh-mr-${start}-${stickyFrozen ? 'frozen' : 'scroll'}`}
+                    onClick={() => setSel((s) => ({ ...s, r: groupHeaderRowIdx, c: start }))}
                     onDoubleClick={() => startGroupHeaderEdit(col, i)}
                     style={{
                       ...groupHeaderBase,
                       gridRow: groupHeaderRowIdx + 1,
-                      gridColumn: `${i + 2} / span ${span}`,
+                      gridColumn: `${start + 2} / span ${cellSpan}`,
                       position: 'sticky',
                       top: GROUP_HEADER_TOP,
-                      zIndex: 4,
+                      zIndex: stickyFrozen ? 7 : 4,
+                      ...(stickyFrozen ? { left: GUTTER_W, borderRight: strongBorder } : {}),
                     }}
                     title={groupLabel}
                   >
@@ -2486,10 +2487,16 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                         style={{ width: '100%', height: ROW_H - 6, border: '1px solid #2563eb', borderRadius: 3, padding: '0 6px', fontSize: 12, outline: 'none', background: '#ffffff', color: '#111827', fontWeight: 800, textAlign: 'center', textTransform: 'none' }}
                       />
                     ) : (
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{groupLabel}</span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{stickyFrozen ? '' : groupLabel}</span>
                     )}
-                  </div>,
+                  </div>
                 )
+                if (col.key === frozenColumnKey) {
+                  cells.push(renderRequestedGroupCell(i, 1, true))
+                  if (span > 1) cells.push(renderRequestedGroupCell(i + 1, span - 1))
+                } else {
+                  cells.push(renderRequestedGroupCell(i, span))
+                }
                 i += span
               }
             }
