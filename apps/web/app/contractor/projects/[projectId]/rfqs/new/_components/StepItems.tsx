@@ -415,15 +415,17 @@ export function StepItems({
     })
     const json = await response.json() as {
       customization?: { lineItemFields?: CustomLineItemFieldDefinition[] }
+      detectedHeaders?: string[]
       warnings?: string[]
       error?: string
     }
     if (!response.ok) {
       console.warn('Import template inference failed:', json.error)
-      return { fields: [] as CustomLineItemFieldDefinition[], warnings: json.error ? [json.error] : [] }
+      return { fields: [] as CustomLineItemFieldDefinition[], detectedHeaders: [] as string[], warnings: json.error ? [json.error] : [] }
     }
     return {
       fields: json.customization?.lineItemFields ?? [],
+      detectedHeaders: json.detectedHeaders ?? [],
       warnings: json.warnings ?? [],
     }
   }
@@ -433,9 +435,15 @@ export function StepItems({
     try {
       setUploadingFiles(true)
       const inferredTemplate = await inferTemplateFromImport(file)
-      const importFields = inferredTemplate.fields.length ? inferredTemplate.fields : fieldTemplate
+      const importFields = inferredTemplate.fields.length
+        ? inferredTemplate.fields
+        : inferredTemplate.detectedHeaders.length === 0
+          ? []
+          : fieldTemplate
       if (inferredTemplate.fields.length) {
         onTemplateReplace?.(inferredTemplate.fields)
+      } else if (inferredTemplate.detectedHeaders.length === 0) {
+        onTemplateReplace?.([])
       }
       const formData = new FormData()
       formData.append('file', file)

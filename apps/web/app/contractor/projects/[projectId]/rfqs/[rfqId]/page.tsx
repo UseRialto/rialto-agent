@@ -107,11 +107,11 @@ export default async function RFQDetailPage({
   if (isFullScreenComparison) {
     return (
       <div className="-m-6 min-h-[calc(100vh+13rem)]" style={{ background: '#eef3f0' }}>
-        <div data-testid="rfq-comparison-overview" className="border-b px-5 pt-4" style={{ borderColor: '#d9e0dc', background: '#f8faf9' }}>
+        <div data-testid="rfq-comparison-overview" className="relative z-20 border-b px-5 pt-4" style={{ borderColor: '#d9e0dc', background: '#f8faf9' }}>
           <nav className="mb-3 text-xs" style={{ color: '#587067' }}>
-            <Link href="/contractor/projects" className="hover:underline" style={{ color: '#8a9e96' }}>Projects</Link>
+            <a href="/contractor/projects" className="hover:underline" style={{ color: '#8a9e96' }}>Projects</a>
             <span className="mx-2">/</span>
-            <Link href={`/contractor/projects/${projectId}`} className="hover:underline" style={{ color: '#8a9e96' }}>{project.name}</Link>
+            <a href={`/contractor/projects/${projectId}`} className="hover:underline" style={{ color: '#8a9e96' }}>{project.name}</a>
             <span className="mx-2">/</span>
             <span className="font-medium" style={{ color: '#4a6358' }}>{rfq.title}</span>
           </nav>

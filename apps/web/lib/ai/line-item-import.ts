@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import { z } from 'zod'
 import {
   BUILT_IN_LINE_ITEM_FIELD_BANK,
@@ -31,7 +33,7 @@ export interface ImportWarning {
 export interface ImportLineItemsResult {
   items: ImportedLineItem[]
   metadata: {
-    parser: 'deterministic-table' | 'deterministic-lines'
+    parser: 'deterministic-table' | 'deterministic-headerless-table' | 'deterministic-lines' | 'ai-table'
     confidence: number
     warnings: ImportWarning[]
     skippedRows: number
@@ -90,6 +92,26 @@ const importResponseSchema = z.object({
     z.object({ row: z.number().optional(), message: z.string() }),
   ])).optional().default([]),
 })
+
+let envLoaded = false
+
+function ensureLocalEnvLoaded() {
+  if (envLoaded) return
+  envLoaded = true
+  try {
+    const lines = readFileSync(join(process.cwd(), '.env.local'), 'utf8').split('\n')
+    for (const line of lines) {
+      const eq = line.indexOf('=')
+      if (eq > 0) {
+        const key = line.slice(0, eq).trim()
+        const val = line.slice(eq + 1).trim()
+        if (key && !process.env[key]) process.env[key] = val
+      }
+    }
+  } catch {}
+}
+
+const UNIT_CELL_PATTERN = /^(?:ea|each|pcs?|pieces?|sf|sq\.?\s*ft|sqft|ft2|lf|lft|lin\.?\s*ft|linear\s*ft|ft|cy|cu\.?\s*yd|cubic\s*yd|yd3|tons?|tn|tonnes?|bf|sheets?|lbs?|lb|pounds?)$/i
 
 const FIELD_ALIASES = {
   sku: ['sku', 'item no', 'item #', 'item number', 'part', 'part no', 'part number', 'code', 'product code', 'material code'],
@@ -234,8 +256,31 @@ function aliasMatches(header: string, aliases: readonly string[]) {
   const normalized = normalizeHeader(header)
   return aliases.some((alias) => {
     const target = normalizeHeader(alias)
+    if (target.length <= 3) return normalized === target
     return normalized === target || normalized.includes(target)
   })
+}
+
+function isUnitCell(value: unknown) {
+  return UNIT_CELL_PATTERN.test(compactCell(value, 40).replace(/\./g, '').trim())
+}
+
+function hasNumericCell(value: unknown) {
+  return toNumber(value) !== undefined
+}
+
+function rowLooksLikeLineItemData(row: string[]) {
+  const nonEmpty = row.map((cell) => compactCell(cell)).filter(Boolean)
+  if (nonEmpty.length < 2) return false
+  const hasDescription = nonEmpty.some((cell) => /[A-Za-z]/.test(cell) && cell.length >= 4 && !isUnitCell(cell))
+  const hasCombinedQuantityUnit = nonEmpty.some((cell) => {
+    const parsed = parseQuantityUnit(cell)
+    return (parsed.quantity ?? 0) > 0 && Boolean(parsed.unit)
+  })
+  const hasAdjacentQuantityUnit = row.some((cell, index) => (
+    hasNumericCell(cell) && (isUnitCell(row[index - 1]) || isUnitCell(row[index + 1]))
+  ))
+  return hasDescription && (hasCombinedQuantityUnit || hasAdjacentQuantityUnit)
 }
 
 function mapHeaderToAttribute(header: string, order: number): ProcurementLineItemAttribute | null {
@@ -278,31 +323,50 @@ function findColumns(headers: string[], aliases: readonly string[]) {
 
 function scoreHeader(headers: string[]) {
   const normalized = headers.map(normalizeHeader)
-  const groups = [
-    FIELD_ALIASES.sku,
-    FIELD_ALIASES.description,
-    FIELD_ALIASES.quantity,
-    FIELD_ALIASES.unit,
-    FIELD_ALIASES.specs,
-    FIELD_ALIASES.certifications,
-    FIELD_ALIASES.budget,
-    FIELD_ALIASES.leadTime,
-  ]
-  return groups.reduce((score, aliases) => (
+  const groups = {
+    sku: FIELD_ALIASES.sku,
+    description: FIELD_ALIASES.description,
+    quantity: FIELD_ALIASES.quantity,
+    unit: FIELD_ALIASES.unit,
+    specs: FIELD_ALIASES.specs,
+    certifications: FIELD_ALIASES.certifications,
+    budget: FIELD_ALIASES.budget,
+    leadTime: FIELD_ALIASES.leadTime,
+    notes: FIELD_ALIASES.notes,
+  }
+  const matched = Object.fromEntries(Object.entries(groups).map(([key, aliases]) => [
+    key,
     normalized.some((header) => aliases.some((alias) => header === normalizeHeader(alias) || header.includes(normalizeHeader(alias))))
-      ? score + 1
-      : score
-  ), 0)
+  ])) as Record<keyof typeof groups, boolean>
+  const optionalScore = [
+    matched.specs,
+    matched.certifications,
+    matched.budget,
+    matched.leadTime,
+    matched.notes,
+  ].filter(Boolean).length
+  const coreScore = [
+    matched.sku,
+    matched.description,
+    matched.quantity,
+    matched.unit,
+  ].filter(Boolean).length
+  const hasItemHeader = matched.sku || matched.description
+  const hasQuantityHeader = matched.quantity
+  const hasUnitHeader = matched.unit
+  if (!hasItemHeader || (!hasQuantityHeader && !hasUnitHeader)) return 0
+  return coreScore * 2 + optionalScore
 }
 
 function detectHeaderRow(rows: string[][]) {
   const candidates = rows.slice(0, Math.min(rows.length, 8))
   let best = { index: -1, score: 0 }
   candidates.forEach((row, index) => {
+    if (rowLooksLikeLineItemData(row)) return
     const score = scoreHeader(row)
     if (score > best.score) best = { index, score }
   })
-  return best.score >= 2 ? best.index : -1
+  return best.score >= 4 ? best.index : -1
 }
 
 function compactCell(value: unknown, max = 500) {
@@ -423,10 +487,15 @@ function sanitizeItems(rawItems: RawItem[], category?: string): ParsedAttempt {
     const quantityUnit = parseQuantityUnit(item.quantity)
     const quantity = Math.max(quantityUnit.quantity ?? toNumber(item.quantity) ?? 0, 0)
     if (quantity <= 0) {
-      warnings.push({ row: raw.sourceRow, message: 'Imported row has no positive quantity and needs review.' })
+      skippedRows += 1
+      warnings.push({ row: raw.sourceRow, message: 'Skipped row with no positive quantity.' })
+      return []
     }
 
     const unitText = compactCell(item.unit, 40) || quantityUnit.unit
+    if (!unitText) {
+      warnings.push({ row: raw.sourceRow, message: 'Imported row has no explicit unit; Rialto inferred one from the item description.' })
+    }
     const budget = toNumber(item.contractor_budget)
     const leadTime = toNumber(item.suggested_lead_time_days)
 
@@ -542,6 +611,125 @@ function deterministicTableImport(text: string, category?: string): ParsedAttemp
   }
 }
 
+function findQuantityUnitInRow(row: string[]) {
+  const candidates: Array<{ quantity: number; unit: string; quantityIndex: number; unitIndex: number; score: number }> = []
+
+  row.forEach((cell, index) => {
+    const parsed = parseQuantityUnit(cell)
+    if ((parsed.quantity ?? 0) > 0 && parsed.unit) {
+      candidates.push({
+        quantity: parsed.quantity!,
+        unit: parsed.unit,
+        quantityIndex: index,
+        unitIndex: index,
+        score: 3,
+      })
+    }
+
+    const quantity = toNumber(cell)
+    if (!quantity || quantity <= 0) return
+    for (const unitIndex of [index + 1, index - 1]) {
+      if (!isUnitCell(row[unitIndex])) continue
+      candidates.push({
+        quantity,
+        unit: compactCell(row[unitIndex], 40),
+        quantityIndex: index,
+        unitIndex,
+        score: unitIndex === index + 1 ? 5 : 4,
+      })
+    }
+  })
+
+  return candidates.sort((a, b) => b.score - a.score || a.quantityIndex - b.quantityIndex)[0]
+}
+
+function textValueScore(value: string) {
+  if (!value || isUnitCell(value)) return -1
+  if (hasNumericCell(value) && !/[A-Za-z]/.test(value)) return -1
+  if (/^(?:notes?|comments?|remarks?|total|subtotal|page|section)\b[:\s-]*$/i.test(value)) return -2
+  const letterCount = (value.match(/[A-Za-z]/g) ?? []).length
+  const wordCount = value.split(/\s+/).filter(Boolean).length
+  return letterCount + wordCount * 4 + Math.min(value.length, 120) / 4
+}
+
+function deterministicHeaderlessTableImport(text: string, category?: string): ParsedAttempt {
+  const { rows } = tableRowsFromText(text)
+  if (rows.length < 1) return { items: [], warnings: [], skippedRows: 0, confidence: 0 }
+  if (detectHeaderRow(rows) >= 0) return { items: [], warnings: [], skippedRows: 0, confidence: 0 }
+
+  const rawItems: RawItem[] = []
+  let skippedRows = 0
+  const warnings: ImportWarning[] = []
+
+  rows.forEach((row, index) => {
+    const quantityUnit = findQuantityUnitInRow(row)
+    if (!quantityUnit) {
+      skippedRows += 1
+      return
+    }
+
+    const textCandidates = row
+      .map((cell, columnIndex) => ({ columnIndex, value: compactCell(cell, 220) }))
+      .filter(({ columnIndex, value }) => {
+        if (columnIndex === quantityUnit.quantityIndex || columnIndex === quantityUnit.unitIndex) return false
+        if (columnIndex > quantityUnit.quantityIndex && row.slice(0, quantityUnit.quantityIndex).some((candidate) => textValueScore(compactCell(candidate)) > 0)) return false
+        return textValueScore(value) > 0
+      })
+      .sort((a, b) => a.columnIndex - b.columnIndex)
+
+    const beforeQuantityCandidates = textCandidates.filter((candidate) => candidate.columnIndex < quantityUnit.quantityIndex)
+    const primaryCandidate = beforeQuantityCandidates[0] ?? textCandidates[0]
+    const secondaryCandidate = beforeQuantityCandidates[1]
+    const firstLooksLikeSku = Boolean(primaryCandidate && /^[A-Z0-9][A-Z0-9._/#-]{2,}$/i.test(primaryCandidate.value) && !/\s/.test(primaryCandidate.value))
+    const descriptionCandidate = firstLooksLikeSku && secondaryCandidate ? secondaryCandidate : primaryCandidate
+    const sku = firstLooksLikeSku && secondaryCandidate ? primaryCandidate.value : ''
+    const description = descriptionCandidate?.value ?? ''
+    if (!description) {
+      skippedRows += 1
+      warnings.push({ row: index + 1, message: 'Skipped row because no item description or SKU was found near the quantity.' })
+      return
+    }
+
+    const tailCells = row
+      .map((cell, columnIndex) => ({ columnIndex, value: compactCell(cell, 300) }))
+      .filter(({ columnIndex, value }) => (
+        value &&
+        columnIndex !== quantityUnit.quantityIndex &&
+        columnIndex !== quantityUnit.unitIndex &&
+        value !== sku &&
+        value !== description &&
+        columnIndex > (descriptionCandidate?.columnIndex ?? -1)
+      ))
+      .map(({ value }) => value)
+
+    const certificationCells = tailCells.filter((value) => /\b(?:ASTM|AISC|ISO|UL|FM|ANSI|NFPA)\b/i.test(value))
+    const specCells = tailCells.filter((value) => !certificationCells.includes(value))
+
+    rawItems.push({
+      sourceRow: index + 1,
+      sku,
+      description,
+      quantity: String(quantityUnit.quantity),
+      unit: quantityUnit.unit,
+      specs: specCells.join('; '),
+      certifications: certificationCells,
+    })
+  })
+
+  const result = sanitizeItems(rawItems, category)
+  const importedCount = result.items.length
+  const confidence = importedCount > 0
+    ? Math.min(0.88, Math.max(0.55, 0.62 + Math.min(importedCount, 5) * 0.05 - Math.min(skippedRows, 3) * 0.02))
+    : 0
+
+  return {
+    items: result.items,
+    warnings: [...warnings, ...result.warnings],
+    skippedRows: skippedRows + result.skippedRows,
+    confidence,
+  }
+}
+
 function deterministicQuantityLineImport(text: string, category?: string): ParsedAttempt {
   const unitPattern = '(?:ea|each|pcs?|pieces?|sf|sq\\.?\\s*ft|sqft|lf|lin\\.?\\s*ft|linear\\s*ft|cy|cu\\.?\\s*yd|cubic\\s*yd|tons?|tn|tonnes?|bf|sheets?)'
   const linePattern = new RegExp(`^(.+?)\\s+([0-9][0-9,]*(?:\\.\\d+)?)\\s+(${unitPattern})\\b\\s*(.*)$`, 'i')
@@ -566,6 +754,76 @@ function deterministicQuantityLineImport(text: string, category?: string): Parse
     confidence: result.items.length > 0 ? 0.65 : 0,
   }
 }
+
+function warningObjects(warnings: z.infer<typeof importResponseSchema>['warnings']): ImportWarning[] {
+  return warnings.map((warning) => (
+    typeof warning === 'string'
+      ? { message: warning }
+      : { row: warning.row, message: warning.message }
+  ))
+}
+
+async function aiLineItemImport(input: ImportInput, normalizedText: string): Promise<ParsedAttempt | null> {
+  ensureLocalEnvLoaded()
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) return null
+
+  const hint = buildStructuredHint(normalizedText)
+  const prompt = [
+    `Filename: ${input.filename}`,
+    `Request type: ${input.requestType ?? 'rfq'}`,
+    `Project: ${input.projectName || 'unknown'}`,
+    `Category: ${input.category || 'unknown'}`,
+    `Source kind: ${input.sourceKind ?? 'text'}`,
+    '',
+    'Detected table hint:',
+    JSON.stringify(hint, null, 2),
+    '',
+    'File text:',
+    normalizedText.slice(0, 24_000),
+  ].join('\n')
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: process.env.OPENAI_MODEL || 'gpt-5-mini',
+      response_format: { type: 'json_object' },
+      max_completion_tokens: 1800,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You extract construction procurement line items from messy CSV, Excel, PDF text, and takeoff tables.',
+            'Return strict JSON with { "items": [...], "warnings": [...] }.',
+            'Each item must have a general item/description or SKU, a positive numeric quantity, and a unit.',
+            'Use sku only for true item codes, part numbers, or catalog identifiers; otherwise put the item name in description.',
+            'Treat rows as data unless a row clearly contains column labels for item plus quantity or unit.',
+            'Never treat simple row values like "12800", "SF", "ASTM C..." or material notes as column names.',
+            'Skip title rows, note paragraphs, section headings, subtotal/total rows, and rows without quantity and unit.',
+            'Optional fields: specs, constraints, certifications, notes, contractor_budget, suggested_lead_time_days.',
+          ].join(' '),
+        },
+        { role: 'user', content: prompt },
+      ],
+    }),
+  })
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    throw new Error(`OpenAI line item import failed with ${response.status}. ${detail.slice(0, 240)}`)
+  }
+  const json = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
+  const content = json.choices?.[0]?.message?.content?.trim()
+  if (!content) throw new Error('OpenAI line item import returned an empty response.')
+  const parsed = importResponseSchema.parse(parseJsonResponse<unknown>(content))
+  const result = sanitizeItems(parsed.items, input.category)
+  return {
+    ...result,
+    warnings: [...warningObjects(parsed.warnings), ...result.warnings],
+    confidence: result.items.length > 0 ? Math.max(result.confidence, 0.86) : 0,
+  }
+}
+
 export async function importLineItems(input: ImportInput): Promise<ImportLineItemsResult> {
   const normalizedText = normalizeText(input.text)
   if (!normalizedText) throw new Error('Import file is empty.')
@@ -583,6 +841,19 @@ export async function importLineItems(input: ImportInput): Promise<ImportLineIte
     }
   }
 
+  const headerlessTableResult = deterministicHeaderlessTableImport(normalizedText, input.category)
+  if (headerlessTableResult.items.length > 0 && headerlessTableResult.confidence >= 0.7) {
+    return {
+      items: headerlessTableResult.items,
+      metadata: {
+        parser: 'deterministic-headerless-table',
+        confidence: headerlessTableResult.confidence,
+        warnings: [...(input.extractionWarnings ?? []), ...headerlessTableResult.warnings],
+        skippedRows: headerlessTableResult.skippedRows,
+      },
+    }
+  }
+
   const lineResult = deterministicQuantityLineImport(normalizedText, input.category)
   if (lineResult.items.length > 0 && lineResult.confidence >= 0.65) {
     return {
@@ -595,12 +866,40 @@ export async function importLineItems(input: ImportInput): Promise<ImportLineIte
       },
     }
   }
-  const bestFallback = tableResult.items.length >= lineResult.items.length ? tableResult : lineResult
+
+  try {
+    const aiResult = await aiLineItemImport(input, normalizedText)
+    if (aiResult && aiResult.items.length > 0) {
+      return {
+        items: aiResult.items,
+        metadata: {
+          parser: 'ai-table',
+          confidence: aiResult.confidence,
+          warnings: [...(input.extractionWarnings ?? []), ...aiResult.warnings],
+          skippedRows: aiResult.skippedRows,
+        },
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'AI import failed.'
+    const bestDeterministic = [tableResult, headerlessTableResult, lineResult]
+      .sort((a, b) => b.items.length - a.items.length || b.confidence - a.confidence)[0]
+    if (bestDeterministic.items.length > 0) {
+      bestDeterministic.warnings.push({ message: `${message} Falling back to deterministic import.` })
+    }
+  }
+
+  const bestFallback = [tableResult, headerlessTableResult, lineResult]
+    .sort((a, b) => b.items.length - a.items.length || b.confidence - a.confidence)[0]
   if (bestFallback.items.length > 0) {
     return {
       items: bestFallback.items,
       metadata: {
-        parser: tableResult.items.length >= lineResult.items.length ? 'deterministic-table' : 'deterministic-lines',
+        parser: bestFallback === tableResult
+          ? 'deterministic-table'
+          : bestFallback === headerlessTableResult
+            ? 'deterministic-headerless-table'
+            : 'deterministic-lines',
         confidence: bestFallback.confidence,
         warnings: [
           ...(input.extractionWarnings ?? []),

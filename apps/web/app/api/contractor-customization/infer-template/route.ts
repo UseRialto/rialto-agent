@@ -28,6 +28,33 @@ function normalizeHeader(value: string) {
   return value.replace(/[_/-]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
+const UNIT_CELL_PATTERN = /^(?:ea|each|pcs?|pieces?|sf|sq\.?\s*ft|sqft|ft2|lf|lft|lin\.?\s*ft|linear\s*ft|ft|cy|cu\.?\s*yd|cubic\s*yd|yd3|tons?|tn|tonnes?|bf|sheets?|lbs?|lb|pounds?)$/i
+
+function toNumber(value: string) {
+  const match = value.match(/-?\$?\s*[0-9][0-9,\s]*(?:\.[0-9]+)?/)
+  if (!match) return undefined
+  const parsed = Number.parseFloat(match[0].replace(/[$,\s]/g, ''))
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function isUnitCell(value: string) {
+  return UNIT_CELL_PATTERN.test(normalizeHeader(value).replace(/\./g, ''))
+}
+
+function rowLooksLikeLineItemData(row: string[]) {
+  const cells = row.map(normalizeHeader).filter(Boolean)
+  if (cells.length < 2) return false
+  const hasDescription = cells.some((cell) => /[A-Za-z]/.test(cell) && cell.length >= 4 && !isUnitCell(cell))
+  const hasCombinedQuantityUnit = cells.some((cell) => {
+    const quantity = toNumber(cell)
+    return Boolean(quantity && quantity > 0 && /\b(?:ea|each|sf|lf|cy|tons?|tn|bf|sheets?|lbs?)\b/i.test(cell))
+  })
+  const hasAdjacentQuantityUnit = row.some((cell, index) => (
+    toNumber(cell) !== undefined && (isUnitCell(row[index - 1] ?? '') || isUnitCell(row[index + 1] ?? ''))
+  ))
+  return hasDescription && (hasCombinedQuantityUnit || hasAdjacentQuantityUnit)
+}
+
 function titleCaseHeaderLabel(value: string) {
   const acronyms = new Set(['sku', 'rfq', 'uom', 'hvac', 'mep', 'astm', 'ul', 'psi', 'pdf', 'csv', 'bom'])
   return normalizeHeader(value)
@@ -77,19 +104,36 @@ async function extractPdfText(buffer: Buffer) {
 }
 
 function scoreHeaderRow(row: string[]) {
-  const text = row.join(' ').toLowerCase()
-  const hits = ['description', 'qty', 'quantity', 'unit', 'size', 'finish', 'grade', 'spec', 'manufacturer', 'model', 'location']
-    .filter((token) => text.includes(token)).length
-  return hits + Math.min(row.filter(Boolean).length, 12) / 20
+  if (rowLooksLikeLineItemData(row)) return 0
+  const cells = row.map((cell) => normalizeHeader(cell).toLowerCase()).filter(Boolean)
+  const hasItemHeader = cells.some((cell) => /^(?:sku|item|item description|description|desc|material|material description|product|product description)$/.test(cell))
+  const hasQuantityHeader = cells.some((cell) => /^(?:qty|quantity|takeoff|take off|amount|count|order qty|required qty)$/.test(cell))
+  const hasUnitHeader = cells.some((cell) => /^(?:unit|units|uom|u m|unit of measure|measure)$/.test(cell))
+  if (!hasItemHeader || (!hasQuantityHeader && !hasUnitHeader)) return 0
+
+  const optionalHits = cells.filter((cell) => (
+    /^(?:size|finish|grade|spec|specs|specification|manufacturer|model|location|phase|area|notes|comments|standard|compliance)$/.test(cell)
+  )).length
+  return 4 + (hasQuantityHeader ? 2 : 0) + (hasUnitHeader ? 2 : 0) + optionalHits
 }
 
 function findHeaderRow(rows: string[][]) {
-  return rows.slice(0, 10).sort((a, b) => scoreHeaderRow(b) - scoreHeaderRow(a))[0] ?? []
+  const candidates = rows.slice(0, 10)
+    .map((row) => ({ row, score: scoreHeaderRow(row) }))
+    .sort((a, b) => b.score - a.score)
+  return (candidates[0]?.score ?? 0) >= 6 ? candidates[0].row : []
 }
 
 function mapHeaderToField(header: string, order: number): CustomLineItemFieldDefinition | null {
   const normalized = normalizeHeader(header)
-  if (!normalized || /^(#|no\.?)$/i.test(normalized) || isCoreLineItemFieldLike(normalized)) return null
+  if (
+    !normalized ||
+    /^(#|no\.?)$/i.test(normalized) ||
+    isCoreLineItemFieldLike(normalized) ||
+    isUnitCell(normalized) ||
+    toNumber(normalized) !== undefined ||
+    normalized.length > 60
+  ) return null
   const key = normalizeFieldKey(normalized)
   const bank = BUILT_IN_LINE_ITEM_FIELD_BANK.find((entry) => {
     const entryKey = normalizeFieldKey(entry.key)

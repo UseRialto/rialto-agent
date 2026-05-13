@@ -54,12 +54,41 @@ async function extractPdfText(buffer: Buffer) {
   return pageTexts.filter(Boolean).join('\n')
 }
 
+const SPREADSHEET_UNIT_PATTERN = /^(?:ea|each|pcs?|pieces?|sf|sq\.?\s*ft|sqft|ft2|lf|lft|lin\.?\s*ft|linear\s*ft|ft|cy|cu\.?\s*yd|cubic\s*yd|yd3|tons?|tn|tonnes?|bf|sheets?|lbs?|lb|pounds?)$/i
+
+function spreadsheetNumber(value: string) {
+  const match = value.match(/-?\$?\s*[0-9][0-9,\s]*(?:\.[0-9]+)?/)
+  if (!match) return undefined
+  const parsed = Number.parseFloat(match[0].replace(/[$,\s]/g, ''))
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function scoreWorksheetRows(rows: string[][]) {
+  let materialRowScore = 0
+  let headerScore = 0
+  for (const row of rows.slice(0, 80)) {
+    const cells = row.map((cell) => cell.trim()).filter(Boolean)
+    if (cells.length === 0) continue
+    const hasText = cells.some((cell) => /[A-Za-z]/.test(cell) && cell.length > 3 && !SPREADSHEET_UNIT_PATTERN.test(cell))
+    const hasCombinedQuantityUnit = cells.some((cell) => /[0-9]/.test(cell) && /\b(?:ea|each|sf|lf|cy|tons?|tn|bf|sheets?|lbs?)\b/i.test(cell))
+    const hasAdjacentQuantityUnit = row.some((cell, index) => (
+      spreadsheetNumber(cell) !== undefined &&
+      (SPREADSHEET_UNIT_PATTERN.test(row[index + 1]?.trim() ?? '') || SPREADSHEET_UNIT_PATTERN.test(row[index - 1]?.trim() ?? ''))
+    ))
+    if (hasText && (hasCombinedQuantityUnit || hasAdjacentQuantityUnit)) materialRowScore += 3
+    const normalized = cells.join(' ').toLowerCase()
+    if (/\b(?:sku|item|description|material|qty|quantity|takeoff|unit|uom)\b/.test(normalized)) headerScore += 1
+  }
+  return materialRowScore + headerScore + Math.min(rows.length, 20) / 20
+}
+
 async function extractExcelText(buffer: Buffer) {
   const XLSX = await import('xlsx')
   const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false })
   const warnings: ImportWarning[] = []
   let selectedSheetName = ''
   let selectedRows: string[][] = []
+  let selectedScore = -1
 
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName]
@@ -74,9 +103,12 @@ async function extractExcelText(buffer: Buffer) {
       .filter((row) => row.some(Boolean))
 
     if (rows.length >= 2) {
-      selectedSheetName = sheetName
-      selectedRows = rows
-      break
+      const score = scoreWorksheetRows(rows)
+      if (score > selectedScore) {
+        selectedScore = score
+        selectedSheetName = sheetName
+        selectedRows = rows
+      }
     }
   }
 
@@ -86,8 +118,9 @@ async function extractExcelText(buffer: Buffer) {
 
   const ignoredSheets = workbook.SheetNames.filter((sheetName) => sheetName !== selectedSheetName)
   if (ignoredSheets.length > 0) {
+    const preview = ignoredSheets.slice(0, 3).map((sheetName) => `"${sheetName}"`).join(', ')
     warnings.push({
-      message: `Imported worksheet "${selectedSheetName}" and ignored ${ignoredSheets.length} other sheet${ignoredSheets.length === 1 ? '' : 's'}.`,
+      message: `Imported worksheet "${selectedSheetName}" and ignored ${ignoredSheets.length} other sheet${ignoredSheets.length === 1 ? '' : 's'}${preview ? ` (${preview})` : ''}.`,
     })
   }
 
