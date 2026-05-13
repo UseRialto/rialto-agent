@@ -87,6 +87,7 @@ export class AgentHttpService {
     try {
       return { status: 200, body: await this.core.runTurn(parsed.data) }
     } catch (error) {
+      console.error('Rialto Agent turn failed:', error)
       return {
         status: 502,
         body: {
@@ -122,6 +123,7 @@ export class AgentHttpService {
       const response = await this.core.runTurn(parsed.data, { onProgress: sendProgress })
       emit('final', response)
     } catch (error) {
+      console.error('Rialto Agent streaming turn failed:', error)
       emit('error', {
         status: 'tool_error',
         error: agentRuntimeFailureMessage(error),
@@ -189,6 +191,15 @@ export function isExcelFile(filename: string, mimeType?: string) {
 
 export function agentRuntimeFailureMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
+  if (/exceeded your current quota|check your plan and billing|insufficient_quota/i.test(message)) {
+    return 'The configured OpenAI API key has exceeded its quota. Check OpenAI billing or replace OPENAI_API_KEY in Vercel.'
+  }
+  if (/\b429\b|rate limit/i.test(message)) {
+    return 'Rialto Agent hit an OpenAI rate limit. Retry shortly or check the configured model/API key limits.'
+  }
+  if (/\b401\b|invalid api key|incorrect api key|unauthorized/i.test(message)) {
+    return 'Rialto Agent could not authenticate with OpenAI. Check OPENAI_API_KEY in Vercel.'
+  }
   if (/connection error|fetch failed|getaddrinfo|enotfound|api\.openai\.com/i.test(message)) {
     return 'Rialto Agent could not reach the OpenAI model API. Check network/DNS and retry.'
   }
