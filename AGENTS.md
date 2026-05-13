@@ -23,3 +23,9 @@ This is a single-context repo with one root `CONTEXT.md` and architecture decisi
 - Prefer small vertical slices with tests or executable verification.
 - Update `CONTEXT.md` when a stable domain term becomes clear.
 - Add an ADR when a decision would be expensive to reverse or future agents are likely to wonder why it was made.
+
+## Recent implementation notes
+
+- Quote comparison alternate/substitution highlighting is explicit-only. Imported vendor quote notes, differing descriptions, differing SKUs, and language such as "alternate manufacturer" or "substitution" should not set `is_alternate` or draw the orange alternate outline; imported quote rows are forced to `is_alternate: false`. Internal RFQ responses should set the flag only from an explicit vendor substitution action, currently the magic RFQ form substitution flow.
+- The Rialto Agent API runs inside the Next.js app for Vercel production. Avoid reintroducing a dependency on a local-only agent server for production chat flows.
+- PDF text extraction on Vercel avoids native canvas bindings by using the repo's PDF runtime shim. Avoid importing native canvas into production route code unless the deployment path is verified.

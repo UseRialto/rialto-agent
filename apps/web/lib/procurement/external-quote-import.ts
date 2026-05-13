@@ -641,6 +641,7 @@ export function createExternalQuoteImport(input: ExternalQuoteImportInput): Exte
           total_price: line.totalPrice,
           lead_time_days: line.leadTimeDays,
           availability: 'can_source' as const,
+          is_alternate: false,
           notes: compact([`Imported from ${input.filename}, source row ${line.sourceRow}.`, line.notes].filter(Boolean).join(' ')),
           response_attributes: [{
             key: 'source_row',
@@ -701,7 +702,8 @@ export function createExternalQuoteImport(input: ExternalQuoteImportInput): Exte
       bids,
       warnings: [
         ...genericImport.warnings,
-        { message: 'Review imported multiple supplier coverage, no-bid rows, alternates, and totals before relying on comparisons.' },
+        { message: 'Review imported multiple supplier coverage, no-bid rows, imported notes, and totals before relying on comparisons.' },
+        { message: 'Imported quote notes are preserved as notes only; they do not mark rows as alternates or substitutions.' },
       ],
     }
   }
@@ -732,6 +734,7 @@ export function createExternalQuoteImport(input: ExternalQuoteImportInput): Exte
       total_price: line.totalPrice,
       lead_time_days: 0,
       availability: 'can_source' as const,
+      is_alternate: false,
       notes: `Imported from ${input.filename}, source row ${line.sourceRow}.`,
       response_attributes: [
         {
@@ -880,6 +883,7 @@ export function createExternalQuoteImportFromFiles(input: ExternalQuoteImportBat
         return [{
           ...response,
           line_item_id: canonicalLineItemId,
+          is_alternate: false,
           notes: compact([response.notes, `Source file: ${file.filename}.`].filter(Boolean).join(' ')),
         }]
       })
@@ -935,7 +939,8 @@ export function createExternalQuoteImportFromFiles(input: ExternalQuoteImportBat
     warnings: [
       ...warnings,
       { message: `Imported ${bids.length} vendor quote response${bids.length === 1 ? '' : 's'} from ${importedFiles.length} file${importedFiles.length === 1 ? '' : 's'}.` },
-      { message: 'Review normalized line-item matches, no-bid rows, alternates, and totals before relying on comparisons.' },
+      { message: 'Review normalized line-item matches, no-bid rows, imported notes, and totals before relying on comparisons.' },
+      { message: 'Imported quote notes are preserved as notes only; they do not mark rows as alternates or substitutions.' },
     ],
   }
 }

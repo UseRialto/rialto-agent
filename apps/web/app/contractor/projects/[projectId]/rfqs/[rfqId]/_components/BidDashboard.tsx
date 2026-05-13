@@ -1390,22 +1390,6 @@ function evaluateDerived(formula: string, item: ContractorRFQ['line_items'][numb
   return ''
 }
 
-function normalizeCompare(value?: string) {
-  return (value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-}
-
-function quotedDifferentItem(item: ContractorRFQ['line_items'][number], response?: ContractorBid['line_item_responses'][number]) {
-  if (!response || response.availability === 'unavailable') return false
-  const requestedSku = normalizeCompare(item.sku)
-  const quotedSku = normalizeCompare(response.sku)
-  const requestedDesc = normalizeCompare(item.description)
-  const quotedDesc = normalizeCompare(response.description)
-  return Boolean(
-    (requestedSku && quotedSku && requestedSku !== quotedSku)
-    || (requestedDesc && quotedDesc && requestedDesc !== quotedDesc),
-  )
-}
-
 function vendorCellState(item: ContractorRFQ['line_items'][number], bid: ContractorBid, response?: ContractorBid['line_item_responses'][number]) {
   const finding = lineSpecFinding(bid, item.id)
   if (finding?.status === 'violation') {
@@ -1420,10 +1404,10 @@ function vendorCellState(item: ContractorRFQ['line_items'][number], bid: Contrac
       tooltip: finding.explanation || 'Quoted item needs spec review before award.',
     }
   }
-  if (response?.is_alternate || quotedDifferentItem(item, response)) {
+  if (response?.is_alternate) {
     return {
       tone: 'alternate' as const,
-      tooltip: 'Vendor marked this line as an alternate or quoted a different SKU or description.',
+      tooltip: 'Vendor explicitly marked this line as an alternate or substitution.',
     }
   }
   return { tone: 'normal' as const, tooltip: '' }
@@ -3408,7 +3392,7 @@ export function BidDashboard({
                     const response = selectedBid.line_item_responses.find((entry) => entry.line_item_id === item.id)
                     const unavailable = !response || response.availability === 'unavailable'
                     const quantity = response?.quoted_quantity ?? response?.quantity ?? item.quantity
-                    const isAlternate = Boolean(response?.is_alternate || quotedDifferentItem(item, response))
+                    const isAlternate = Boolean(response?.is_alternate)
                     return (
                       <tr key={`${selectedBid.id}-line-${item.id}`} className="align-middle" style={{ borderBottom: '1px solid #e2d9cf' }}>
                         <td className="px-5 py-3.5">

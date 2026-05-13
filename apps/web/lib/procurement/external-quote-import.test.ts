@@ -156,6 +156,9 @@ describe('External Quote Import', () => {
     expect(result.bids[3].line_item_responses).toHaveLength(4)
     expect(result.bid.vendor_name).toBe('L n W Supply - San Diego')
     expect(result.rfq.invites?.map((invite) => invite.vendor_name)).toContain('BuildCo Materials')
+    expect(result.bids.flatMap((bid) => bid.line_item_responses).some((line) => line.is_alternate)).toBe(false)
+    expect(result.bids.find((bid) => bid.vendor_name === 'BuildCo Materials')?.line_item_responses.find((line) => line.sku === '250JR-33')?.notes).toContain('alternate manufacturer')
+    expect(result.bids.find((bid) => bid.vendor_name === 'Acme Drywall Supply')?.line_item_responses.find((line) => line.sku === 'LOCK-SET')?.notes).toContain('substitution')
     expect(result.warnings).toContainEqual(expect.objectContaining({
       message: expect.stringContaining('multiple supplier'),
     }))
@@ -217,6 +220,8 @@ describe('External Quote Import', () => {
     expect(new Set(result.bids.flatMap((bid) => bid.line_item_responses.map((line) => line.line_item_id)))).toEqual(
       new Set(result.rfq.line_items.map((line) => line.id)),
     )
+    expect(result.bids.flatMap((bid) => bid.line_item_responses).some((line) => line.is_alternate)).toBe(false)
+    expect(result.bids.find((bid) => bid.vendor_name === 'BuildCo Materials')?.line_item_responses.find((line) => line.sku === '250JR-33')?.notes).toContain('alternate manufacturer')
     expect(result.rfq.invites?.map((invite) => invite.vendor_name)).toEqual(['Acme Drywall Supply', 'BuildCo Materials'])
     expect(result.warnings).toContainEqual(expect.objectContaining({
       message: expect.stringContaining('Imported 2 vendor quote responses from 2 files'),
