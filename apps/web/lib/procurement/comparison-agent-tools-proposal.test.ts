@@ -42,4 +42,38 @@ describe('comparisonViewPatchFromProposal', () => {
       filterBlankRowsByColumnKey: 'notes',
     })
   })
+
+  it('routes cells for newly inserted proposal columns to the displayed manual column key', () => {
+    const patch = comparisonViewPatchFromProposal({
+      kind: 'comparison-patch-proposal',
+      summary: 'Prepared Harbor Steel merge.',
+      operations: [
+        { kind: 'insert-column', colKey: 'vendor-harbor-steel:total', label: 'Harbor Steel Total', afterColKey: '__qty_unit' },
+        { kind: 'set-cell', rowKey: 'line-x', colKey: 'vendor-harbor-steel:total', value: 1500 },
+      ],
+    })
+
+    expect(patch).toMatchObject({
+      addManualColumns: [{ key: 'vendor-harbor-steel:total', label: 'Total Price', insertAfterColKey: '__qty_unit', groupLabel: 'Harbor Steel', vendorMetric: 'total' }],
+      setCells: [{ rowKey: 'line-x', colKey: 'manual:vendor-harbor-steel:total', value: '1500' }],
+    })
+  })
+
+  it('routes chained insert-column anchors through displayed manual column keys', () => {
+    const patch = comparisonViewPatchFromProposal({
+      kind: 'comparison-patch-proposal',
+      summary: 'Prepared Harbor Steel merge.',
+      operations: [
+        { kind: 'insert-column', colKey: 'vendor-harbor-steel:unit_price', label: 'Harbor Steel Unit Price', afterColKey: 'vendor-lnw:alternate' },
+        { kind: 'insert-column', colKey: 'vendor-harbor-steel:total', label: 'Harbor Steel Total', afterColKey: 'vendor-harbor-steel:unit_price' },
+        { kind: 'insert-column', colKey: 'vendor-harbor-steel:lead', label: 'Harbor Steel Lead Time', afterColKey: 'vendor-harbor-steel:total' },
+      ],
+    })
+
+    expect(patch.addManualColumns).toEqual([
+      { key: 'vendor-harbor-steel:unit_price', label: 'Unit Price', insertAfterColKey: 'vendor-lnw:alternate', groupLabel: 'Harbor Steel', vendorMetric: 'unit_price' },
+      { key: 'vendor-harbor-steel:total', label: 'Total Price', insertAfterColKey: 'manual:vendor-harbor-steel:unit_price', groupLabel: 'Harbor Steel', vendorMetric: 'total' },
+      { key: 'vendor-harbor-steel:lead', label: 'Lead Time', insertAfterColKey: 'manual:vendor-harbor-steel:total', groupLabel: 'Harbor Steel', vendorMetric: 'lead' },
+    ])
+  })
 })

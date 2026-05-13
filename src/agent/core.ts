@@ -7,6 +7,9 @@ import type {
   AgentTurnResponse,
   ComparisonPatchFragment,
   ComparisonPatchProposal,
+  SpreadsheetObservation,
+  SpreadsheetOperationPlan,
+  SpreadsheetVerificationReport,
   ToolResult,
   UserContext,
 } from '../domain/types.js'
@@ -26,6 +29,10 @@ export type ProductAgentRuntimeResult =
       status: 'completed'
       reply: string
       plan?: string[]
+      operationPlan?: SpreadsheetOperationPlan
+      observations?: SpreadsheetObservation[]
+      planRevisions?: SpreadsheetOperationPlan[]
+      verification?: SpreadsheetVerificationReport
       toolCalls?: AgentToolCall[]
       toolResults?: ToolResult[]
     }
@@ -36,6 +43,10 @@ export type ProductAgentRuntimeResult =
         question: string
         choices?: Array<{ id: string; label: string }>
       }
+      operationPlan?: SpreadsheetOperationPlan
+      observations?: SpreadsheetObservation[]
+      planRevisions?: SpreadsheetOperationPlan[]
+      verification?: SpreadsheetVerificationReport
       toolCalls?: AgentToolCall[]
       toolResults?: ToolResult[]
     }
@@ -43,6 +54,10 @@ export type ProductAgentRuntimeResult =
       status: 'blocked' | 'tool_error'
       reply: string
       reason: string
+      operationPlan?: SpreadsheetOperationPlan
+      observations?: SpreadsheetObservation[]
+      planRevisions?: SpreadsheetOperationPlan[]
+      verification?: SpreadsheetVerificationReport
       toolCalls?: AgentToolCall[]
       toolResults?: ToolResult[]
     }
@@ -77,7 +92,7 @@ export class RialtoAgentCore {
     const proposal = comparisonProposalFromFragments(fragments)
     const plan = result.status === 'completed' ? result.plan : undefined
     const debugTrace = request.debug
-      ? debugTraceFromTurn(result.status, plan, toolCalls, toolResults, fragments, proposal)
+      ? debugTraceFromTurn(result.status, result, toolCalls, toolResults, fragments, proposal)
       : undefined
 
     if (result.status === 'needs_clarification') {
@@ -156,7 +171,7 @@ function comparisonProposalFromFragments(fragments: ComparisonPatchFragment[]): 
 
 function debugTraceFromTurn(
   responseState: AgentDebugTrace['responseState'],
-  plan: string[] | undefined,
+  result: ProductAgentRuntimeResult,
   toolCalls: AgentDebugTrace['toolCalls'],
   toolResults: ToolResult[],
   patchFragments: ComparisonPatchFragment[],
@@ -164,7 +179,11 @@ function debugTraceFromTurn(
 ): AgentDebugTrace {
   return {
     responseState,
-    plan,
+    plan: result.status === 'completed' ? result.plan : undefined,
+    operationPlan: result.operationPlan,
+    observations: result.observations,
+    planRevisions: result.planRevisions,
+    verification: result.verification,
     toolCalls,
     toolResults,
     patchFragments,

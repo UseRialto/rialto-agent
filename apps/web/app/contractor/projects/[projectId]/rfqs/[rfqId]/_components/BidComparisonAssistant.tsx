@@ -60,6 +60,9 @@ interface AssistantAttachment {
   sourceId: string
   filename: string
   text: string
+  sourceKind?: 'pdf' | 'excel' | 'csv' | 'docx' | 'text'
+  workbookId?: string
+  summary?: unknown
 }
 
 function describePatch(patch: ComparisonViewPatch | null, schema: BidComparisonAssistantProps['sheetSchema']): PatchChip[] {
@@ -194,15 +197,29 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
         const response = await fetch('/api/rialto-agent/document-extract', { method: 'POST', body: formData })
         const json = await response.json() as {
           error?: string
-          data?: { filename?: string; text?: string }
+          data?: {
+            filename?: string
+            text?: string
+            sourceKind?: AssistantAttachment['sourceKind']
+            attachment?: {
+              id: string
+              filename: string
+              sourceKind: AssistantAttachment['sourceKind']
+              workbookId?: string
+              summary?: unknown
+            }
+          }
         }
         if (!response.ok) throw new Error(json.error ?? `Could not read ${file.name}.`)
         const text = json.data?.text?.trim()
-        if (!text) throw new Error(`No readable text was found in ${file.name}.`)
+        if (!text && !json.data?.attachment?.workbookId) throw new Error(`No readable text was found in ${file.name}.`)
         extracted.push({
-          sourceId: `${file.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          filename: json.data?.filename ?? file.name,
-          text,
+          sourceId: json.data?.attachment?.id ?? `${file.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          filename: json.data?.attachment?.filename ?? json.data?.filename ?? file.name,
+          text: text ?? '',
+          sourceKind: json.data?.attachment?.sourceKind ?? json.data?.sourceKind,
+          workbookId: json.data?.attachment?.workbookId,
+          summary: json.data?.attachment?.summary,
         })
       }
       setAttachments((current) => [...current, ...extracted])
@@ -217,11 +234,17 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
   async function askAssistant() {
     const message = draft.trim()
     if (!message || isSending) return
+    const pendingProposal = proposal?.agentProposal
+    const pendingPreviewPatch = proposal
+      ? {
+          ...proposal,
+          agentProposal: undefined,
+        }
+      : undefined
+    setDraft('')
     setIsSending(true)
     setError('')
-    setSummary('')
-    setProposal(null)
-    onPreviewChange?.(null)
+    if (!proposal) setSummary('')
     if (debugMode) setDebugSteps(initialAgentProgressSteps(message))
     setStartedAt(Date.now())
     const controller = new AbortController()
@@ -230,16 +253,27 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
       const response = await fetch('/api/bid-comparison/ai-propose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, currentView, sheetSchema, snapshot, attachments, debug: debugMode, stream: debugMode }),
+        body: JSON.stringify({
+          message,
+          currentView,
+          sheetSchema,
+          snapshot,
+          attachments,
+          pendingProposal,
+          pendingPreviewPatch,
+          debug: debugMode,
+          stream: debugMode,
+        }),
         signal: controller.signal,
       })
       if (debugMode && response.body && response.headers.get('content-type')?.includes('text/event-stream')) {
         const json = await readAgentProgressStream(response)
         if (!response.ok || (!json.patch && !json.answer)) throw new Error(json.error ?? 'Could not generate a response.')
         setSummary(json.patch?.summary ?? json.answer ?? '')
-        setProposal(json.patch ?? null)
-        onPreviewChange?.(json.patch ?? null)
-        if (json.patch) setAttachments([])
+        if (json.patch) {
+          setProposal(json.patch)
+          onPreviewChange?.(json.patch)
+        }
         return
       }
       const json = (await response.json()) as { patch?: ComparisonViewPatch; answer?: string; error?: string } & ComparisonAgentDebugResponse
@@ -249,9 +283,10 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
       }
       if (!response.ok || (!json.patch && !json.answer)) throw new Error(json.error ?? 'Could not generate a response.')
       setSummary(json.patch?.summary ?? json.answer ?? '')
-      setProposal(json.patch ?? null)
-      onPreviewChange?.(json.patch ?? null)
-      if (json.patch) setAttachments([])
+      if (json.patch) {
+        setProposal(json.patch)
+        onPreviewChange?.(json.patch)
+      }
     } catch (caught) {
       const message = caught instanceof DOMException && caught.name === 'AbortError'
         ? 'Rialto Agent timed out after 90 seconds before returning changes.'
@@ -318,6 +353,7 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
       onApply(proposal)
       onPreviewChange?.(null)
       setProposal(null)
+      setAttachments([])
       setDraft('')
       setSummary('')
       setIsApplying(false)

@@ -326,6 +326,10 @@ export async function getRFQById(rfqId: string): Promise<ContractorRFQ | undefin
   return (await fetchRFQ(rfqId)) ?? undefined
 }
 
+export async function updateRFQTitle(rfqId: string, title: string): Promise<void> {
+  await db.update(rfqsTable).set({ title }).where(eq(rfqsTable.id, rfqId))
+}
+
 export async function saveRFQ(rfq: ContractorRFQ): Promise<void> {
   await db.insert(rfqsTable)
     .values({

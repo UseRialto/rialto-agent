@@ -29,9 +29,18 @@ interface RequestBody {
   message?: string
   currentView?: unknown
   snapshot?: unknown
+  pendingProposal?: unknown
+  pendingPreviewPatch?: unknown
   debug?: boolean
   stream?: boolean
-  attachments?: Array<{ sourceId?: string; filename: string; text: string }>
+  attachments?: Array<{
+    sourceId?: string
+    filename: string
+    text: string
+    sourceKind?: 'pdf' | 'excel' | 'csv' | 'docx' | 'text'
+    workbookId?: string
+    summary?: unknown
+  }>
   sheetSchema?: {
     columns?: SchemaColumn[]
     lineItems?: SchemaItem[]
@@ -77,6 +86,16 @@ function agentPayload(body: RequestBody, session: Awaited<ReturnType<typeof getS
       currentView: body.currentView,
       sheetSchema: body.sheetSchema,
       snapshot: body.snapshot,
+      pendingProposal: body.pendingProposal,
+      pendingPreviewPatch: body.pendingPreviewPatch,
+      attachments: (body.attachments ?? []).map((attachment) => ({
+        id: attachment.sourceId ?? attachment.filename,
+        filename: attachment.filename,
+        sourceKind: attachment.sourceKind ?? 'text',
+        workbookId: attachment.workbookId,
+        textId: attachment.text.trim() ? (attachment.sourceId ?? attachment.filename) : undefined,
+        summary: attachment.summary,
+      })),
     },
     debug: body.debug,
   }

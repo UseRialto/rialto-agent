@@ -32,6 +32,18 @@ export interface QuoteComparisonTurnContext {
   currentView?: unknown
   sheetSchema?: unknown
   snapshot?: unknown
+  attachments?: QuoteComparisonAttachmentContext[]
+  pendingProposal?: unknown
+  pendingPreviewPatch?: unknown
+}
+
+export interface QuoteComparisonAttachmentContext {
+  id: string
+  filename: string
+  sourceKind: 'pdf' | 'excel' | 'csv' | 'docx' | 'text'
+  workbookId?: string
+  textId?: string
+  summary?: unknown
 }
 
 export interface AgentRequestContext {
@@ -260,10 +272,72 @@ export interface ComparisonProvenanceNote {
 export interface AgentDebugTrace {
   responseState: AgentTurnResponse['status']
   plan?: string[]
+  operationPlan?: SpreadsheetOperationPlan
+  observations?: SpreadsheetObservation[]
+  planRevisions?: SpreadsheetOperationPlan[]
+  verification?: SpreadsheetVerificationReport
   toolCalls?: AgentToolCall[]
   toolResults?: ToolResult[]
   patchFragments?: ComparisonPatchFragment[]
   proposal?: AgentProposal
   warnings?: string[]
   errors?: string[]
+}
+
+export type SpreadsheetOperationMode = 'answer' | 'propose_patch' | 'apply_safe_patch' | 'needs_clarification' | 'blocked'
+
+export type SpreadsheetOperationRiskLevel = 'safe' | 'medium' | 'destructive'
+
+export type SpreadsheetPlanStepKind =
+  | 'inspect_workbook'
+  | 'inspect_attachment'
+  | 'infer_schema'
+  | 'map_rows'
+  | 'extract_vendor_response'
+  | 'detect_conflicts'
+  | 'create_patch'
+  | 'verify_patch'
+  | 'apply_patch'
+
+export interface SpreadsheetOperationPlan {
+  planId: string
+  userIntent: string
+  mode: SpreadsheetOperationMode
+  riskLevel: SpreadsheetOperationRiskLevel
+  requiresApproval: boolean
+  assumptions: string[]
+  clarification?: {
+    question: string
+    blockingReason: string
+  }
+  steps: SpreadsheetPlanStep[]
+  expectedPatch?: {
+    summary: string
+    targetWorkbookId: string
+  }
+}
+
+export interface SpreadsheetPlanStep {
+  id: string
+  kind: SpreadsheetPlanStepKind
+  dependsOn: string[]
+  toolName: string
+  toolInput: unknown
+  expectedObservation: string
+  onFailure: 'ask_clarification' | 'revise_plan' | 'block' | 'continue_with_warning'
+}
+
+export interface SpreadsheetObservation {
+  stepId: string
+  toolName: string
+  status: 'ok' | 'warning' | 'error'
+  summary: string
+  data?: unknown
+  warnings: string[]
+}
+
+export interface SpreadsheetVerificationReport {
+  ok: boolean
+  checks: Array<{ id: string; ok: boolean; message: string }>
+  warnings: string[]
 }
