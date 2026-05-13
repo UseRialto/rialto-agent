@@ -66,7 +66,7 @@ async function uploadProjectSpecPdfToLocalDev(file: File, folder: string): Promi
   return {
     url: json.url,
     filename: json.filename ?? file.name,
-    mimeType: json.mimeType ?? 'application/pdf',
+    mimeType: json.mimeType ?? (file.type || 'application/octet-stream'),
     sizeBytes: json.sizeBytes ?? file.size,
   }
 }
@@ -122,11 +122,15 @@ export async function uploadRequestAttachmentFile(
   const safeFolder = safeBlobFolder(folder)
   const safeName = safeBlobPathSegment(file.name)
   const mimeType = file.type || 'application/octet-stream'
+  const requestAttachmentFolder = safeFolder.startsWith('request-attachments/')
+    ? safeFolder
+    : `request-attachments/${safeFolder}`
 
   if (!safeFolder || !safeName) throw new Error('Invalid request attachment upload destination.')
 
   const config = await getBlobUploadConfig()
   if (!config.directUploadAvailable) {
+    if (isLocalHost()) return uploadProjectSpecPdfToLocalDev(file, requestAttachmentFolder)
     throw new Error('Vercel Blob is not configured. Connect the project Blob store and set BLOB_READ_WRITE_TOKEN.')
   }
 
@@ -134,7 +138,7 @@ export async function uploadRequestAttachmentFile(
     throw new Error(`Request attachments must be ${Math.floor(config.requestAttachmentMaxSizeBytes / 1024 / 1024)} MB or smaller.`)
   }
 
-  const blob = await upload(`${safeFolder}/${safeName}`, file, {
+  const blob = await upload(`${requestAttachmentFolder}/${safeName}`, file, {
     access: 'public',
     handleUploadUrl: '/api/blob-upload',
     contentType: mimeType,
