@@ -1109,7 +1109,7 @@ async function sendMicrosoftMessage(userId: string, params: {
           contentBytes: attachment.raw.toString('base64'),
         })),
       internetMessageHeaders: [
-        { name: 'Message-ID', value: params.internetMessageId },
+        { name: 'x-rialto-message-id', value: params.internetMessageId },
       ],
     },
   })
@@ -1157,7 +1157,7 @@ async function sendMicrosoftSimpleMessage(userId: string, params: {
         },
       ],
       internetMessageHeaders: [
-        { name: 'Message-ID', value: params.internetMessageId },
+        { name: 'x-rialto-message-id', value: params.internetMessageId },
       ],
     },
   })

@@ -381,6 +381,14 @@ function validateOffPlatformInviteNames(invites: NonNullable<ContractorRFQ['invi
   return `Add first and last name for ${missingNameInvite.vendor_email} before publishing.`
 }
 
+function summarizeOffPlatformSendErrors(summary: OffPlatformSendSummary) {
+  const errors = summary.results
+    .filter((result) => !result.success && result.error)
+    .map((result) => `${result.vendorEmail}: ${humanizeMailError(result.error)}`)
+  if (errors.length === 0) return ''
+  return ` ${errors.slice(0, 2).join(' ')}`
+}
+
 export async function saveRFQDraftAction(
   projectId: string,
   rfqData: RFQPayload,
@@ -473,7 +481,7 @@ export async function publishRFQAction(
       return {
         success: false,
         offPlatformSendSummary,
-        error: `Failed to send ${offPlatformSendSummary.failedCount} off-platform invite${offPlatformSendSummary.failedCount === 1 ? '' : 's'}. The RFQ was kept in draft state.`,
+        error: `Failed to send ${offPlatformSendSummary.failedCount} off-platform invite${offPlatformSendSummary.failedCount === 1 ? '' : 's'}.${summarizeOffPlatformSendErrors(offPlatformSendSummary)} The RFQ was kept in draft state.`,
       }
     }
   }
@@ -560,7 +568,7 @@ export async function inviteAdditionalVendorsAction(
       return {
         success: false,
         offPlatformSendSummary,
-        error: `Failed to send ${offPlatformSendSummary.failedCount} additional invite${offPlatformSendSummary.failedCount === 1 ? '' : 's'}.`,
+        error: `Failed to send ${offPlatformSendSummary.failedCount} additional invite${offPlatformSendSummary.failedCount === 1 ? '' : 's'}.${summarizeOffPlatformSendErrors(offPlatformSendSummary)}`,
       }
     }
   }
