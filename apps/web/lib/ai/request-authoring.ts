@@ -157,21 +157,16 @@ function fallbackSpecAssistant(input: AssistantInput): AISpecAssistantResult {
 }
 
 function buildDefaultEmailDraft(input: EmailDraftInput) {
-  const validItems = input.items.filter((item) => item.sku || item.description)
   const senderName = input.senderName?.trim() || 'Rialto'
-  const deadlineLine = input.bidDeadline
-    ? `Please send pricing through Rialto by ${input.bidDeadline}.`
-    : 'Please send pricing through Rialto when you can.'
-  const itemSummary = validItems.length === 0
-    ? 'the attached procurement package'
-    : validItems.length === 1
-      ? `${validItems[0].description}`
-      : `${validItems[0].description} and ${validItems.length - 1} other item${validItems.length === 2 ? '' : 's'}`
 
   return [
-    'Hello {{vendor_first_name}},',
+    'Hi {{vendor_first_name}},',
     '',
-    `Could you quote ${itemSummary} for the ${input.projectName} project in ${input.projectLocation}? ${deadlineLine} Please use the Rialto link in this email to submit pricing, lead time, and any substitutions or scope notes.`,
+    `Hope you're doing well. I'm requesting a quote on the ${input.projectName} project.`,
+    '',
+    'Please use the secure quote form linked in this email to submit your pricing, lead times, and any scope notes.',
+    '',
+    'Thanks, and please feel free to reach out with any questions.',
     '',
     'Best,',
     senderName,
@@ -186,9 +181,11 @@ function fallbackRefinedEmail(input: EmailDraftInput) {
 
   if (prompt.includes('short')) {
     return [
-      'Hello {{vendor_first_name}},',
+      'Hi {{vendor_first_name}},',
       '',
-      `Could you quote the attached ${input.rfqTitle} for ${input.projectName}? ${input.bidDeadline ? `Please submit through Rialto by ${input.bidDeadline}.` : 'Please submit through Rialto when you can.'}`,
+      `Hope you're doing well. I'm requesting a quote on the ${input.projectName} project. Please use the secure quote form linked in this email to submit your pricing, lead times, and any scope notes.`,
+      '',
+      'Thanks, and please feel free to reach out with any questions.',
       '',
       'Best,',
       senderName,
@@ -197,9 +194,11 @@ function fallbackRefinedEmail(input: EmailDraftInput) {
 
   if (prompt.includes('urg')) {
     return [
-      'Hello {{vendor_first_name}},',
+      'Hi {{vendor_first_name}},',
       '',
-      `Could you review ${input.rfqTitle} for ${input.projectName}? ${input.bidDeadline ? `We need your Rialto response by ${input.bidDeadline}, so an early turn would help.` : 'An early response through Rialto would help on this package.'} Please include pricing, lead time, and any substitutions or scope concerns.`,
+      `Hope you're doing well. I'm requesting a quote on the ${input.projectName} project.${input.bidDeadline ? ` Please submit through the secure quote form by ${input.bidDeadline}.` : ''} Please include your pricing, lead times, and any scope notes.`,
+      '',
+      'Thanks, and please feel free to reach out with any questions.',
       '',
       'Best,',
       senderName,
@@ -207,10 +206,10 @@ function fallbackRefinedEmail(input: EmailDraftInput) {
   }
 
   return input.currentDraft
-    ?.replace(/^Hi \{\{vendor_name\}\},/m, 'Hello {{vendor_first_name}},')
-    .replace(/^Hi \{\{vendor_first_name\}\},/m, 'Hello {{vendor_first_name}},')
-    .replace(/^Hello \{\{vendor_name\}\},/m, 'Hello {{vendor_first_name}},')
-    .replace(/^Hello,$/m, 'Hello {{vendor_first_name}},') || base
+    ?.replace(/^Hi \{\{vendor_name\}\},/m, 'Hi {{vendor_first_name}},')
+    .replace(/^Hello \{\{vendor_first_name\}\},/m, 'Hi {{vendor_first_name}},')
+    .replace(/^Hello \{\{vendor_name\}\},/m, 'Hi {{vendor_first_name}},')
+    .replace(/^Hello,$/m, 'Hi {{vendor_first_name}},') || base
 }
 
 export async function generateSpecAssistantOutput(input: AssistantInput): Promise<AISpecAssistantResult> {
@@ -260,8 +259,8 @@ export async function generateVendorOutreachDraft(input: EmailDraftInput): Promi
     ? [
         'Return only the revised plain-text email body.',
         'Preserve the token {{vendor_first_name}} exactly.',
-        'The first line must be: Hello {{vendor_first_name}},',
-        'Use fewer paragraph breaks: greeting, one natural body paragraph, then sign-off.',
+        'The first line must be: Hi {{vendor_first_name}},',
+        'Use this structure: greeting, a short hope-you-are-well line, secure quote form instruction, thanks/questions line, then sign-off.',
         'Keep the message in the sender’s voice using I/we language rather than third-person company narration.',
         input.senderName ? `Sign off exactly with:\nBest,\n${input.senderName}` : `Sign off with:\nBest,\nRialto`,
         `Current draft:\n${input.currentDraft}`,
@@ -269,9 +268,11 @@ export async function generateVendorOutreachDraft(input: EmailDraftInput): Promi
       ].join('\n\n')
     : [
         'Return only the email body in plain text.',
-        'Open exactly with: Hello {{vendor_first_name}},',
+        'Open exactly with: Hi {{vendor_first_name}},',
+        `Use wording close to: Hope you're doing well. I'm requesting a quote on the ${input.projectName} project.`,
+        'Ask them to use the secure quote form linked in the email to submit pricing, lead times, and scope notes.',
+        'Close by thanking them and inviting questions.',
         'Keep it warm, direct, and natural, written as a note from the sender using I/we language rather than third-person company narration.',
-        'Use fewer paragraph breaks: greeting, one concise body paragraph, then sign-off.',
         input.senderName ? `Sign off exactly with:\nBest,\n${input.senderName}` : `Sign off with:\nBest,\nRialto`,
         `Request: ${input.rfqTitle}`,
         `Project: ${input.projectName}`,

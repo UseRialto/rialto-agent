@@ -1,7 +1,7 @@
 'use client'
 
 import { useActionState, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Bot, Check, Mail, Paperclip, Plus, Send, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bot, Check, Paperclip, Plus, Send, X } from 'lucide-react'
 import {
   saveContractorOnboardingAction,
   switchToVendorOnboardingAction,
@@ -597,23 +597,7 @@ export function ContractorOnboardingForm({
                 Connect Gmail or Microsoft 365 so Rialto can send RFQ invites from your mailbox and sync vendor replies.
               </p>
 
-              <div className="mx-auto mt-8 max-w-2xl rounded-2xl border bg-white p-6 text-left shadow-sm" style={{ borderColor: '#e2d9cf' }}>
-                <div className="flex items-start gap-4">
-                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white" style={{ background: mailbox.connected ? '#2d6a4f' : '#1e3a2f' }}>
-                    {mailbox.connected ? <Check className="h-5 w-5" /> : <Mail className="h-5 w-5" />}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-bold" style={{ color: '#1e3a2f' }}>
-                      {mailbox.connected ? 'Mailbox connected' : 'No mailbox connected yet'}
-                    </p>
-                    <p className="mt-1 text-sm" style={{ color: '#4a6358' }}>
-                      {mailbox.connected
-                        ? `${mailbox.provider === 'microsoft_365' ? 'Microsoft 365' : 'Google Workspace'} is connected as ${mailbox.emailAddress}.`
-                        : 'This step is optional for setup. You can connect now or finish and connect later from Settings.'}
-                    </p>
-                  </div>
-                </div>
-
+              <div className="mx-auto mt-8 max-w-2xl text-left">
                 {(oauthStatus?.googleConnected || oauthStatus?.microsoftConnected) && (
                   <div className="mt-4 rounded-md border px-4 py-3" style={{ borderColor: '#a8d5ba', background: '#e8f4ee' }}>
                     <p className="text-sm" style={{ color: '#2d6a4f' }}>
@@ -636,24 +620,43 @@ export function ContractorOnboardingForm({
                   </div>
                 )}
 
-                <div className="mt-5 flex flex-wrap items-center gap-3">
+                <div className="mx-auto mt-6 flex max-w-md flex-col items-stretch">
                   <a
                     href="/api/auth/google/start?from=/contractor/onboarding"
-                    className="rounded-xl px-4 py-2 text-sm font-semibold text-white"
+                    className="group flex items-center gap-4 rounded-2xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
                     style={mailbox.availableProviders.includes('google')
-                      ? { background: '#1e3a2f' }
-                      : { background: '#8a9e96', pointerEvents: 'none' }}
+                      ? { borderColor: '#e2d9cf', color: '#1e3a2f' }
+                      : { borderColor: '#e2d9cf', color: '#8a9e96', pointerEvents: 'none', opacity: 0.6 }}
                   >
-                    {mailbox.provider === 'google' && mailbox.connected ? 'Reconnect Google' : 'Connect Gmail'}
+                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border" style={{ borderColor: '#f0ebe6', background: '#ffffff' }}>
+                      <img src="/gmail-icon.webp" alt="" className="h-8 w-8 object-contain" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-base font-bold">{mailbox.provider === 'google' && mailbox.connected ? 'Reconnect Gmail' : 'Connect Gmail'}</span>
+                      <span className="mt-0.5 block text-xs font-medium" style={{ color: '#6f837b' }}>Send RFQs and receive replies through Google Workspace.</span>
+                    </span>
+                    <ArrowRight className="h-5 w-5 shrink-0 transition-transform group-hover:translate-x-1" style={{ color: '#fa6b04' }} />
                   </a>
+                  <div className="flex items-center gap-3 py-3">
+                    <span className="h-px flex-1" style={{ background: '#e2d9cf' }} />
+                    <span className="text-xs font-bold uppercase tracking-[0.18em]" style={{ color: '#8a9e96' }}>or</span>
+                    <span className="h-px flex-1" style={{ background: '#e2d9cf' }} />
+                  </div>
                   <a
                     href="/api/auth/microsoft/start?from=/contractor/onboarding"
-                    className="rounded-xl px-4 py-2 text-sm font-semibold text-white"
+                    className="group flex items-center gap-4 rounded-2xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
                     style={mailbox.availableProviders.includes('microsoft_365')
-                      ? { background: '#4a6358' }
-                      : { background: '#8a9e96', pointerEvents: 'none' }}
+                      ? { borderColor: '#e2d9cf', color: '#1e3a2f' }
+                      : { borderColor: '#e2d9cf', color: '#8a9e96', pointerEvents: 'none', opacity: 0.6 }}
                   >
-                    {mailbox.provider === 'microsoft_365' && mailbox.connected ? 'Reconnect Microsoft 365' : 'Connect Outlook'}
+                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border" style={{ borderColor: '#f0ebe6', background: '#ffffff' }}>
+                      <img src="/outlook-icon.png" alt="" className="h-8 w-8 object-contain" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-base font-bold">{mailbox.provider === 'microsoft_365' && mailbox.connected ? 'Reconnect Outlook' : 'Connect Outlook'}</span>
+                      <span className="mt-0.5 block text-xs font-medium" style={{ color: '#6f837b' }}>Use Microsoft 365 for outbound invites and vendor replies.</span>
+                    </span>
+                    <ArrowRight className="h-5 w-5 shrink-0 transition-transform group-hover:translate-x-1" style={{ color: '#fa6b04' }} />
                   </a>
                 </div>
               </div>

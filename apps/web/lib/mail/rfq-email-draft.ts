@@ -13,14 +13,14 @@ export function buildRFQEmailBody(params: {
   bidDeadline?: string | null
 }) {
   const senderName = params.senderName?.trim() || 'Rialto'
-  const deadline = params.bidDeadline
-    ? `Please send your quote by ${params.bidDeadline}.`
-    : 'Please send your quote at your earliest convenience.'
-
   return [
-    'Hello {{vendor_first_name}},',
+    'Hi {{vendor_first_name}},',
     '',
-    `${params.contractorName} is requesting ${params.requestType === 'rfp' ? 'a proposal' : 'a quote'} for ${params.rfqTitle} on the ${params.projectName} project. ${deadline} Use the secure quote form linked in this email to review the request details and submit your pricing, lead times, and any scope notes.`,
+    `Hope you're doing well. I'm requesting ${params.requestType === 'rfp' ? 'a proposal' : 'a quote'} on the ${params.projectName} project.`,
+    '',
+    'Please use the secure quote form linked in this email to submit your pricing, lead times, and any scope notes.',
+    '',
+    'Thanks, and please feel free to reach out with any questions.',
     '',
     'Best,',
     senderName,

@@ -1,9 +1,9 @@
 import Image from 'next/image'
 import Link from 'next/link'
-import { BadgeCheck, LogOut, Settings } from 'lucide-react'
+import { BadgeCheck } from 'lucide-react'
 import { getSession } from '@/lib/auth/session'
-import { logoutAction } from '@/lib/actions/auth'
 import { SiteAssistant } from '@/components/site-assistant/SiteAssistant'
+import { ProfileMenu } from '@/components/layout/ProfileMenu'
 
 export async function AppShell({ children }: { children: React.ReactNode }) {
   const session = await getSession()
@@ -12,7 +12,6 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
   const settingsHref = isVendor ? '/vendor/settings' : '/contractor/settings'
   const displayName = session?.name ?? 'User'
   const displayEmail = session?.email ?? ''
-  const initial = displayName.charAt(0).toUpperCase()
 
   return (
     <div className="flex h-full min-h-screen" style={{ background: '#f5f0eb', color: '#1e3a2f' }}>
@@ -28,33 +27,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
               Quote requests and comparisons powered by AI
             </span>
             <span className="h-4 w-px" style={{ background: '#e2d9cf' }} />
-            {session && (
-              <details className="relative">
-                <summary
-                  className="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-full text-sm font-bold"
-                  style={{ background: '#1e3a2f', color: '#ffffff', outline: '1px solid #e2d9cf' }}
-                  title={displayName}
-                >
-                  {initial}
-                </summary>
-                <div className="absolute right-0 z-[100] mt-2 w-64 overflow-hidden rounded-xl border bg-white shadow-xl" style={{ borderColor: '#e2d9cf' }}>
-                  <div className="px-4 py-3" style={{ borderBottom: '1px solid #ede8e2' }}>
-                    <p className="truncate text-sm font-semibold" style={{ color: '#1e3a2f' }}>{displayName}</p>
-                    {displayEmail && <p className="truncate text-xs" style={{ color: '#8a9e96' }}>{displayEmail}</p>}
-                  </div>
-                  <Link href={settingsHref} className="flex items-center gap-2 px-4 py-3 text-sm font-medium" style={{ color: '#4a6358' }}>
-                    <Settings className="h-4 w-4" />
-                    Settings
-                  </Link>
-                  <form action={logoutAction}>
-                    <button type="submit" className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium" style={{ color: '#a85c2a', borderTop: '1px solid #ede8e2' }}>
-                      <LogOut className="h-4 w-4" />
-                      Sign out
-                    </button>
-                  </form>
-                </div>
-              </details>
-            )}
+            {session && <ProfileMenu displayName={displayName} displayEmail={displayEmail} settingsHref={settingsHref} />}
           </div>
         </header>
 
