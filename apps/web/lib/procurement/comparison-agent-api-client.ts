@@ -45,7 +45,7 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function agentFetchErrorMessage(error: unknown) {
+export function agentFetchErrorMessage(error: unknown) {
   if (error instanceof Error && error.name === 'AbortError') {
     return 'Rialto Agent timed out while preparing the Quote Comparison proposal.'
   }

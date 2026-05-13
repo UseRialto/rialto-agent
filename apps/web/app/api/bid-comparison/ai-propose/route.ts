@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth/session'
 import { comparisonAssistantPayloadFromAgentTurn, type AgentTurnData } from '@/lib/procurement/comparison-agent-response'
 import { comparisonFastCommandPatch } from '@/lib/procurement/comparison-fast-commands'
-import { agentTurnFailureMessage, postAgentTurnWithRetry } from '@/lib/procurement/comparison-agent-api-client'
+import { agentFetchErrorMessage, agentTurnFailureMessage, postAgentTurnWithRetry } from '@/lib/procurement/comparison-agent-api-client'
+
+export const runtime = 'nodejs'
 
 interface SchemaColumn {
   key: string
@@ -70,10 +72,11 @@ function agentPayload(body: RequestBody, session: Awaited<ReturnType<typeof getS
     ? `${message}\n\nUploaded document text for document.readSource:\n\n${attachmentText}`
     : message
   return {
+    requestId: crypto.randomUUID(),
     user: {
       id: session.userId,
       contractorOrganizationId: session.userId,
-      role: session.role === 'vendor' ? 'vendor' : 'estimator',
+      role: session.role === 'vendor' ? 'vendor' as const : 'estimator' as const,
       name: session.name || 'Estimator',
       email: session.email || 'estimator@example.com',
     },
@@ -107,6 +110,10 @@ function proposalResponsePayload(data: AgentTurnData, sheetSchema: RequestBody['
 
 function sseEvent(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+}
+
+function agentApiUrl() {
+  return (process.env.RIALTO_AGENT_API_URL?.trim() || 'http://localhost:8787').replace(/\/+$/, '')
 }
 
 function fastCommandPayload(body: RequestBody, message: string) {
@@ -155,9 +162,9 @@ export async function POST(request: NextRequest) {
     }
 
     const payload = agentPayload(body, session, message)
-    if (body.stream) return streamAgentProposal(payload, body.sheetSchema)
+    if (body.stream) return await streamAgentProposal(payload, body.sheetSchema)
 
-    const response = await postAgentTurnWithRetry(payload)
+    const response = await postAgentTurnWithRetry(payload, { apiUrl: agentApiUrl() })
     const data = await response.json() as AgentTurnData
 
     if (!response.ok) {
@@ -179,12 +186,17 @@ export async function POST(request: NextRequest) {
 }
 
 async function streamAgentProposal(payload: unknown, sheetSchema: RequestBody['sheetSchema']) {
-  const apiUrl = process.env.RIALTO_AGENT_API_URL ?? 'http://localhost:8787'
-  const response = await fetch(`${apiUrl}/agent/turn/stream`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
+  const apiUrl = agentApiUrl()
+  let response: Response
+  try {
+    response = await fetch(`${apiUrl}/agent/turn/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  } catch (error) {
+    return agentStreamErrorResponse(agentFetchErrorMessage(error))
+  }
 
   if (!response.ok || !response.body) {
     const data = await response.json().catch(() => ({})) as AgentTurnData
@@ -239,6 +251,18 @@ async function streamAgentProposal(payload: unknown, sheetSchema: RequestBody['s
   })
 
   return new Response(stream, {
+    headers: {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+    },
+  })
+}
+
+function agentStreamErrorResponse(error: string) {
+  return new Response(sseEvent('error', {
+    status: 'tool_error',
+    error,
+  }), {
     headers: {
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-cache, no-transform',

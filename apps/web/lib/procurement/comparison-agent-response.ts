@@ -11,10 +11,11 @@ export interface AgentTurnData {
   error?: string
   status?: string
   reply?: string
+  reason?: string
   plan?: string[]
   debugTrace?: ComparisonAgentDebugTrace
   proposal?: ComparisonPatchProposal
-  toolResults?: Array<{ callId?: string; toolId?: string; status?: string; summary?: string; data?: { action?: string; patch?: ComparisonAgentToolPatch } }>
+  toolResults?: Array<{ callId?: string; toolId?: string; status?: string; summary?: string; data?: unknown }>
 }
 
 export interface ComparisonAssistantPayload {
@@ -44,7 +45,15 @@ export function comparisonAssistantPayloadFromAgentTurn(
     }
   }
 
-  const toolPatch = data.toolResults?.find((result) => result.data?.action === 'preview-spreadsheet-patch')?.data?.patch
+  const toolPatch = data.toolResults
+    ?.map((result) => result.data)
+    .find((value): value is { action: 'preview-spreadsheet-patch'; patch: ComparisonAgentToolPatch } => (
+      Boolean(value)
+      && typeof value === 'object'
+      && (value as { action?: unknown }).action === 'preview-spreadsheet-patch'
+      && Boolean((value as { patch?: unknown }).patch)
+    ))
+    ?.patch
   if (toolPatch) {
     return {
       patch: comparisonViewPatchFromAgentToolPatch(toolPatch, sheetSchema),
