@@ -16,6 +16,10 @@ const nextConfig = {
   },
   webpack(config, { isServer }) {
     config.resolve ??= {}
+    config.resolve.modules = [
+      path.join(process.cwd(), 'node_modules'),
+      ...(config.resolve.modules ?? ['node_modules']),
+    ]
     config.resolve.extensionAlias = {
       ...(config.resolve.extensionAlias ?? {}),
       '.js': ['.ts', '.tsx', '.js'],
