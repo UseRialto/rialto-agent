@@ -1,12 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { buildMagicFormPreviewUrl } from '@/lib/mail/rfq-email-draft'
 import { MagicRFQFormClient } from '@/app/vendor/magic-rfq/[token]/_components/MagicRFQFormClient'
 import type { ContractorRFQ } from '@/lib/types/contractor'
 import type { ItemRow, RFQCreationFieldVisibility } from './StepItems'
 import type { VendorInvite } from './StepInviteVendors'
-import { PDFPreview } from './PDFPreview'
 import type { CommodityWatch, ProcurementRequirement, RequestType, RFPDetails } from '@/lib/types/procurement'
 
 const SECTION_HEADING_STYLE = { color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)', fontWeight: 700 } as const
@@ -14,7 +13,6 @@ const SECTION_HEADING_STYLE = { color: '#1e3a2f', fontFamily: 'var(--font-lora, 
 interface Props {
   projectId: string
   rfqId?: string
-  contractorName: string
   projectName: string
   projectLocation: string
   requestType: RequestType
@@ -39,7 +37,6 @@ interface Props {
 export function StepReview({
   projectId,
   rfqId,
-  contractorName,
   projectName,
   projectLocation,
   requestType,
@@ -62,10 +59,6 @@ export function StepReview({
 }: Props) {
   const [saving, setSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
-  const [previewUrl, setPreviewUrl] = useState('')
-  const [previewBytes, setPreviewBytes] = useState<Uint8Array | null>(null)
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [previewError, setPreviewError] = useState('')
   const [magicFormModalOpen, setMagicFormModalOpen] = useState(false)
   const requestLabel = requestType === 'rfp' ? 'RFP' : 'RFQ'
 
@@ -213,85 +206,6 @@ export function StepReview({
       </span>
     ))
   }
-
-  useEffect(() => {
-    let active = true
-    let currentObjectUrl = ''
-
-    async function loadPreview() {
-      if (!title.trim() || items.length === 0) {
-        setPreviewUrl('')
-        setPreviewBytes(null)
-        setPreviewError('')
-        return
-      }
-
-      setPreviewLoading(true)
-      setPreviewError('')
-
-      try {
-        const response = await fetch('/api/rfq-pdf/preview', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            rfqId,
-            projectId,
-            contractorName,
-            projectName,
-            projectLocation,
-            requestType,
-            rfpDetails,
-            attachmentUrls,
-            procurementRequirements,
-            commodityWatch,
-            title,
-            bidDeadline: bidDeadline || undefined,
-            lineItems: items
-              .filter((item) => item.sku || item.description)
-              .map(({ _key, ...item }) => item),
-          }),
-        })
-
-        if (!response.ok) {
-          throw new Error('Unable to generate PDF preview right now.')
-        }
-
-        const bytes = new Uint8Array(await response.arrayBuffer())
-        const blob = new Blob([bytes], { type: 'application/pdf' })
-        currentObjectUrl = URL.createObjectURL(blob)
-
-        if (!active) {
-          URL.revokeObjectURL(currentObjectUrl)
-          return
-        }
-
-        setPreviewUrl((previousUrl) => {
-          if (previousUrl) URL.revokeObjectURL(previousUrl)
-          return currentObjectUrl
-        })
-        setPreviewBytes(bytes)
-      } catch (error) {
-        if (!active) return
-        setPreviewError(error instanceof Error ? error.message : 'Unable to generate PDF preview right now.')
-        setPreviewBytes(null)
-        setPreviewUrl((previousUrl) => {
-          if (previousUrl) URL.revokeObjectURL(previousUrl)
-          return ''
-        })
-      } finally {
-        if (active) {
-          setPreviewLoading(false)
-        }
-      }
-    }
-
-    loadPreview()
-
-    return () => {
-      active = false
-      if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl)
-    }
-  }, [attachmentUrls, bidDeadline, commodityWatch, contractorName, items, procurementRequirements, projectId, projectLocation, projectName, requestType, rfpDetails, rfqId, title])
 
   async function handleSave() {
     setSaving(true)
@@ -513,38 +427,6 @@ export function StepReview({
             </div>
           </div>
         </div>
-      </div>
-
-      <div className="rounded-2xl p-4" style={{ background: '#ffffff', border: '1px solid #e2d9cf' }}>
-        <div className="mb-3 flex items-center justify-between">
-          <div>
-            <p className="text-sm font-semibold" style={SECTION_HEADING_STYLE}>RFQ PDF Preview</p>
-            <p className="mt-1 text-sm" style={{ color: '#4a6358' }}>This is the PDF attachment vendors will receive with your {requestLabel} email.</p>
-          </div>
-          {previewUrl && (
-            <a
-              href={previewUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="rounded-lg px-3 py-1.5 text-xs font-medium transition-colors"
-              style={{ background: '#ffffff', color: '#4a6358', border: '1px solid #e2d9cf' }}
-            >
-              Open PDF
-            </a>
-          )}
-        </div>
-
-        {previewLoading ? (
-          <div className="flex h-72 items-center justify-center rounded-xl border-dashed text-sm" style={{ background: '#ede8e2', border: '2px dashed #e2d9cf', color: '#8a9e96' }}>
-            Generating preview…
-          </div>
-        ) : previewError ? (
-          <div className="rounded-xl px-4 py-3 text-sm" style={{ background: '#fdf0e8', border: '1px solid #e8c4a0', color: '#a85c2a' }}>
-            {previewError}
-          </div>
-        ) : (
-          <PDFPreview documentBytes={previewBytes} />
-        )}
       </div>
 
       {/* Publish notice */}

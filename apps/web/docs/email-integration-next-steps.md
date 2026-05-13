@@ -24,7 +24,7 @@ All email infrastructure from Tomasz's branch and Jack's AI-drafting feature are
 ### Magic link / off-platform vendor flow
 - `lib/mail/rfq-email-draft.ts` - `buildMagicFormPreviewUrl()`, template helpers
 - `/vendor/magic-rfq/[token]` - off-platform vendor secure quote form
-- PDF attachment: `lib/rfq-pdf.ts` + `/api/rfq-pdf/[rfqId]`
+- RFQ emails send the secure quote-form link and any user-uploaded reference files; Rialto no longer generates or attaches an RFQ PDF.
 
 ### RFQ mailbox panel
 - RFQ detail page shows mailbox panel, vendor request state, email activity, review tasks

@@ -132,14 +132,6 @@ export default async function RFQDetailPage({
             )}
             <div className="ml-auto flex flex-col items-end gap-2">
               <div className="flex items-center gap-2">
-                <a
-                  href={`/api/rfq-pdf/${rfqId}`}
-                  download={`${rfq.request_type === 'rfp' ? 'rfp' : 'rfq'}-${rfqId}.pdf`}
-                  className="inline-flex items-center gap-1.5 rounded border bg-white px-3 py-1.5 text-xs font-medium shadow-sm transition-colors"
-                  style={{ borderColor: '#e2d9cf', color: '#4a6358' }}
-                >
-                  Download PDF
-                </a>
                 <RFQActions rfqId={rfqId} projectId={projectId} status={rfq.status} />
               </div>
               <InviteAdditionalVendorsButton projectId={projectId} rfq={rfq} projectName={project.name} />
@@ -240,14 +232,6 @@ export default async function RFQDetailPage({
                   Edit Draft
                 </Link>
               )}
-              <a
-                href={`/api/rfq-pdf/${rfqId}`}
-                download={`${rfq.request_type === 'rfp' ? 'rfp' : 'rfq'}-${rfqId}.pdf`}
-                className="inline-flex items-center gap-1.5 rounded border bg-white px-3 py-1.5 text-xs font-medium shadow-sm transition-colors"
-                style={{ borderColor: '#e2d9cf', color: '#4a6358' }}
-              >
-                Download PDF
-              </a>
               <RFQActions rfqId={rfqId} projectId={projectId} status={rfq.status} />
             </div>
             <InviteAdditionalVendorsButton projectId={projectId} rfq={rfq} projectName={project.name} />

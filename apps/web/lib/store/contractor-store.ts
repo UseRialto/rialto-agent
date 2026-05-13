@@ -513,6 +513,7 @@ export async function getProjectRFQs(projectId: string, status?: string): Promis
     .select()
     .from(rfqsTable)
     .where(eq(rfqsTable.project_id, projectId))
+    .orderBy(desc(rfqsTable.created_at), desc(rfqsTable.id))
 
   if (status && status !== 'all') {
     if (status === 'pending') rows = rows.filter((r) => r.status === 'draft')
@@ -581,6 +582,7 @@ export async function getAllActiveRFQs(): Promise<ContractorRFQ[]> {
         ne(rfqsTable.visibility, 'invited_only'),
       ),
     )
+    .orderBy(desc(rfqsTable.created_at), desc(rfqsTable.id))
   return Promise.all(rows.map(async (row) => {
     const lineItems = await db.select().from(rfqLineItemsTable).where(eq(rfqLineItemsTable.rfq_id, row.id))
     const invites = await db.select().from(rfqInvitesTable).where(eq(rfqInvitesTable.rfq_id, row.id))
@@ -610,6 +612,7 @@ export async function getInvitedRFQsForVendor(vendorEmail: string, vendorId?: st
         inArray(rfqsTable.id, inviteMatches),
       ),
     )
+    .orderBy(desc(rfqsTable.created_at), desc(rfqsTable.id))
 
   return Promise.all(rows.map(async (row) => {
     const lineItems = await db.select().from(rfqLineItemsTable).where(eq(rfqLineItemsTable.rfq_id, row.id))

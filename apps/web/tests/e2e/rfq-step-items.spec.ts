@@ -1,7 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { test, expect, type TestInfo } from '@playwright/test'
-import { PDFDocument } from 'pdf-lib'
 import * as XLSX from 'xlsx'
 import { authenticatePage } from './helpers/auth'
 
@@ -127,7 +126,7 @@ test.describe('RFQ review step', () => {
     await authenticatePage(page)
   })
 
-  test('shows an editable vendor email draft and inline pdf preview for off-platform recipients', async ({ page }) => {
+  test('shows an editable vendor email draft for off-platform recipients', async ({ page }) => {
     await page.goto('/contractor/projects/proj-s001/rfqs/new')
 
     await page.locator('input[type="text"]').first().fill(`Review Step QA ${Date.now()}`)
@@ -139,81 +138,17 @@ test.describe('RFQ review step', () => {
     await page.getByPlaceholder('Vendor name or email…').fill('buyer-test@example.com')
     await page.getByRole('button', { name: /Add buyer-test@example.com/i }).click()
 
-    const previewResponsePromise = page.waitForResponse((response) =>
-      response.url().includes('/api/rfq-pdf/preview') && response.status() === 200,
-    )
-
     await page.getByRole('button', { name: 'Review RFQ →' }).click()
-    await previewResponsePromise
 
     await expect(page.getByText('Vendor Email Preview')).toBeVisible()
     await expect(page.getByText('buyer-test@example.com', { exact: true })).toBeVisible()
     await expect(page.getByLabel('Email subject')).toHaveValue(/Request for Quote:/)
-    await expect(page.getByLabel('Email body')).toContainText('The RFQ PDF is attached to this email.')
+    await expect(page.getByLabel('Email body')).toContainText('Use the secure quote form linked in this email')
 
     await page.getByLabel('Email subject').fill('Custom RFQ subject')
     await page.getByLabel('Email body').fill('Custom body for this live send.')
 
     await expect(page.getByLabel('Email subject')).toHaveValue('Custom RFQ subject')
     await expect(page.getByLabel('Email body')).toHaveValue('Custom body for this live send.')
-    await expect(page.getByText(/page rendered from the live RFQ PDF|pages rendered from the live RFQ PDF/i)).toBeVisible()
-    await expect(page.getByAltText('RFQ PDF page 1')).toBeVisible()
-    await expect(page.getByRole('link', { name: 'Open PDF' })).toBeVisible()
-  })
-
-  test('preview endpoint returns a pdf payload for review-step rendering', async ({ page }) => {
-    const response = await page.request.post('/api/rfq-pdf/preview', {
-      data: {
-        projectId: 'proj-s001',
-        projectName: 'Mission Bay Tower',
-        projectLocation: 'San Francisco, CA',
-        title: 'Mission Bay Tower - April 2026',
-        bidDeadline: '2026-05-01',
-        lineItems: [
-          {
-            sku: 'CONC-4000-01',
-            description: 'Ready-mix concrete 4000 PSI',
-            quantity: 12,
-            unit: 'cy',
-            specs: 'ASTM C94',
-            certifications: [],
-            notes: '',
-          },
-        ],
-      },
-    })
-
-    expect(response.ok()).toBeTruthy()
-    expect(response.headers()['content-type']).toContain('application/pdf')
-    expect((await response.body()).byteLength).toBeGreaterThan(500)
-  })
-
-  test('preview endpoint paginates large RFQs instead of truncating line items', async ({ page }) => {
-    const lineItems = Array.from({ length: 36 }, (_, index) => ({
-      sku: `STEEL-${index + 1}`,
-      description: `Structural steel beam package ${index + 1} with extended handling notes for pagination coverage`,
-      quantity: index + 5,
-      unit: 'tons',
-      specs: 'ASTM A992, shop primed, field verify dimensions before release',
-      certifications: ['ASTM A992', 'AISC Certified'],
-      notes: 'Coordinate mill certs, unloading sequence, and phased delivery windows with superintendent.',
-      contractor_budget: 1250 + index * 10,
-    }))
-
-    const response = await page.request.post('/api/rfq-pdf/preview', {
-      data: {
-        projectId: 'proj-s001',
-        projectName: 'Mission Bay Tower',
-        projectLocation: 'San Francisco, CA',
-        contractorName: 'McCarthy Building Companies',
-        title: 'Mission Bay Tower - Structural Steel Procurement Package',
-        bidDeadline: '2026-05-01',
-        lineItems,
-      },
-    })
-
-    expect(response.ok()).toBeTruthy()
-    const pdf = await PDFDocument.load(await response.body())
-    expect(pdf.getPageCount()).toBeGreaterThan(1)
   })
 })

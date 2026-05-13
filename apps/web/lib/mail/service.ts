@@ -22,7 +22,6 @@ import {
 import { createUser, findUserByEmail, findUserById } from '@/lib/auth/users'
 import { appendMagicFormLink, buildRFQEmailDraft, buildRFQEmailBody, buildRFQEmailSubject, renderVendorEmailTemplate } from '@/lib/mail/rfq-email-draft'
 import { createMagicFormLink } from '@/lib/magic-rfq/service'
-import { buildRFQPdfBytes } from '@/lib/rfq-pdf'
 import { runBidSpecCompliance } from '@/lib/spec-compliance'
 import type {
   ContractorBid,
@@ -2377,14 +2376,9 @@ export async function sendRFQInvites(userId: string, rfqId: string, baseUrl?: st
     savedSubject: rfq.email_subject ?? undefined,
     savedBody: rfq.email_body ?? undefined,
   })
-  const attachmentBytes = await buildRFQPdfBytes(rfqId)
-  const attachmentName = `${rfq.requestType === 'rfp' ? 'rfp' : 'rfq'}-${rfqId}.pdf`
   const uploadedAttachments = (await Promise.all(rfq.attachmentUrls.map((url) => loadRFQAttachment(url))))
     .filter((attachment): attachment is { filename: string; mimeType: string; raw: Buffer } => Boolean(attachment))
-  const emailAttachments = [
-    { filename: attachmentName, mimeType: 'application/pdf', raw: attachmentBytes },
-    ...uploadedAttachments,
-  ]
+  const emailAttachments = uploadedAttachments
   const results: OffPlatformSendResult[] = []
 
   for (const request of requests) {

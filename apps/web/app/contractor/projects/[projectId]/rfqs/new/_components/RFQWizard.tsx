@@ -110,6 +110,8 @@ function fieldVisibilitySignature(visibility: RFQCreationFieldVisibility) {
   const sanitized = sanitizeFieldVisibility(visibility)
   return JSON.stringify({
     specifications: sanitized.specifications,
+    constraints: sanitized.constraints,
+    notes: sanitized.notes,
     targetBudget: sanitized.targetBudget,
     suggestedLeadTime: sanitized.suggestedLeadTime,
     certifications: sanitized.certifications,
@@ -166,6 +168,7 @@ export function RFQWizard({
   const initialFieldVisibility = sanitizeFieldVisibility(contractorCustomization.rfqCreationFieldVisibility as Partial<RFQCreationFieldVisibility> | undefined)
   const [defaultFieldVisibility, setDefaultFieldVisibility] = useState<RFQCreationFieldVisibility>(initialFieldVisibility)
   const [saveDefaultState, setSaveDefaultState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [customizationDirty, setCustomizationDirty] = useState(false)
   const [rfqId, setRfqId] = useState<string | undefined>(initialRFQ?.id)
   const [requestType, setRequestType] = useState<RequestType>(initialRequestType)
   const [title, setTitle] = useState(initialRFQ?.title ?? getDefaultTitle(projectName, initialRequestType))
@@ -209,6 +212,7 @@ export function RFQWizard({
   const [error, setError] = useState('')
   const fieldSettingsAnchorRef = useRef<HTMLDivElement>(null)
   const saveDefaultResetRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoSaveDefaultRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const customizeAssistantCloseRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const requestLabel = requestType === 'rfp' ? 'RFP' : 'RFQ'
   const matchesDefaultTemplate = fieldTemplateSignature(fieldTemplate) === fieldTemplateSignature(defaultFieldTemplate)
@@ -219,6 +223,7 @@ export function RFQWizard({
   useEffect(() => {
     return () => {
       if (saveDefaultResetRef.current) clearTimeout(saveDefaultResetRef.current)
+      if (autoSaveDefaultRef.current) clearTimeout(autoSaveDefaultRef.current)
       if (customizeAssistantCloseRef.current) clearTimeout(customizeAssistantCloseRef.current)
       window.dispatchEvent(new CustomEvent('rialto:rfq-customize-assistant', { detail: { open: false } }))
     }
@@ -307,13 +312,20 @@ export function RFQWizard({
   }
 
   function setFieldVisible(key: RFQCreationFieldKey, visible: boolean) {
+    setCustomizationDirty(true)
     setFieldVisibility((current) => ({ ...current, [key]: visible }))
   }
 
   function syncRowsToTemplate(nextFields: CustomLineItemFieldDefinition[]) {
     const sanitized = sanitizeLineItemFields(nextFields).map((field, index) => ({ ...field, order: index }))
+    setCustomizationDirty(true)
     setFieldTemplate(sanitized)
     setItems((current) => current.map((item) => ({ ...item, attributes: fieldsToAttributes(sanitized, item.attributes) })))
+  }
+
+  function updateVendorResponseTemplate(nextFields: CustomLineItemFieldDefinition[]) {
+    setCustomizationDirty(true)
+    setVendorResponseTemplate(sanitizeVendorResponseFields(nextFields))
   }
 
   function removeTemplateField(key: string) {
@@ -356,7 +368,7 @@ export function RFQWizard({
 
   function addVendorResponseField() {
     const key = `vendor-custom-${Date.now()}`
-    setVendorResponseTemplate(sanitizeVendorResponseFields([...vendorResponseTemplate, {
+    updateVendorResponseTemplate([...vendorResponseTemplate, {
       key,
       label: 'New Column',
       inputType: 'text',
@@ -365,19 +377,19 @@ export function RFQWizard({
       options: [],
       source: 'user',
       order: vendorResponseTemplate.length,
-    }]))
+    }])
   }
 
   function removeVendorResponseField(key: string) {
-    setVendorResponseTemplate(sanitizeVendorResponseFields(vendorResponseTemplate.filter((f) => f.key !== key)))
+    updateVendorResponseTemplate(vendorResponseTemplate.filter((f) => f.key !== key))
   }
 
   function renameVendorResponseField(key: string, newLabel: string) {
-    setVendorResponseTemplate(sanitizeVendorResponseFields(vendorResponseTemplate.map((f) => f.key === key ? { ...f, label: newLabel } : f)))
+    updateVendorResponseTemplate(vendorResponseTemplate.map((f) => f.key === key ? { ...f, label: newLabel } : f))
   }
 
   function toggleVendorResponseFieldRequired(key: string) {
-    setVendorResponseTemplate(sanitizeVendorResponseFields(vendorResponseTemplate.map((f) => f.key === key ? { ...f, required: !f.required } : f)))
+    updateVendorResponseTemplate(vendorResponseTemplate.map((f) => f.key === key ? { ...f, required: !f.required } : f))
   }
 
   function moveTemplateField(dragKey: string, targetKey: string, position: 'before' | 'after' = 'before') {
@@ -396,6 +408,7 @@ export function RFQWizard({
   async function saveCurrentTemplateAsDefault() {
     if (matchesDefaultTemplate || saveDefaultState === 'saving') return
     if (saveDefaultResetRef.current) clearTimeout(saveDefaultResetRef.current)
+    if (autoSaveDefaultRef.current) clearTimeout(autoSaveDefaultRef.current)
     setSaveDefaultState('saving')
     const result = await saveContractorCustomizationAction({
       ...contractorCustomization,
@@ -408,6 +421,7 @@ export function RFQWizard({
       setDefaultFieldTemplate(sanitizeLineItemFields(result.customization?.lineItemFields ?? fieldTemplate))
       setDefaultVendorResponseTemplate(sanitizeVendorResponseFields(result.customization?.vendorResponseFields ?? vendorResponseTemplate))
       setDefaultFieldVisibility(sanitizeFieldVisibility(result.customization?.rfqCreationFieldVisibility as Partial<RFQCreationFieldVisibility> | undefined ?? fieldVisibility))
+      setCustomizationDirty(false)
       setSaveDefaultState('saved')
       router.refresh()
     } else {
@@ -417,6 +431,17 @@ export function RFQWizard({
       setSaveDefaultState('idle')
     }, 1200)
   }
+
+  useEffect(() => {
+    if (!customizationDirty || matchesDefaultTemplate || saveDefaultState === 'saving') return
+    if (autoSaveDefaultRef.current) clearTimeout(autoSaveDefaultRef.current)
+    autoSaveDefaultRef.current = setTimeout(() => {
+      void saveCurrentTemplateAsDefault()
+    }, 700)
+    return () => {
+      if (autoSaveDefaultRef.current) clearTimeout(autoSaveDefaultRef.current)
+    }
+  }, [customizationDirty, fieldTemplate, vendorResponseTemplate, fieldVisibility, matchesDefaultTemplate, saveDefaultState])
 
   const availableFieldBank: ContractorFieldBankEntry[] = useMemo(() => {
     const activeKeys = new Set(fieldTemplate.map((field) => field.key))
@@ -723,8 +748,9 @@ export function RFQWizard({
             vendorResponseFields={vendorResponseTemplate}
             fieldVisibility={fieldVisibility}
             onApply={syncRowsToTemplate}
-            onApplyVendorResponse={(fields) => setVendorResponseTemplate(sanitizeVendorResponseFields(fields))}
+            onApplyVendorResponse={updateVendorResponseTemplate}
             onApplyFieldVisibility={(visibility) => {
+              setCustomizationDirty(true)
               setFieldVisibility((current) => sanitizeFieldVisibility({ ...current, ...visibility }))
             }}
           />
@@ -752,7 +778,6 @@ export function RFQWizard({
 
         {step === 2 && (
           <StepReview
-            contractorName={contractorName}
             projectName={projectName}
             projectLocation={projectLocation}
             requestType={requestType}
