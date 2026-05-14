@@ -3,6 +3,7 @@ import { getDefaultAgentHttpService } from '@rialto-agent/agent/http-service'
 import { getSession } from '@/lib/auth/session'
 import { comparisonAssistantPayloadFromAgentTurn, type AgentTurnData } from '@/lib/procurement/comparison-agent-response'
 import { comparisonFastCommandPatch } from '@/lib/procurement/comparison-fast-commands'
+import { isQuoteComparisonSummaryRequest } from '@/lib/procurement/comparison-analytics'
 
 export const runtime = 'nodejs'
 
@@ -68,9 +69,10 @@ function agentPayload(body: RequestBody, session: Awaited<ReturnType<typeof getS
       attachment.text,
     ].join('\n'))
     .join('\n\n')
+  const agentMessage = summaryPrompt(message)
   const content = attachmentText
-    ? `${message}\n\nUploaded document text for document.readSource:\n\n${attachmentText}`
-    : message
+    ? `${agentMessage}\n\nUploaded document text for document.readSource:\n\n${attachmentText}`
+    : agentMessage
   return {
     requestId: crypto.randomUUID(),
     user: {
@@ -127,6 +129,18 @@ function fastCommandPayload(body: RequestBody, message: string) {
       data: { action: 'comparison-fast-command', patch },
     }],
   }
+}
+
+function summaryPrompt(message: string) {
+  if (!isQuoteComparisonSummaryRequest(message)) return message
+  return [
+    message,
+    '',
+    'Write a short estimator-facing quote comparison summary in no more than 5 sentences.',
+    'Use the current Comparison Sheet Snapshot and call quoteComparison_answerSheetQuestion for sheet facts before answering.',
+    'Include relevant figures: item count, vendor count, complete vs incomplete/partial quote status, material gaps or no-bids, pricing mistake/review flags, and the best choice with caveats.',
+    'Do not propose sheet edits. Do not use a canned template. Make the summary specific to this sheet.',
+  ].join('\n')
 }
 
 export async function POST(request: NextRequest) {

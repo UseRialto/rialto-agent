@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { revalidatePath } from 'next/cache'
 import { getSession } from '@/lib/auth/session'
 import { getProject, saveRFQ, appendBidToRFQ } from '@/lib/store/contractor-store'
+import { saveComparisonSheetView } from '@/lib/store/comparison-sheet-view-store'
+import { buildQuoteImportAnalyticsHighlights } from '@/lib/procurement/comparison-analytics'
+import { DEFAULT_COMPARISON_SHEET_VIEW } from '@/lib/procurement/comparison-sheet-state'
 import { createExternalQuoteImport, createExternalQuoteImportFromFiles, type ExternalQuoteImportFileInput } from '@/lib/procurement/external-quote-import'
 import { extractExternalQuoteImportText, isExcelImportFile, isPdfImportFile } from '@/lib/procurement/external-quote-file-text'
 
@@ -89,6 +92,18 @@ export async function POST(request: NextRequest) {
     for (const bid of imported.bids) {
       await appendBidToRFQ(imported.rfq.id, bid)
     }
+    const analyticsHighlights = buildQuoteImportAnalyticsHighlights(imported.rfq, imported.bids)
+    if (analyticsHighlights.length > 0) {
+      await saveComparisonSheetView(imported.rfq.id, {
+        ...DEFAULT_COMPARISON_SHEET_VIEW,
+        highlights: analyticsHighlights,
+      }, {
+        source: 'import',
+        actorUserId: session.userId,
+        actorName: session.name,
+        summary: `Flagged ${analyticsHighlights.length} pricing mistake candidate${analyticsHighlights.length === 1 ? '' : 's'} from quote import analytics.`,
+      })
+    }
     revalidatePath(`/contractor/projects/${projectId}`)
     revalidatePath(`/contractor/projects/${projectId}/rfqs/${imported.rfq.id}`)
 
@@ -97,7 +112,12 @@ export async function POST(request: NextRequest) {
       lineItemCount: imported.rfq.line_items.length,
       vendorName: imported.bid.vendor_name,
       vendorCount: imported.bids.length,
-      warnings: imported.warnings,
+      warnings: [
+        ...imported.warnings,
+        ...(analyticsHighlights.length > 0 ? [{
+          message: `Flagged ${analyticsHighlights.length} pricing mistake candidate${analyticsHighlights.length === 1 ? '' : 's'} in purple for estimator review.`,
+        }] : []),
+      ],
       redirectTo: `/contractor/projects/${projectId}/rfqs/${imported.rfq.id}`,
     })
   } catch (error) {

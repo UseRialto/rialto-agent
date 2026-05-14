@@ -144,6 +144,20 @@ export function analyzeQuoteComparisonWork(
 export function answerQuoteComparisonQuestion(context: QuoteComparisonToolContext, question: string) {
   const sheet = sheetData(context)
   const lower = question.toLowerCase()
+  if (/\bsummary\b|\bgaps?\b|\bbest choice\b|\bcomplete\b|\bincomplete\b/i.test(lower)) {
+    const facts = summarizeQuoteComparisonFacts(context)
+    return {
+      action: 'sheet-answer',
+      answer: [
+        `Summary facts for model synthesis: ${facts.rowCount} visible items, ${facts.vendorCount} vendors, ${facts.totalMissingPriceCells}/${facts.totalPriceCells} vendor total cells missing.`,
+        facts.bestCompleteVendor
+          ? `Best complete vendor is ${facts.bestCompleteVendor.vendorName} at ${formatMoney(facts.bestCompleteVendor.total)}.`
+          : 'No vendor has a complete visible quote.',
+        `${facts.pricingMistakeFlagCount} purple pricing-mistake flag${facts.pricingMistakeFlagCount === 1 ? '' : 's'} are visible.`,
+      ].join(' '),
+      facts,
+    }
+  }
   if (lower.includes('lowest') && (lower.includes('total') || lower.includes('price'))) {
     const totals = numericCells(sheet.rows, sheet.columns, (column) => /total|price|cost/i.test(`${keyFor(column)} ${labelFor(column)}`))
     const lowest = totals.sort((a, b) => a.value - b.value)[0]
@@ -158,6 +172,70 @@ export function answerQuoteComparisonQuestion(context: QuoteComparisonToolContex
   return {
     action: 'sheet-answer',
     answer: `I inspected ${sheet.rows.length} visible rows and ${sheet.columns.length} visible columns, but this first implementation slice could not compute a precise answer for: ${question}`,
+  }
+}
+
+function summarizeQuoteComparisonFacts(context: QuoteComparisonToolContext) {
+  const sheet = sheetData(context)
+  const totalColumns = sheet.columns.filter((column) => asRecord(column)?.metric === 'total' && asRecord(column)?.vendorId)
+  const unitColumns = sheet.columns.filter((column) => asRecord(column)?.metric === 'unit_price' && asRecord(column)?.vendorId)
+  const vendorIds = [...new Set(totalColumns.map((column) => String(asRecord(column)?.vendorId)).filter(Boolean))]
+  const vendorSummaries = vendorIds.map((vendorId) => {
+    const column = totalColumns.find((candidate) => String(asRecord(candidate)?.vendorId) === vendorId)
+    const vendorName = sheet.vendors.find((vendor) => keyFor(vendor) === vendorId || String(asRecord(vendor)?.id) === vendorId)
+    let missingTotalCells = 0
+    let pricedTotalCells = 0
+    let total = 0
+    for (const row of sheet.rows) {
+      const value = parseNumber(valuesFor(row)[keyFor(column)])
+      if (value == null) missingTotalCells += 1
+      else {
+        pricedTotalCells += 1
+        total += value
+      }
+    }
+    return {
+      vendorId,
+      vendorName: labelFor(vendorName ?? column),
+      total: Number(total.toFixed(2)),
+      pricedTotalCells,
+      missingTotalCells,
+      complete: missingTotalCells === 0,
+      coverageRatio: sheet.rows.length ? pricedTotalCells / sheet.rows.length : 0,
+    }
+  })
+  const completeVendors = vendorSummaries.filter((vendor) => vendor.complete)
+  const bestCompleteVendor = completeVendors.sort((a, b) => a.total - b.total)[0]
+  const partialVendors = vendorSummaries.filter((vendor) => !vendor.complete)
+  const totalMissingPriceCells = vendorSummaries.reduce((sum, vendor) => sum + vendor.missingTotalCells, 0)
+  const highlights = asArray(asRecord(context.snapshot)?.highlights)
+  const pricingMistakeFlags = highlights.filter((highlight) => {
+    const record = asRecord(highlight)
+    return String(record?.color ?? '').toLowerCase() === '#e9d5ff'
+  })
+  const rowsWithAnyGap = sheet.rows.filter((row) => totalColumns.some((column) => parseNumber(valuesFor(row)[keyFor(column)]) == null))
+  const mostIncompleteVendors = [...partialVendors].sort((a, b) => b.missingTotalCells - a.missingTotalCells).slice(0, 3)
+  const unitOutlierHints = unitColumns.flatMap((column) => {
+    const values = sheet.rows
+      .map((row) => ({ row, value: parseNumber(valuesFor(row)[keyFor(column)]) }))
+      .filter((entry): entry is { row: unknown; value: number } => entry.value != null && entry.value > 0)
+    if (values.length === 0) return []
+    return []
+  })
+  return {
+    rowCount: sheet.rows.length,
+    vendorCount: vendorIds.length,
+    totalPriceCells: sheet.rows.length * vendorIds.length,
+    totalMissingPriceCells,
+    completeVendorCount: completeVendors.length,
+    partialVendorCount: partialVendors.length,
+    bestCompleteVendor,
+    vendorSummaries,
+    mostIncompleteVendors,
+    rowsWithAnyGap: rowsWithAnyGap.length,
+    pricingMistakeFlagCount: pricingMistakeFlags.length,
+    pricingMistakeNotes: pricingMistakeFlags.map((highlight) => String(asRecord(highlight)?.note ?? '')).filter(Boolean).slice(0, 5),
+    unitOutlierHints,
   }
 }
 

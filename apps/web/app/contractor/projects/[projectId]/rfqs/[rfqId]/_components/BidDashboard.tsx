@@ -10,6 +10,7 @@ import { buildLiveQuoteComparisonSummary } from '@/lib/procurement/quote-compari
 import { submitComparisonExport, type ComparisonExportFormat } from '@/lib/procurement/comparison-export-client'
 import { workbookVersionMetadataFromApprovedComparisonPatch } from '@/lib/procurement/comparison-agent-tools'
 import { buildComparisonSheetSnapshot } from '@/lib/procurement/comparison-sheet-snapshot'
+import { PRICING_MISTAKE_HIGHLIGHT } from '@/lib/procurement/comparison-analytics'
 import {
   addNegotiationMessageAction,
   createRemainderRFQAction,
@@ -1720,6 +1721,13 @@ function BidExcelSheet({
     }
     return map
   }, [view.highlights, visibleItems, bids])
+  const highlightNoteMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const h of view.highlights) {
+      if (h.selector.kind === 'cell' && h.note) map.set(`${h.selector.rowKey}|${h.selector.colKey}`, h.note)
+    }
+    return map
+  }, [view.highlights])
 
   const previewCellMap = useMemo(() => {
     const map = new Map<string, string>()
@@ -2118,6 +2126,7 @@ function BidExcelSheet({
   // Cell selection — bounds extend through the empty filler rows + cols.
   const [sel, setSel] = useState<{ r: number; c: number }>({ r: dataStartRow, c: 0 })
   const [openSpecBubble, setOpenSpecBubble] = useState<{ itemId: string; bidId: string } | null>(null)
+  const [openPricingMistakeBubble, setOpenPricingMistakeBubble] = useState<{ itemId: string; colKey: string } | null>(null)
   const selectedRange = useMemo(() => {
     const start = rangeStart ?? sel
     return {
@@ -2140,6 +2149,19 @@ function BidExcelSheet({
     const finding = lineSpecFinding(bid, item.id)
     return finding?.review_kind === 'substitution' ? { finding, item, bid, response } : undefined
   }, [bids, openSpecBubble, visibleItems])
+  const activePricingMistakeBubble = useMemo(() => {
+    if (!openPricingMistakeBubble) return undefined
+    const item = visibleItems.find((entry) => entry.id === openPricingMistakeBubble.itemId)
+    const col = visibleCols.find((entry) => entry.key === openPricingMistakeBubble.colKey)
+    const highlight = view.highlights.find((entry) =>
+      entry.selector.kind === 'cell' &&
+      entry.selector.rowKey === openPricingMistakeBubble.itemId &&
+      entry.selector.colKey === openPricingMistakeBubble.colKey &&
+      entry.color.toLowerCase() === PRICING_MISTAKE_HIGHLIGHT,
+    )
+    if (!item || !col || !highlight) return undefined
+    return { item, col, highlight }
+  }, [openPricingMistakeBubble, view.highlights, visibleCols, visibleItems])
 
   useEffect(() => {
     setSel((s) => ({ r: Math.min(s.r, lastEmptyRow), c: Math.min(s.c, Math.max(0, totalGridCols - 1)) }))
@@ -2613,6 +2635,10 @@ function BidExcelSheet({
             <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#ffffff', border: '2px solid #d64545' }} />
             Spec issue
           </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: PRICING_MISTAKE_HIGHLIGHT, border: '1px solid #c084fc' }} />
+            Pricing mistake
+          </span>
         </div>
 
         {(hiddenColEntries.length > 0 || view.hiddenLineItemIds.length > 0) && (
@@ -2689,6 +2715,35 @@ function BidExcelSheet({
               ))}
             </div>
           )}
+        </div>
+      )}
+      {activePricingMistakeBubble && (
+        <div
+          className="absolute right-4 top-28 z-30 w-[min(420px,calc(100%-2rem))] rounded-xl border bg-white p-3 shadow-2xl"
+          style={{ borderColor: '#c084fc', boxShadow: '0 18px 45px rgba(30,58,47,0.18)' }}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-bold uppercase tracking-wide" style={{ color: '#7e22ce' }}>
+                Pricing Mistake Candidate
+              </p>
+              <p className="mt-1 text-sm font-semibold leading-tight" style={{ color: '#1e3a2f' }}>
+                {activePricingMistakeBubble.col.vendorName ?? 'Vendor'} · {activePricingMistakeBubble.item.description}
+              </p>
+            </div>
+            <button
+              type="button"
+              aria-label="Close pricing mistake explanation"
+              onClick={() => setOpenPricingMistakeBubble(null)}
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded border text-sm font-bold"
+              style={{ borderColor: '#d9e0dc', color: '#587067', background: '#ffffff' }}
+            >
+              ×
+            </button>
+          </div>
+          <p className="mt-2 rounded border px-2.5 py-2 text-xs leading-relaxed" style={{ borderColor: '#d8b4fe', background: '#faf5ff', color: '#4a2a68' }}>
+            {activePricingMistakeBubble.highlight.note ?? 'This price is materially different from comparable quotes. Confirm the unit of measure before relying on this comparison.'}
+          </p>
         </div>
       )}
 
@@ -2954,6 +3009,8 @@ function BidExcelSheet({
                   const isFastestLead = col.kind === 'vendor' && col.vendorMetric === 'lead' && Boolean(col.vendorId && best?.leadVendorIds.has(col.vendorId))
                   const autoHighlight = isLowestPrice ? '#dcfce7' : isFastestLead ? '#dbeafe' : undefined
                   const highlight = previewHighlightMap.get(cellKey) ?? (hasPreview ? '#fef3c7' : highlightMap.get(cellKey) ?? autoHighlight)
+                  const highlightNote = highlightNoteMap.get(cellKey)
+                  const isPricingMistakeHighlight = highlight?.toLowerCase() === PRICING_MISTAKE_HIGHLIGHT
                   const isSelected = sel.r === r && sel.c === c
                   const inRange = isInSelectedRange(r, c)
                   const isFrozen = col.key === frozenColumnKey
@@ -2978,6 +3035,7 @@ function BidExcelSheet({
                     'finding' in cellState &&
                     cellState.finding?.review_kind === 'substitution',
                   )
+                  const canOpenPricingMistakeBubble = Boolean(isPricingMistakeHighlight && highlightNote)
                   return (
                     <div
                       key={`cell-${item.id}-${col.key}`}
@@ -2989,6 +3047,7 @@ function BidExcelSheet({
                       title={[
                         isLowestPrice ? 'Lowest total price for this item.' : '',
                         isFastestLead ? 'Fastest lead time for this item.' : '',
+                        canOpenPricingMistakeBubble ? 'Click the lightbulb for pricing mistake reasoning.' : '',
                         canOpenSpecBubble ? 'Click the lightbulb for spec justification.' : cellState.tooltip,
                       ].filter(Boolean).join('\n')}
                       style={{
@@ -3041,6 +3100,30 @@ function BidExcelSheet({
                             background: '#fff7cc',
                             borderColor: '#f4c95d',
                             color: '#74531a',
+                          }}
+                        >
+                          <Lightbulb className="h-3 w-3" aria-hidden="true" />
+                        </button>
+                      )}
+                      {canOpenPricingMistakeBubble && (
+                        <button
+                          type="button"
+                          aria-label={`Open pricing mistake reasoning for ${item.description}`}
+                          title={highlightNote}
+                          onMouseDown={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                          }}
+                          onClick={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            setOpenPricingMistakeBubble({ itemId: item.id, colKey: col.key })
+                          }}
+                          className="absolute right-1 top-1/2 z-10 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full border opacity-0 shadow-sm transition group-hover:opacity-100 focus:opacity-100"
+                          style={{
+                            background: '#faf5ff',
+                            borderColor: '#c084fc',
+                            color: '#7e22ce',
                           }}
                         >
                           <Lightbulb className="h-3 w-3" aria-hidden="true" />
