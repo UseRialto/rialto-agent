@@ -1,8 +1,10 @@
 import { NextRequest } from 'next/server'
 import { after } from 'next/server'
 import { getSession } from '@/lib/auth/session'
+import { findUserById } from '@/lib/auth/users'
+import { contractorCustomizationFromUser } from '@/lib/contractor-customization'
 import { getProject } from '@/lib/store/contractor-store'
-import { getProjectSpecDocument, updateProjectSpecDocument } from '@/lib/spec-compliance/store'
+import { ensureProjectSpecPackage, getProjectSpecDocument, updateProjectSpecDocument } from '@/lib/spec-compliance/store'
 import { indexProjectSpecDocument } from '@/lib/spec-compliance'
 
 export const runtime = 'nodejs'
@@ -39,6 +41,9 @@ export async function POST(request: NextRequest) {
     after(async () => {
       try {
         await indexProjectSpecDocument(document.id)
+        const owner = await findUserById(project.owner_id)
+        const trade = contractorCustomizationFromUser(owner).trade ?? owner?.company_info?.contractor_trade ?? 'general'
+        await ensureProjectSpecPackage(project.id, trade)
       } catch (error) {
         console.error(`Project spec background indexing failed for document ${document.id}:`, error)
       }

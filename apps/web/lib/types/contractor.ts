@@ -9,6 +9,7 @@ import type {
   NegotiationMessage,
   ProcurementLineItemAttribute,
   ProcurementRequirement,
+  ProjectSpecPackageSummary,
   ProjectSpecDocumentSummary,
   RequestRiskFlag,
   RequestType,
@@ -40,6 +41,7 @@ export interface ContractorProject {
   created_at: string
   status: 'active' | 'completed' | 'archived'
   spec_documents?: ProjectSpecDocumentSummary[]
+  spec_packages?: ProjectSpecPackageSummary[]
 }
 
 export interface ContractorRFQLineItem {

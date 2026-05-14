@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { comparisonFastCommandPatch } from './comparison-fast-commands'
+import {
+  comparisonFastCommandPatch,
+  comparisonHistoryCommand,
+  resolveComparisonHistoryRequest,
+} from './comparison-fast-commands'
 
 const schema = {
   columns: [
@@ -67,5 +71,30 @@ describe('comparisonFastCommandPatch', () => {
     expect(patch?.addHighlights).toEqual([expect.objectContaining({
       selector: { kind: 'cell', rowKey: 'line-lock-set', colKey: 'vendor:acme:lead' },
     })])
+  })
+})
+
+describe('comparisonHistoryCommand', () => {
+  it('recognizes natural-language undo and redo requests before calling the model', () => {
+    expect(comparisonHistoryCommand('undo that change')).toBe('undo')
+    expect(comparisonHistoryCommand('redo that change')).toBe('redo')
+  })
+})
+
+describe('resolveComparisonHistoryRequest', () => {
+  it('discards a pending preview before trying durable workbook undo', () => {
+    expect(resolveComparisonHistoryRequest('undo that', {
+      hasPendingPreview: true,
+      canUndoSavedVersion: false,
+      canRedoSavedVersion: false,
+    })).toEqual({ action: 'discard-preview' })
+  })
+
+  it('uses saved workbook versions when there is no pending preview', () => {
+    expect(resolveComparisonHistoryRequest('undo that', {
+      hasPendingPreview: false,
+      canUndoSavedVersion: true,
+      canRedoSavedVersion: false,
+    })).toEqual({ action: 'undo-version' })
   })
 })

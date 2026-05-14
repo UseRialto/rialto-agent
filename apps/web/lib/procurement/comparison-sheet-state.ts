@@ -69,6 +69,9 @@ export interface WorkbookVersionMetadata {
   source?: WorkbookVersionSource
   summary?: string
   actorUserId?: string
+  actorName?: string
+  historyMode?: 'autosave' | 'snapshot'
+  restoreKind?: 'undo' | 'redo' | 'history'
   proposal?: unknown
 }
 
@@ -79,6 +82,9 @@ export interface WorkbookVersionSummary {
   source: WorkbookVersionSource
   summary: string
   actorUserId?: string
+  actorName?: string
+  restoredVersionId?: number
+  restoreKind?: 'undo' | 'redo' | 'history'
   createdAt: string
 }
 
@@ -90,9 +96,27 @@ export interface BuiltWorkbookVersion {
     source: WorkbookVersionSource
     summary: string
     actorUserId?: string
+    actorName?: string
     proposalJson?: string
     createdAt: string
   }
+}
+
+export interface BuiltWorkbookVersionSave {
+  view: ComparisonSheetView
+  versions: BuiltWorkbookVersion['version'][]
+}
+
+export interface ComparisonSheetCellOverrideInput {
+  rowKey: string
+  colKey: string
+  value: string
+}
+
+export interface LocalWorkbookEditHistory {
+  current: ComparisonSheetView
+  undoStack: ComparisonSheetView[]
+  redoStack: ComparisonSheetView[]
 }
 
 export const DEFAULT_COMPARISON_SHEET_VIEW: ComparisonSheetView = {
@@ -110,6 +134,53 @@ export const DEFAULT_COMPARISON_SHEET_VIEW: ComparisonSheetView = {
     { slot: 'left', metric: 'price', title: 'Total Price' },
     { slot: 'right', metric: 'lead', title: 'Lead Time' },
   ],
+}
+
+export function applyComparisonSheetCellOverrides(
+  view: ComparisonSheetView,
+  cells: ComparisonSheetCellOverrideInput[],
+): ComparisonSheetView {
+  const normalized = normalizeComparisonSheetView(view)
+  const cellOverrides = { ...(normalized.cellOverrides ?? {}) }
+  for (const cell of cells) {
+    cellOverrides[`${cell.rowKey}|${cell.colKey}`] = cell.value
+  }
+  return normalizeComparisonSheetView({ ...normalized, cellOverrides })
+}
+
+export function applyLocalWorkbookEdit(
+  history: LocalWorkbookEditHistory,
+  nextView: ComparisonSheetView,
+  limit = 50,
+): LocalWorkbookEditHistory {
+  const current = normalizeComparisonSheetView(history.current)
+  const next = normalizeComparisonSheetView(nextView)
+  if (JSON.stringify(current) === JSON.stringify(next)) return { ...history, current }
+  return {
+    current: next,
+    undoStack: [...history.undoStack.slice(-(limit - 1)), current],
+    redoStack: [],
+  }
+}
+
+export function undoLocalWorkbookEdit(history: LocalWorkbookEditHistory): LocalWorkbookEditHistory {
+  const previous = history.undoStack.at(-1)
+  if (!previous) return history
+  return {
+    current: previous,
+    undoStack: history.undoStack.slice(0, -1),
+    redoStack: [...history.redoStack.slice(-49), normalizeComparisonSheetView(history.current)],
+  }
+}
+
+export function redoLocalWorkbookEdit(history: LocalWorkbookEditHistory): LocalWorkbookEditHistory {
+  const next = history.redoStack.at(-1)
+  if (!next) return history
+  return {
+    current: next,
+    undoStack: [...history.undoStack.slice(-49), normalizeComparisonSheetView(history.current)],
+    redoStack: history.redoStack.slice(0, -1),
+  }
 }
 
 export function normalizeComparisonSheetView(value: unknown): ComparisonSheetView {
@@ -146,6 +217,7 @@ export function buildComparisonSheetVersion(input: {
   const previous = normalizeComparisonSheetView(input.previousView)
   const next = normalizeComparisonSheetView(input.nextView)
   if (JSON.stringify(previous) === JSON.stringify(next)) return null
+  if (input.metadata?.historyMode === 'autosave') return null
   return {
     view: next,
     version: {
@@ -154,10 +226,95 @@ export function buildComparisonSheetVersion(input: {
       source: input.metadata?.source ?? 'estimator-edit',
       summary: input.metadata?.summary?.trim() || defaultVersionSummary(input.metadata?.source),
       actorUserId: input.metadata?.actorUserId,
+      actorName: input.metadata?.actorName?.trim() || undefined,
       proposalJson: input.metadata?.proposal == null ? undefined : JSON.stringify(input.metadata.proposal),
       createdAt: input.createdAt,
     },
   }
+}
+
+export function buildComparisonSheetVersionSave(input: {
+  previousView: ComparisonSheetView
+  nextView: ComparisonSheetView
+  latestVersionNumber: number
+  currentVersionId?: number | null
+  createdAt: string
+  metadata?: WorkbookVersionMetadata
+}): BuiltWorkbookVersionSave | null {
+  const built = buildComparisonSheetVersion(input)
+  if (!built) return null
+  if (input.latestVersionNumber > 0) return { view: built.view, versions: [built.version] }
+
+  return {
+    view: built.view,
+    versions: [
+      {
+        versionNumber: 1,
+        source: 'system',
+        summary: 'Started workbook history.',
+        actorUserId: input.metadata?.actorUserId,
+        createdAt: input.createdAt,
+      },
+      {
+        ...built.version,
+        versionNumber: 2,
+      },
+    ],
+  }
+}
+
+export function getWorkbookUndoRedoTargets(input: {
+  versions: WorkbookVersionSummary[]
+  currentVersionId?: number
+}): { undoVersionId?: number; redoVersionId?: number } {
+  const versions = input.versions
+  if (versions.length === 0) return {}
+
+  const current = versions.find((version) => version.id === input.currentVersionId) ?? versions[0]
+  if (current.source === 'restore' && current.restoredVersionId) {
+    if (current.restoreKind === 'redo') {
+      return {
+        undoVersionId: current.parentVersionId,
+        redoVersionId: undefined,
+      }
+    }
+    const restoredIndex = versions.findIndex((version) => version.id === current.restoredVersionId)
+    return {
+      undoVersionId: restoredIndex >= 0 ? versions[restoredIndex + 1]?.id : undefined,
+      redoVersionId: current.parentVersionId,
+    }
+  }
+
+  const currentIndex = versions.findIndex((version) => version.id === current.id)
+  if (currentIndex === -1) return {}
+  return {
+    undoVersionId: versions[currentIndex + 1]?.id,
+    redoVersionId: versions[currentIndex - 1]?.id,
+  }
+}
+
+export function labelWorkbookVersionActors(
+  versions: WorkbookVersionSummary[],
+  currentUser: { userId: string; name: string },
+): WorkbookVersionSummary[] {
+  return versions.map((version) => {
+    if (version.source === 'agent-proposal') return { ...version, actorName: 'Rialto AI' }
+    if (version.actorUserId === currentUser.userId) return { ...version, actorName: currentUser.name }
+    return version
+  })
+}
+
+export function mergeWorkbookVersionSummaries(
+  current: WorkbookVersionSummary[],
+  incoming: WorkbookVersionSummary[],
+  limit = 25,
+): WorkbookVersionSummary[] {
+  const byId = new Map<number, WorkbookVersionSummary>()
+  for (const version of current) byId.set(version.id, version)
+  for (const version of incoming) byId.set(version.id, version)
+  return Array.from(byId.values())
+    .sort((a, b) => b.versionNumber - a.versionNumber)
+    .slice(0, limit)
 }
 
 function defaultVersionSummary(source: WorkbookVersionSource | undefined) {

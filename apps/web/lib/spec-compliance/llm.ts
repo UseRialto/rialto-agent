@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import type { ComplianceEvaluationInput, ComplianceEvaluationResult } from './types'
-import type { BidSpecComplianceEvidence, BidSpecComplianceItemStatus } from '@/lib/types/procurement'
+import type { BidSpecComplianceEvidence, BidSpecComplianceItemStatus, BidSpecComplianceSubstitutionVerdict } from '@/lib/types/procurement'
 
 const MAX_CONTEXT_CHARS = 18_000
 
@@ -37,6 +37,7 @@ function parseJsonResponse(content: string) {
 
 const STATUSES = new Set(['compliant', 'violation', 'needs_review', 'no_spec_found', 'not_quoted'])
 const SEVERITIES = new Set(['low', 'medium', 'high'])
+const SUBSTITUTION_VERDICTS = new Set(['up_to_spec', 'not_up_to_spec', 'needs_review'])
 
 function normalizeStatus(value: unknown): BidSpecComplianceItemStatus {
   const normalized = String(value ?? '').toLowerCase().replace(/[\s-]+/g, '_')
@@ -49,6 +50,18 @@ function normalizeSeverity(value: unknown): ComplianceEvaluationResult['severity
   if (['critical', 'major', 'severe', 'noncompliant', 'fail'].includes(normalized)) return 'high'
   if (['moderate', 'review', 'unknown'].includes(normalized)) return 'medium'
   return 'low'
+}
+
+function normalizeSubstitutionVerdict(value: unknown): BidSpecComplianceSubstitutionVerdict {
+  const normalized = String(value ?? '').toLowerCase().replace(/[\s-]+/g, '_')
+  if (SUBSTITUTION_VERDICTS.has(normalized)) return normalized as BidSpecComplianceSubstitutionVerdict
+  if (['compliant', 'acceptable', 'approved', 'equal', 'yes'].includes(normalized)) return 'up_to_spec'
+  if (['violation', 'noncompliant', 'not_compliant', 'not_acceptable', 'no'].includes(normalized)) return 'not_up_to_spec'
+  return 'needs_review'
+}
+
+function trimEvidenceQuote(value: string) {
+  return value.replace(/\s+/g, ' ').trim().slice(0, 700)
 }
 
 function normalizeEvidence(value: unknown, input: ComplianceEvaluationInput): BidSpecComplianceEvidence[] {
@@ -65,7 +78,7 @@ function normalizeEvidence(value: unknown, input: ComplianceEvaluationInput): Bi
             page_end: chunk.page_end,
             section_number: chunk.section_number,
             section_title: chunk.section_title,
-            quote: entry,
+            quote: trimEvidenceQuote(entry),
           })
         }
         continue
@@ -87,7 +100,7 @@ function normalizeEvidence(value: unknown, input: ComplianceEvaluationInput): Bi
         page_end: pageEnd,
         section_number: raw.section_number,
         section_title: raw.section_title,
-        quote: String(raw.quote ?? matchedChunk?.content.slice(0, 350) ?? ''),
+        quote: trimEvidenceQuote(String(raw.quote ?? matchedChunk?.content.slice(0, 700) ?? '')),
       })
     }
     return normalized
@@ -103,7 +116,7 @@ function normalizeEvidence(value: unknown, input: ComplianceEvaluationInput): Bi
       page_end: chunk.page_end,
       section_number: chunk.section_number,
       section_title: chunk.section_title,
-      quote: value,
+      quote: trimEvidenceQuote(value),
     }]
   }
 
@@ -114,7 +127,7 @@ function normalizeEvidence(value: unknown, input: ComplianceEvaluationInput): Bi
     page_end: chunk.page_end,
     section_number: chunk.section_number,
     section_title: chunk.section_title,
-    quote: chunk.content.slice(0, 350),
+    quote: trimEvidenceQuote(chunk.content.slice(0, 700)),
   }))
 }
 
@@ -136,8 +149,18 @@ function getModelInfo() {
   return { apiKey: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL || 'gpt-5-mini' }
 }
 
+function getSubstitutionModelInfo() {
+  ensureLocalEnvLoaded()
+  return { apiKey: process.env.OPENAI_API_KEY, model: process.env.SPEC_SUBSTITUTION_MODEL || 'gpt-5.5' }
+}
+
 export function configuredComplianceModel() {
   const model = getModelInfo()
+  return model.model
+}
+
+export function configuredSubstitutionComplianceModel() {
+  const model = getSubstitutionModelInfo()
   return model.model
 }
 
@@ -204,6 +227,46 @@ function buildPrompt(input: ComplianceEvaluationInput) {
   ].join('\n')
 }
 
+function buildSubstitutionPrompt(input: ComplianceEvaluationInput) {
+  const item = input.lineItem
+  const response = input.response
+  const context = input.chunks
+    .map((chunk, index) => [
+      `Evidence ${index + 1}: ${chunk.document_name}, pages ${chunk.page_start}-${chunk.page_end}${chunk.section_number ? `, section ${chunk.section_number}` : ''}${chunk.section_title ? ` ${chunk.section_title}` : ''}`,
+      chunk.content.slice(0, 4_000),
+    ].join('\n'))
+    .join('\n\n')
+    .slice(0, MAX_CONTEXT_CHARS)
+
+  return [
+    'Return only valid JSON with keys: substitution_verdict, severity, requirement_summary, vendor_summary, explanation, suggested_follow_up, evidence.',
+    'substitution_verdict must be exactly one of: up_to_spec, not_up_to_spec, needs_review.',
+    'Severity must be exactly one of: low, medium, high.',
+    'Evidence must be an array of the exact relevant short spec lines used for the decision. Do not return whole sections.',
+    'Use up_to_spec only when the vendor substitution facts satisfy the cited project specification requirements or the cited spec allows the offered equal.',
+    'Use not_up_to_spec when the substitution clearly conflicts with a cited required material, rating, finish, manufacturer constraint, installation requirement, standard, or submittal rule.',
+    'Use needs_review when the evidence is relevant but the vendor did not provide enough facts or the spec requires architect/engineer approval.',
+    'Be strict. Do not approve a substitution from price, lead time, vague "equal" language, or SKU similarity alone.',
+    '',
+    `RFQ: ${input.rfq.title}`,
+    `RFQ category: ${input.rfq.category ?? 'unknown'}`,
+    `Requested item: ${compact(item.sku)} ${item.description}`,
+    `Requested quantity: ${item.quantity} ${item.unit}`,
+    `Requested specs: ${compact(item.specs) || 'none'}`,
+    `Requested constraints: ${compact(item.constraints) || 'none'}`,
+    '',
+    `Vendor: ${input.bid.vendor_name}`,
+    `Substitution SKU: ${compact(response.sku) || 'none'}`,
+    `Substitution description: ${compact(response.description) || 'none'}`,
+    `Substitution quantity: ${response.quoted_quantity ?? response.quantity} ${response.unit}`,
+    `Substitution product details: ${compact(response.quoted_product_details) || 'none'}`,
+    `Vendor substitution notes: ${compact(response.substitution_notes) || 'none'}`,
+    `Vendor notes: ${compact(response.notes) || 'none'}`,
+    '',
+    `Trade-scoped project spec package evidence:\n${context || 'No matching spec evidence was retrieved from the trade-scoped package.'}`,
+  ].join('\n')
+}
+
 async function callOpenAI(prompt: string, model: string, apiKey: string) {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -266,6 +329,34 @@ function fallbackEvaluation(input: ComplianceEvaluationInput): ComplianceEvaluat
   }
 }
 
+function fallbackSubstitutionEvaluation(input: ComplianceEvaluationInput): ComplianceEvaluationResult {
+  return {
+    status: input.chunks.length > 0 ? 'needs_review' : 'no_spec_found',
+    review_kind: 'substitution',
+    substitution_verdict: 'needs_review',
+    severity: input.chunks.length > 0 ? 'high' : 'medium',
+    requirement_summary: input.chunks.length > 0
+      ? 'Relevant trade-scoped specification text was found and requires manual substitution review.'
+      : 'No matching trade-scoped specification text was found for this substitution.',
+    vendor_summary: compact(input.response.quoted_product_details) || compact(input.response.substitution_notes) || compact(input.response.description) || 'Vendor did not provide specific substitution details.',
+    explanation: input.chunks.length > 0
+      ? 'GPT-5.5 substitution analysis is not configured. The retrieved trade-scoped evidence is available for contractor review.'
+      : 'The trade-scoped project spec package did not return evidence for this substitution.',
+    suggested_follow_up: 'Ask the vendor for manufacturer, model, material, rating, finish, compliance standards, and any required substitution approval documents.',
+    evidence: input.chunks.slice(0, 3).map((chunk) => ({
+      document_id: chunk.document_id,
+      document_name: chunk.document_name,
+      page_start: chunk.page_start,
+      page_end: chunk.page_end,
+      section_number: chunk.section_number,
+      section_title: chunk.section_title,
+      quote: trimEvidenceQuote(chunk.content.slice(0, 700)),
+    })),
+    retrieval_diagnostics: input.retrievalDiagnostics,
+    product_lookup: input.productProfile?.lookup,
+  }
+}
+
 export async function evaluateLineItemCompliance(input: ComplianceEvaluationInput): Promise<ComplianceEvaluationResult> {
   const modelInfo = getModelInfo()
   if (!modelInfo.apiKey || !modelInfo.model) return fallbackEvaluation(input)
@@ -286,6 +377,30 @@ export async function evaluateLineItemCompliance(input: ComplianceEvaluationInpu
   }
   return {
     ...result,
+    retrieval_diagnostics: input.retrievalDiagnostics,
+    product_lookup: input.productProfile?.lookup,
+  }
+}
+
+export async function evaluateSubstitutionCompliance(input: ComplianceEvaluationInput): Promise<ComplianceEvaluationResult> {
+  const modelInfo = getSubstitutionModelInfo()
+  if (!modelInfo.apiKey || !modelInfo.model) return fallbackSubstitutionEvaluation(input)
+
+  const raw = await callOpenAI(buildSubstitutionPrompt(input), modelInfo.model, modelInfo.apiKey)
+  const parsed = parseJsonResponse(raw) as Record<string, unknown>
+  const verdict = normalizeSubstitutionVerdict(parsed.substitution_verdict ?? parsed.verdict ?? parsed.status)
+  const status: BidSpecComplianceItemStatus = verdict === 'up_to_spec'
+    ? 'compliant'
+    : verdict === 'not_up_to_spec'
+      ? 'violation'
+      : 'needs_review'
+  const result = normalizeEvaluation({ ...parsed, status }, input)
+  return {
+    ...result,
+    status,
+    review_kind: 'substitution',
+    substitution_verdict: verdict,
+    severity: verdict === 'not_up_to_spec' && result.severity === 'low' ? 'high' : result.severity,
     retrieval_diagnostics: input.retrievalDiagnostics,
     product_lookup: input.productProfile?.lookup,
   }

@@ -66,6 +66,7 @@ export interface ApprovedComparisonPatchVersionMetadata {
   source: 'agent-proposal'
   summary: string
   actorUserId?: string
+  historyMode: 'snapshot'
   proposal: unknown
 }
 
@@ -392,6 +393,7 @@ export function workbookVersionMetadataFromApprovedComparisonPatch(
     source: 'agent-proposal',
     summary: patch.summary,
     actorUserId,
+    historyMode: 'snapshot',
     proposal: patch.agentProposal ?? patch,
   }
 }

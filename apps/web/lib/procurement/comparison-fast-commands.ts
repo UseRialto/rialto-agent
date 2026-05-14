@@ -17,6 +17,13 @@ export interface ComparisonFastCommandSchema {
   lineItems?: SheetLineItem[]
 }
 
+export type ComparisonHistoryCommand = 'undo' | 'redo'
+export type ComparisonHistoryResolution =
+  | { action: 'discard-preview' }
+  | { action: 'undo-version' }
+  | { action: 'redo-version' }
+  | { action: 'unavailable'; command: ComparisonHistoryCommand }
+
 function normalize(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
@@ -118,4 +125,27 @@ export function comparisonFastCommandPatch(message: string, schema: ComparisonFa
         },
       }
     : null
+}
+
+export function comparisonHistoryCommand(message: string): ComparisonHistoryCommand | null {
+  const text = normalize(message)
+  if (/^(undo|revert|roll back|rollback)(?:\b|$)/.test(text)) return 'undo'
+  if (/^(redo|re apply|reapply)(?:\b|$)/.test(text)) return 'redo'
+  return null
+}
+
+export function resolveComparisonHistoryRequest(
+  message: string,
+  state: {
+    hasPendingPreview: boolean
+    canUndoSavedVersion: boolean
+    canRedoSavedVersion: boolean
+  },
+): ComparisonHistoryResolution | null {
+  const command = comparisonHistoryCommand(message)
+  if (!command) return null
+  if (command === 'undo' && state.hasPendingPreview) return { action: 'discard-preview' }
+  if (command === 'undo' && state.canUndoSavedVersion) return { action: 'undo-version' }
+  if (command === 'redo' && state.canRedoSavedVersion) return { action: 'redo-version' }
+  return { action: 'unavailable', command }
 }

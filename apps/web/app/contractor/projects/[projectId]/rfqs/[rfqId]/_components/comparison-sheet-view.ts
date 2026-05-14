@@ -2,10 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  applyComparisonSheetCellOverrides,
+  applyLocalWorkbookEdit,
   DEFAULT_COMPARISON_SHEET_VIEW,
+  getWorkbookUndoRedoTargets,
+  mergeWorkbookVersionSummaries,
   normalizeComparisonSheetView,
+  redoLocalWorkbookEdit,
+  undoLocalWorkbookEdit,
   type ChartConfig,
   type ChartMetric,
+  type ComparisonSheetCellOverrideInput,
   type ComparisonHighlight,
   type ComparisonSheetView,
   type DerivedColumn,
@@ -23,11 +30,21 @@ function storageKey(userKey: string, rfqId: string) {
   return `rialto:comparison-view:${userKey}:${rfqId}`
 }
 
+function viewsEqual(a: ComparisonSheetView, b: ComparisonSheetView) {
+  return JSON.stringify(normalizeComparisonSheetView(a)) === JSON.stringify(normalizeComparisonSheetView(b))
+}
+
 export function useComparisonSheetView(userKey: string, rfqId: string) {
   const [view, setView] = useState<ComparisonSheetView>(DEFAULT_VIEW)
   const [versions, setVersions] = useState<WorkbookVersionSummary[]>([])
+  const [currentVersionId, setCurrentVersionId] = useState<number | undefined>(undefined)
   const [hydrated, setHydrated] = useState(false)
+  const [canUndoLocal, setCanUndoLocal] = useState(false)
+  const [canRedoLocal, setCanRedoLocal] = useState(false)
   const pendingVersionMetadataRef = useRef<WorkbookVersionMetadata | null>(null)
+  const undoStackRef = useRef<ComparisonSheetView[]>([])
+  const redoStackRef = useRef<ComparisonSheetView[]>([])
+  const viewRef = useRef<ComparisonSheetView>(DEFAULT_VIEW)
   const saveView = useCallback(async (viewToSave: ComparisonSheetView, metadata: WorkbookVersionMetadata) => {
     try {
       window.localStorage.setItem(storageKey(userKey, rfqId), JSON.stringify(viewToSave))
@@ -40,11 +57,37 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
       body: JSON.stringify({ view: viewToSave, metadata }),
     })
     if (!response.ok) return
-    const body = await response.json() as { createdVersion?: WorkbookVersionSummary }
-    if (body.createdVersion) {
-      setVersions((prev) => [body.createdVersion!, ...prev.filter((version) => version.id !== body.createdVersion!.id)].slice(0, 25))
+    const body = await response.json() as { createdVersion?: WorkbookVersionSummary; createdVersions?: WorkbookVersionSummary[]; currentVersionId?: number }
+    if (typeof body.currentVersionId === 'number') setCurrentVersionId(body.currentVersionId)
+    const createdVersions = body.createdVersions?.length ? body.createdVersions : body.createdVersion ? [body.createdVersion] : []
+    if (createdVersions.length) {
+      setVersions((prev) => mergeWorkbookVersionSummaries(prev, createdVersions))
     }
   }, [rfqId, userKey])
+
+  const pushLocalEdit = useCallback((previous: ComparisonSheetView, next: ComparisonSheetView) => {
+    const history = applyLocalWorkbookEdit({
+      current: previous,
+      undoStack: undoStackRef.current,
+      redoStack: redoStackRef.current,
+    }, next)
+    undoStackRef.current = history.undoStack
+    redoStackRef.current = history.redoStack
+    setCanUndoLocal(history.undoStack.length > 0)
+    setCanRedoLocal(history.redoStack.length > 0)
+  }, [])
+
+  const updateView = useCallback((updater: (previous: ComparisonSheetView) => ComparisonSheetView) => {
+    setView((previous) => {
+      const next = normalizeComparisonSheetView(updater(previous))
+      pushLocalEdit(previous, next)
+      return next
+    })
+  }, [pushLocalEdit])
+
+  useEffect(() => {
+    viewRef.current = view
+  }, [view])
 
   useEffect(() => {
     let cancelled = false
@@ -62,9 +105,10 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
       try {
         const response = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/comparison-sheet-view`, { cache: 'no-store' })
         if (response.ok) {
-          const body = await response.json() as { view?: unknown; persisted?: boolean; versions?: WorkbookVersionSummary[] }
+          const body = await response.json() as { view?: unknown; persisted?: boolean; versions?: WorkbookVersionSummary[]; currentVersionId?: number }
           if (!cancelled) setView(body.persisted ? normalizeComparisonSheetView(body.view) : localView)
           if (!cancelled && Array.isArray(body.versions)) setVersions(body.versions)
+          if (!cancelled && typeof body.currentVersionId === 'number') setCurrentVersionId(body.currentVersionId)
         } else if (!cancelled) {
           setView(localView)
         }
@@ -89,7 +133,7 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
     }
 
     const timeout = window.setTimeout(() => {
-      saveView(view, pendingVersionMetadataRef.current ?? { source: 'estimator-edit' }).catch(() => {
+      saveView(view, pendingVersionMetadataRef.current ?? { source: 'estimator-edit', historyMode: 'autosave' }).catch(() => {
         // The local cache keeps the current browser usable if the save fails.
       }).finally(() => {
         pendingVersionMetadataRef.current = null
@@ -105,128 +149,252 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
   const replaceView = useCallback((nextView: ComparisonSheetView, metadata: WorkbookVersionMetadata) => {
     const normalized = normalizeComparisonSheetView(nextView)
     pendingVersionMetadataRef.current = null
+    pushLocalEdit(viewRef.current, normalized)
     setView(normalized)
     void saveView(normalized, metadata)
-  }, [saveView])
+  }, [pushLocalEdit, saveView])
 
-  const restoreVersion = useCallback(async (versionId: number) => {
+  const restoreVersion = useCallback(async (versionId: number, restoreKind: 'undo' | 'redo' | 'history' = 'history') => {
     const response = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/comparison-sheet-view`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ restoreVersionId: versionId }),
+      body: JSON.stringify({ restoreVersionId: versionId, restoreKind }),
     })
     if (!response.ok) throw new Error('Could not restore workbook version.')
-    const body = await response.json() as { view?: unknown; createdVersion?: WorkbookVersionSummary }
-    setView(normalizeComparisonSheetView(body.view))
-    if (body.createdVersion) {
-      setVersions((prev) => [body.createdVersion!, ...prev.filter((version) => version.id !== body.createdVersion!.id)].slice(0, 25))
+    const body = await response.json() as { view?: unknown; createdVersion?: WorkbookVersionSummary; createdVersions?: WorkbookVersionSummary[]; currentVersionId?: number }
+    const restoredView = normalizeComparisonSheetView(body.view)
+    pushLocalEdit(viewRef.current, restoredView)
+    setView(restoredView)
+    if (typeof body.currentVersionId === 'number') setCurrentVersionId(body.currentVersionId)
+    const createdVersions = body.createdVersions?.length ? body.createdVersions : body.createdVersion ? [body.createdVersion] : []
+    if (createdVersions.length) {
+      setVersions((prev) => mergeWorkbookVersionSummaries(prev, createdVersions))
     }
-  }, [rfqId])
+  }, [pushLocalEdit, rfqId])
+
+  const { undoVersionId, redoVersionId } = getWorkbookUndoRedoTargets({ versions, currentVersionId })
+
+  const undo = useCallback(async () => {
+    const history = undoLocalWorkbookEdit({
+      current: viewRef.current,
+      undoStack: undoStackRef.current,
+      redoStack: redoStackRef.current,
+    })
+    if (!viewsEqual(history.current, viewRef.current)) {
+      undoStackRef.current = history.undoStack
+      redoStackRef.current = history.redoStack
+      setCanUndoLocal(history.undoStack.length > 0)
+      setCanRedoLocal(history.redoStack.length > 0)
+      setView(history.current)
+      await saveView(history.current, { source: 'estimator-edit', historyMode: 'autosave' })
+      return
+    }
+    if (undoVersionId == null) return
+    await restoreVersion(undoVersionId, 'undo')
+  }, [restoreVersion, saveView, undoVersionId])
+
+  const redo = useCallback(async () => {
+    const history = redoLocalWorkbookEdit({
+      current: viewRef.current,
+      undoStack: undoStackRef.current,
+      redoStack: redoStackRef.current,
+    })
+    if (!viewsEqual(history.current, viewRef.current)) {
+      undoStackRef.current = history.undoStack
+      redoStackRef.current = history.redoStack
+      setCanUndoLocal(history.undoStack.length > 0)
+      setCanRedoLocal(history.redoStack.length > 0)
+      setView(history.current)
+      await saveView(history.current, { source: 'estimator-edit', historyMode: 'autosave' })
+      return
+    }
+    if (redoVersionId == null) return
+    await restoreVersion(redoVersionId, 'redo')
+  }, [redoVersionId, restoreVersion, saveView])
 
   const merge = useCallback((patch: Partial<ComparisonSheetView>) => {
-    setView((prev) => ({ ...prev, ...patch }))
-  }, [])
+    updateView((prev) => ({ ...prev, ...patch }))
+  }, [updateView])
 
   const hideColumns = useCallback((keys: string[]) => {
-    setView((prev) => ({ ...prev, hiddenColumnKeys: Array.from(new Set([...prev.hiddenColumnKeys, ...keys])) }))
-  }, [])
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Hid ${keys.length} column${keys.length === 1 ? '' : 's'}.`,
+    }
+    updateView((prev) => ({ ...prev, hiddenColumnKeys: Array.from(new Set([...prev.hiddenColumnKeys, ...keys])) }))
+  }, [updateView])
 
   const deleteColumns = useCallback((keys: string[]) => {
-    setView((prev) => ({
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Deleted ${keys.length} column${keys.length === 1 ? '' : 's'}.`,
+    }
+    updateView((prev) => ({
       ...prev,
       deletedColumnKeys: Array.from(new Set([...(prev.deletedColumnKeys ?? []), ...keys])),
       hiddenColumnKeys: prev.hiddenColumnKeys.filter((key) => !keys.includes(key)),
     }))
-  }, [])
+  }, [updateView])
 
   const showColumns = useCallback((keys: string[]) => {
-    setView((prev) => ({ ...prev, hiddenColumnKeys: prev.hiddenColumnKeys.filter((k) => !keys.includes(k)) }))
-  }, [])
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Showed ${keys.length} hidden column${keys.length === 1 ? '' : 's'}.`,
+    }
+    updateView((prev) => ({ ...prev, hiddenColumnKeys: prev.hiddenColumnKeys.filter((k) => !keys.includes(k)) }))
+  }, [updateView])
 
   const hideLineItems = useCallback((ids: string[]) => {
-    setView((prev) => ({ ...prev, hiddenLineItemIds: Array.from(new Set([...prev.hiddenLineItemIds, ...ids])) }))
-  }, [])
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Hid ${ids.length} row${ids.length === 1 ? '' : 's'}.`,
+    }
+    updateView((prev) => ({ ...prev, hiddenLineItemIds: Array.from(new Set([...prev.hiddenLineItemIds, ...ids])) }))
+  }, [updateView])
 
   const deleteLineItems = useCallback((ids: string[]) => {
-    setView((prev) => ({
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Deleted ${ids.length} row${ids.length === 1 ? '' : 's'}.`,
+    }
+    updateView((prev) => ({
       ...prev,
       deletedLineItemIds: Array.from(new Set([...(prev.deletedLineItemIds ?? []), ...ids])),
       hiddenLineItemIds: prev.hiddenLineItemIds.filter((id) => !ids.includes(id)),
     }))
-  }, [])
+  }, [updateView])
 
   const showLineItems = useCallback((ids: string[]) => {
-    setView((prev) => ({ ...prev, hiddenLineItemIds: prev.hiddenLineItemIds.filter((id) => !ids.includes(id)) }))
-  }, [])
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Showed ${ids.length} hidden row${ids.length === 1 ? '' : 's'}.`,
+    }
+    updateView((prev) => ({ ...prev, hiddenLineItemIds: prev.hiddenLineItemIds.filter((id) => !ids.includes(id)) }))
+  }, [updateView])
 
   const addHighlights = useCallback((items: ComparisonHighlight[]) => {
-    setView((prev) => ({ ...prev, highlights: [...prev.highlights, ...items] }))
-  }, [])
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Added ${items.length} highlight${items.length === 1 ? '' : 's'}.`,
+    }
+    updateView((prev) => ({ ...prev, highlights: [...prev.highlights, ...items] }))
+  }, [updateView])
 
   const removeHighlights = useCallback((ids: string[]) => {
-    setView((prev) => ({ ...prev, highlights: prev.highlights.filter((h) => !ids.includes(h.id)) }))
-  }, [])
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Removed ${ids.length} highlight${ids.length === 1 ? '' : 's'}.`,
+    }
+    updateView((prev) => ({ ...prev, highlights: prev.highlights.filter((h) => !ids.includes(h.id)) }))
+  }, [updateView])
 
   const clearHighlights = useCallback(() => {
-    setView((prev) => ({ ...prev, highlights: [] }))
-  }, [])
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: 'Cleared review highlights.',
+    }
+    updateView((prev) => ({ ...prev, highlights: [] }))
+  }, [updateView])
 
   const addDerivedColumns = useCallback((cols: DerivedColumn[]) => {
-    setView((prev) => ({ ...prev, derivedColumns: [...prev.derivedColumns, ...cols] }))
-  }, [])
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Added ${cols.length} derived column${cols.length === 1 ? '' : 's'}.`,
+    }
+    updateView((prev) => ({ ...prev, derivedColumns: [...prev.derivedColumns, ...cols] }))
+  }, [updateView])
 
   const removeDerivedColumns = useCallback((keys: string[]) => {
-    setView((prev) => ({ ...prev, derivedColumns: prev.derivedColumns.filter((c) => !keys.includes(c.key)) }))
-  }, [])
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Removed ${keys.length} derived column${keys.length === 1 ? '' : 's'}.`,
+    }
+    updateView((prev) => ({ ...prev, derivedColumns: prev.derivedColumns.filter((c) => !keys.includes(c.key)) }))
+  }, [updateView])
 
   const setChart = useCallback((slot: 'left' | 'right', metric: ChartMetric, title?: string) => {
-    setView((prev) => ({
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Changed ${slot} chart to ${metric}.`,
+    }
+    updateView((prev) => ({
       ...prev,
       charts: prev.charts.map((c) =>
         c.slot === slot ? { ...c, metric, title: title ?? c.title } : c,
       ),
     }))
-  }, [])
+  }, [updateView])
 
   const setColumnWidth = useCallback((colKey: string, width: number) => {
-    setView((prev) => ({ ...prev, columnWidths: { ...(prev.columnWidths ?? {}), [colKey]: width } }))
-  }, [])
+    updateView((prev) => ({ ...prev, columnWidths: { ...(prev.columnWidths ?? {}), [colKey]: width } }))
+  }, [updateView])
 
   const addManualColumns = useCallback((cols: ManualColumn[]) => {
-    setView((prev) => ({ ...prev, manualColumns: [...(prev.manualColumns ?? []), ...cols] }))
-  }, [])
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Added ${cols.length} manual column${cols.length === 1 ? '' : 's'}.`,
+    }
+    updateView((prev) => ({ ...prev, manualColumns: [...(prev.manualColumns ?? []), ...cols] }))
+  }, [updateView])
 
   const addManualLineItems = useCallback((rows: ManualLineItem[]) => {
-    setView((prev) => ({ ...prev, manualLineItems: [...(prev.manualLineItems ?? []), ...rows] }))
-  }, [])
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Added ${rows.length} manual row${rows.length === 1 ? '' : 's'}.`,
+    }
+    updateView((prev) => ({ ...prev, manualLineItems: [...(prev.manualLineItems ?? []), ...rows] }))
+  }, [updateView])
 
   const setCellOverride = useCallback((rowKey: string, colKey: string, value: string) => {
-    setView((prev) => {
-      const key = `${rowKey}|${colKey}`
-      const next = { ...(prev.cellOverrides ?? {}) }
-      next[key] = value
-      return { ...prev, cellOverrides: next }
-    })
-  }, [])
+    updateView((prev) => applyComparisonSheetCellOverrides(prev, [{ rowKey, colKey, value }]))
+  }, [updateView])
+
+  const setCellOverrides = useCallback((cells: ComparisonSheetCellOverrideInput[]) => {
+    updateView((prev) => applyComparisonSheetCellOverrides(prev, cells))
+  }, [updateView])
 
   const setColumnLabel = useCallback((colKey: string, label: string) => {
-    setView((prev) => {
+    updateView((prev) => {
       const next = { ...(prev.columnLabelOverrides ?? {}) }
       if (label.trim() === '') delete next[colKey]
       else next[colKey] = label.trim()
       return { ...prev, columnLabelOverrides: next }
     })
-  }, [])
+  }, [updateView])
 
   const setLineItemOrder = useCallback((ids: string[]) => {
-    setView((prev) => ({ ...prev, lineItemOrder: ids }))
-  }, [])
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: 'Reordered rows.',
+    }
+    updateView((prev) => ({ ...prev, lineItemOrder: ids }))
+  }, [updateView])
 
-  const reset = useCallback(() => setView(DEFAULT_VIEW), [])
+  const reset = useCallback(() => updateView(() => DEFAULT_VIEW), [updateView])
 
   return {
     view,
     versions,
+    currentVersionId,
+    undoVersionId,
+    redoVersionId,
+    canUndo: canUndoLocal || undoVersionId != null,
+    canRedo: canRedoLocal || redoVersionId != null,
     hydrated,
     merge,
     replaceView,
@@ -246,10 +414,13 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
     addManualColumns,
     addManualLineItems,
     setCellOverride,
+    setCellOverrides,
     setColumnLabel,
     setLineItemOrder,
     markNextSave,
     restoreVersion,
+    undo,
+    redo,
     reset,
   }
 }

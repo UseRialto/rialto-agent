@@ -110,6 +110,7 @@ export interface BidFulfillmentSummary {
 }
 
 export type ProjectSpecDocumentStatus = 'uploaded' | 'processing' | 'indexed' | 'failed'
+export type ProjectSpecPackageStatus = 'pending' | 'complete' | 'failed'
 
 export interface ProjectSpecDocumentSummary {
   id: number
@@ -125,11 +126,28 @@ export interface ProjectSpecDocumentSummary {
   updated_at: string
 }
 
+export interface ProjectSpecPackageSummary {
+  id: number
+  project_id: string
+  trade: string
+  title: string
+  status: ProjectSpecPackageStatus
+  source_document_ids: number[]
+  selected_chunk_ids: number[]
+  content?: string
+  diagnostics?: Record<string, unknown>
+  error?: string
+  created_at: string
+  updated_at: string
+}
+
 export type BidSpecComplianceItemStatus = 'compliant' | 'violation' | 'needs_review' | 'no_spec_found' | 'not_quoted'
 export type BidSpecComplianceSummaryStatus =
   | BidSpecComplianceItemStatus
   | 'no_specs_available'
   | 'failed'
+export type BidSpecComplianceReviewKind = 'line_item' | 'substitution'
+export type BidSpecComplianceSubstitutionVerdict = 'up_to_spec' | 'not_up_to_spec' | 'needs_review'
 
 export interface BidSpecComplianceEvidence {
   document_id?: number
@@ -147,6 +165,8 @@ export interface BidSpecComplianceItem {
   bid_id: string
   rfq_line_item_id?: string
   status: BidSpecComplianceItemStatus
+  review_kind: BidSpecComplianceReviewKind
+  substitution_verdict?: BidSpecComplianceSubstitutionVerdict
   severity: 'low' | 'medium' | 'high'
   requirement_summary: string
   vendor_summary: string

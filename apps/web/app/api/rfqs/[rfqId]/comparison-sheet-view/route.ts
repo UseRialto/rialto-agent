@@ -7,7 +7,11 @@ import {
   restoreComparisonSheetVersion,
   saveComparisonSheetView,
 } from '@/lib/store/comparison-sheet-view-store'
-import { normalizeComparisonSheetView } from '@/lib/procurement/comparison-sheet-state'
+import {
+  labelWorkbookVersionActors,
+  normalizeComparisonSheetView,
+  type WorkbookVersionSummary,
+} from '@/lib/procurement/comparison-sheet-state'
 
 export async function GET(
   _request: NextRequest,
@@ -27,7 +31,7 @@ export async function GET(
     view: record.view,
     persisted: record.exists,
     currentVersionId: record.currentVersionId,
-    versions,
+    versions: labelWorkbookVersionActors(versions, session),
   })
 }
 
@@ -47,6 +51,7 @@ export async function PUT(
     metadata?: {
       source?: 'estimator-edit' | 'agent-proposal' | 'import' | 'vendor-merge' | 'restore' | 'system'
       summary?: string
+      historyMode?: 'autosave' | 'snapshot'
       proposal?: unknown
     }
   } | null
@@ -55,7 +60,7 @@ export async function PUT(
     ...body?.metadata,
     actorUserId: session.userId,
   })
-  return NextResponse.json({ rfqId, ...saved })
+  return NextResponse.json({ rfqId, ...labelSavedVersionActors(saved, session) })
 }
 
 export async function POST(
@@ -69,11 +74,31 @@ export async function POST(
   const rfq = await getRFQById(rfqId)
   if (!rfq) return NextResponse.json({ error: 'RFQ not found.' }, { status: 404 })
 
-  const body = await request.json().catch(() => null) as { restoreVersionId?: unknown } | null
+  const body = await request.json().catch(() => null) as { restoreVersionId?: unknown; restoreKind?: unknown } | null
   if (typeof body?.restoreVersionId !== 'number') {
     return NextResponse.json({ error: 'restoreVersionId is required.' }, { status: 400 })
   }
 
-  const restored = await restoreComparisonSheetVersion(rfqId, body.restoreVersionId, { actorUserId: session.userId })
-  return NextResponse.json({ rfqId, ...restored })
+  const restored = await restoreComparisonSheetVersion(rfqId, body.restoreVersionId, {
+    actorUserId: session.userId,
+    restoreKind: body.restoreKind === 'undo' || body.restoreKind === 'redo' ? body.restoreKind : 'history',
+  })
+  return NextResponse.json({ rfqId, ...labelSavedVersionActors(restored, session) })
+}
+
+function labelSavedVersionActors<T extends { createdVersion?: WorkbookVersionSummary; createdVersions?: WorkbookVersionSummary[] }>(
+  result: T,
+  session: { userId: string; name: string },
+): T {
+  if (!result.createdVersion && !result.createdVersions?.length) return result
+  const createdVersions = result.createdVersions?.length
+    ? labelWorkbookVersionActors(result.createdVersions, session)
+    : result.createdVersion
+      ? labelWorkbookVersionActors([result.createdVersion], session)
+      : undefined
+  return {
+    ...result,
+    createdVersion: createdVersions?.at(-1),
+    createdVersions,
+  }
 }

@@ -3,9 +3,9 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { Columns3, Eraser, FileSpreadsheet, RefreshCw, Rows3 } from 'lucide-react'
+import { Clock3, Columns3, Eraser, FileSpreadsheet, Lightbulb, Redo2, RefreshCw, Rows3, Undo2 } from 'lucide-react'
 import type { ContractorBid, ContractorRFQ } from '@/lib/types/contractor'
-import type { BidSpecComplianceItem } from '@/lib/types/procurement'
+import type { BidSpecComplianceEvidence, BidSpecComplianceItem, ProjectSpecDocumentSummary } from '@/lib/types/procurement'
 import { buildLiveQuoteComparisonSummary } from '@/lib/procurement/quote-comparison'
 import { submitComparisonExport, type ComparisonExportFormat } from '@/lib/procurement/comparison-export-client'
 import { workbookVersionMetadataFromApprovedComparisonPatch } from '@/lib/procurement/comparison-agent-tools'
@@ -42,6 +42,21 @@ function decisionLabel(status: ContractorBid['buyer_decision_status']) {
   return status.charAt(0).toUpperCase() + status.slice(1)
 }
 
+function workbookVersionSourceLabel(source: string) {
+  if (source === 'agent-proposal') return 'AI edit'
+  if (source === 'estimator-edit') return 'User edit'
+  if (source === 'vendor-merge') return 'Vendor merge'
+  if (source === 'restore') return 'Restore'
+  return source.replace(/-/g, ' ')
+}
+
+function workbookVersionActorLabel(version: { source: string; actorName?: string; actorUserId?: string }) {
+  if (version.source === 'agent-proposal') {
+    return version.actorName ? `${version.actorName}` : 'Rialto AI'
+  }
+  return version.actorName ?? version.actorUserId ?? 'Unknown user'
+}
+
 const DECISION_STYLES: Record<NonNullable<ContractorBid['buyer_decision_status']>, { label: string; bg: string; text: string; border: string }> = {
   preferred: { label: 'Preferred', bg: '#1e3a2f', text: '#ffffff', border: '#1e3a2f' },
   alternate: { label: 'Alternate', bg: '#4a6358', text: '#ffffff', border: '#4a6358' },
@@ -61,6 +76,18 @@ const VENDOR_CHART_COLORS = [
   '#4a6358',
   '#b4577a',
 ]
+
+const SUBSTITUTION_ATTACHMENTS_KEY = 'substitution_attachments'
+
+type BidLineItemResponse = ContractorBid['line_item_responses'][number]
+type RFQLineItem = ContractorRFQ['line_items'][number]
+
+interface SubstitutionAttachment {
+  filename: string
+  url?: string
+  sizeBytes?: number
+  contentType?: string
+}
 
 function vendorColorKey(bid: ContractorBid) {
   const name = bid.vendor_name.trim().toLowerCase()
@@ -213,20 +240,22 @@ function SpecComplianceControl({
 }
 
 function lineSpecFinding(bid: ContractorBid, lineItemId: string) {
-  return bid.spec_compliance_report?.items.find((item) => item.rfq_line_item_id === lineItemId)
+  const findings = bid.spec_compliance_report?.items.filter((item) => item.rfq_line_item_id === lineItemId) ?? []
+  return findings.find((item) => item.review_kind === 'substitution') ?? findings[0]
 }
 
-type SpecCheckState = 'Verified' | 'Violation' | 'Pending'
+type SpecCheckState = 'Verified' | 'Violation' | 'Pending' | 'Up To Spec'
 
-function specCheckStateFromStatus(status?: BidSpecComplianceItem['status']): SpecCheckState {
-  if (status === 'violation') return 'Violation'
-  if (status === 'compliant') return 'Verified'
+function specCheckStateFromFinding(finding?: BidSpecComplianceItem): SpecCheckState {
+  if (finding?.substitution_verdict === 'up_to_spec') return 'Up To Spec'
+  if (finding?.status === 'violation') return 'Violation'
+  if (finding?.status === 'compliant') return 'Verified'
   return 'Pending'
 }
 
 function specCheckStyle(state: SpecCheckState) {
   if (state === 'Violation') return { background: '#fdeaea', color: '#c0392b', border: '#f5c6c6' }
-  if (state === 'Verified') return { background: '#e8f4ee', color: '#2d6a4f', border: '#a8d5ba' }
+  if (state === 'Verified' || state === 'Up To Spec') return { background: '#e8f4ee', color: '#2d6a4f', border: '#a8d5ba' }
   return { background: '#ede8e2', color: '#4a6358', border: '#e2d9cf' }
 }
 
@@ -237,6 +266,9 @@ function specFindingTooltip(finding?: ReturnType<typeof lineSpecFinding>) {
     ? `${evidence.document_name}, p. ${evidence.page_start}${evidence.page_end !== evidence.page_start ? `-${evidence.page_end}` : ''}`
     : ''
   return [
+    finding.review_kind === 'substitution'
+      ? `Substitution verdict: ${finding.substitution_verdict === 'up_to_spec' ? 'up to spec' : 'not up to spec'}`
+      : '',
     compactTooltipText(finding.explanation, 260),
     finding.requirement_summary ? `Spec: ${compactTooltipText(finding.requirement_summary, 140)}` : '',
     finding.vendor_summary ? `Vendor: ${compactTooltipText(finding.vendor_summary, 140)}` : '',
@@ -267,7 +299,139 @@ function SpecCheckBadge({
 
 function LineSpecBadge({ bid, lineItemId }: { bid: ContractorBid; lineItemId: string }) {
   const finding = lineSpecFinding(bid, lineItemId)
-  return <SpecCheckBadge state={specCheckStateFromStatus(finding?.status)} tooltip={specFindingTooltip(finding)} small />
+  return <SpecCheckBadge state={specCheckStateFromFinding(finding)} tooltip={specFindingTooltip(finding)} small />
+}
+
+function substitutionVerdictLabel(finding?: BidSpecComplianceItem) {
+  if (finding?.substitution_verdict === 'up_to_spec') return 'Up-To-Spec Substitution'
+  if (finding?.substitution_verdict === 'not_up_to_spec') return 'Not Up To Spec'
+  if (finding?.substitution_verdict === 'needs_review') return 'Not Up To Spec'
+  return 'Substitution'
+}
+
+function parseSubstitutionAttachments(response?: BidLineItemResponse): SubstitutionAttachment[] {
+  const rawValue = response?.response_attributes?.find((attribute) => attribute.key === SUBSTITUTION_ATTACHMENTS_KEY)?.value
+  if (!rawValue) return []
+  try {
+    const parsed = JSON.parse(rawValue) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((file): SubstitutionAttachment | undefined => {
+        if (!file || typeof file !== 'object') return undefined
+        const record = file as Record<string, unknown>
+        const filename = typeof record.filename === 'string'
+          ? record.filename
+          : typeof record.name === 'string'
+            ? record.name
+            : ''
+        if (!filename.trim()) return undefined
+        const attachment: SubstitutionAttachment = { filename: filename.trim() }
+        if (typeof record.url === 'string') attachment.url = record.url
+        if (typeof record.size === 'number') attachment.sizeBytes = record.size
+        if (typeof record.sizeBytes === 'number') attachment.sizeBytes = record.sizeBytes
+        if (typeof record.contentType === 'string') attachment.contentType = record.contentType
+        if (typeof record.type === 'string') attachment.contentType = record.type
+        return attachment
+      })
+      .filter((file): file is SubstitutionAttachment => Boolean(file))
+  } catch {
+    return []
+  }
+}
+
+function substitutionAttachmentText(attachments: SubstitutionAttachment[]) {
+  if (attachments.length === 0) return 'None uploaded'
+  return attachments.map((file) => file.url ? `${file.filename} (${file.url})` : file.filename).join(', ')
+}
+
+function substitutionPacketLines(item: RFQLineItem, response: BidLineItemResponse) {
+  const attachments = parseSubstitutionAttachments(response)
+  const alternateItem = response.description || response.sku || 'Not provided'
+  const difference = response.quoted_product_details || response.substitution_notes || response.notes || 'Not provided'
+  return [
+    `Requested item: ${item.description}${item.sku ? ` (${item.sku})` : ''}`,
+    `Alternate item: ${alternateItem}${response.sku ? ` (${response.sku})` : ''}`,
+    `Difference / reason: ${compactTooltipText(difference, 420)}`,
+    response.substitution_notes && response.substitution_notes !== response.quoted_product_details
+      ? `Vendor note: ${compactTooltipText(response.substitution_notes, 300)}`
+      : '',
+    `Attachments: ${substitutionAttachmentText(attachments)}`,
+  ].filter(Boolean)
+}
+
+function substitutionCellTooltip(item: RFQLineItem, response: BidLineItemResponse, finding?: BidSpecComplianceItem, fallback?: string) {
+  const evidence = finding?.evidence?.[0]
+  const evidenceText = evidence
+    ? `${evidence.document_name}, p. ${evidence.page_start}${evidence.page_end !== evidence.page_start ? `-${evidence.page_end}` : ''}`
+    : ''
+  return [
+    ...substitutionPacketLines(item, response),
+    '',
+    `Spec verdict: ${substitutionVerdictLabel(finding)}`,
+    finding?.explanation ? `Spec reasoning: ${compactTooltipText(finding.explanation, 520)}` : fallback,
+    finding?.requirement_summary ? `Spec: ${compactTooltipText(finding.requirement_summary, 180)}` : '',
+    finding?.vendor_summary ? `Vendor facts: ${compactTooltipText(finding.vendor_summary, 180)}` : '',
+    evidenceText ? `Relevant lines: ${evidenceText}` : '',
+  ].filter(Boolean).join('\n')
+}
+
+function specDocumentUrlForEvidence(evidence: BidSpecComplianceEvidence, specDocuments: ProjectSpecDocumentSummary[]) {
+  if (evidence.document_id) {
+    const byId = specDocuments.find((document) => document.id === evidence.document_id)
+    if (byId?.file_url) return byId.file_url
+  }
+  const evidenceName = evidence.document_name.trim().toLowerCase()
+  return specDocuments.find((document) => document.filename.trim().toLowerCase() === evidenceName)?.file_url
+}
+
+function specDocumentHrefForEvidence(evidence: BidSpecComplianceEvidence, specDocuments: ProjectSpecDocumentSummary[]) {
+  const url = specDocumentUrlForEvidence(evidence, specDocuments)
+  if (!url) return undefined
+  const separator = url.includes('#') ? '&' : '#'
+  return `${url}${separator}page=${evidence.page_start}`
+}
+
+function SubstitutionPacketSummary({ item, response }: { item: RFQLineItem; response: BidLineItemResponse }) {
+  const attachments = parseSubstitutionAttachments(response)
+  const difference = response.quoted_product_details || response.substitution_notes || response.notes || 'Not provided'
+  return (
+    <div className="mt-2 rounded border bg-white px-3 py-2 text-[11px] leading-relaxed" style={{ borderColor: '#d9e0dc', color: '#4a6358' }}>
+      <div className="grid gap-1 md:grid-cols-2">
+        <p>
+          <span className="font-bold" style={{ color: '#1e3a2f' }}>Alternate item:</span>{' '}
+          {response.description || 'Not provided'}{response.sku ? ` (${response.sku})` : ''}
+        </p>
+        <p>
+          <span className="font-bold" style={{ color: '#1e3a2f' }}>Requested item:</span>{' '}
+          {item.description}{item.sku ? ` (${item.sku})` : ''}
+        </p>
+      </div>
+      <p className="mt-1">
+        <span className="font-bold" style={{ color: '#1e3a2f' }}>Difference / reason:</span>{' '}
+        {difference}
+      </p>
+      {response.substitution_notes && response.substitution_notes !== response.quoted_product_details && (
+        <p className="mt-1">
+          <span className="font-bold" style={{ color: '#1e3a2f' }}>Vendor note:</span>{' '}
+          {response.substitution_notes}
+        </p>
+      )}
+      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+        <span className="font-bold" style={{ color: '#1e3a2f' }}>Attachments:</span>
+        {attachments.length === 0 ? (
+          <span>None uploaded</span>
+        ) : attachments.map((file) => file.url ? (
+          <a key={`${file.filename}-${file.url}`} href={file.url} target="_blank" rel="noreferrer" className="rounded border px-1.5 py-0.5 font-semibold underline-offset-2 hover:underline" style={{ borderColor: '#d9e0dc', color: '#2d6a4f' }}>
+            {file.filename}
+          </a>
+        ) : (
+          <span key={file.filename} className="rounded border px-1.5 py-0.5 font-semibold" style={{ borderColor: '#d9e0dc', color: '#587067' }}>
+            {file.filename}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function SpecComplianceCaption({ bid }: { bid: ContractorBid }) {
@@ -1390,33 +1554,62 @@ function evaluateDerived(formula: string, item: ContractorRFQ['line_items'][numb
   return ''
 }
 
-function vendorCellState(item: ContractorRFQ['line_items'][number], bid: ContractorBid, response?: ContractorBid['line_item_responses'][number]) {
+function vendorCellState(item: RFQLineItem, bid: ContractorBid, response?: BidLineItemResponse) {
   const finding = lineSpecFinding(bid, item.id)
+  if (response?.is_alternate && finding?.review_kind === 'substitution' && finding.substitution_verdict === 'up_to_spec') {
+    return {
+      tone: 'up_to_spec_substitution' as const,
+      tooltip: substitutionCellTooltip(item, response, finding, 'GPT-5.5 verified this substitution against the trade-scoped project spec package.'),
+      finding,
+    }
+  }
+  if (response?.is_alternate && finding?.review_kind === 'substitution') {
+    return {
+      tone: 'violation' as const,
+      tooltip: substitutionCellTooltip(item, response, finding, 'GPT-5.5 needs more review before accepting this substitution against the project specs.'),
+      finding,
+    }
+  }
   if (finding?.status === 'violation') {
     return {
       tone: 'violation' as const,
       tooltip: finding.explanation || 'Quoted item violates the project specification.',
+      finding,
     }
   }
   if (finding?.status === 'needs_review') {
     return {
       tone: 'review' as const,
       tooltip: finding.explanation || 'Quoted item needs spec review before award.',
+      finding,
     }
   }
   if (response?.is_alternate) {
     return {
       tone: 'alternate' as const,
-      tooltip: 'Vendor explicitly marked this line as an alternate or substitution.',
+      tooltip: substitutionCellTooltip(item, response, finding, 'Vendor explicitly marked this line as a substitution. Spec verification is pending or inconclusive.'),
+      finding,
     }
   }
-  return { tone: 'normal' as const, tooltip: '' }
+  return { tone: 'normal' as const, tooltip: '', finding }
 }
 
-function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRFQ; bids: ContractorBid[]; vendorColors: Record<string, string>; userKey: string }) {
+function BidExcelSheet({
+  rfq,
+  bids,
+  vendorColors,
+  userKey,
+  specDocuments,
+}: {
+  rfq: ContractorRFQ
+  bids: ContractorBid[]
+  vendorColors: Record<string, string>
+  userKey: string
+  specDocuments: ProjectSpecDocumentSummary[]
+}) {
   const baseItems = rfq.line_items
 
-  const { view, versions, replaceView, deleteColumns, hideColumns, showColumns, deleteLineItems, hideLineItems, showLineItems, addHighlights, removeHighlights, clearHighlights, addDerivedColumns, removeDerivedColumns, setColumnWidth, addManualColumns, addManualLineItems, setCellOverride, setColumnLabel, setLineItemOrder, restoreVersion } = useComparisonSheetView(userKey, rfq.id)
+  const { view, versions, canUndo, canRedo, replaceView, deleteColumns, hideColumns, showColumns, deleteLineItems, hideLineItems, showLineItems, addHighlights, removeHighlights, clearHighlights, addDerivedColumns, removeDerivedColumns, setColumnWidth, addManualColumns, addManualLineItems, setCellOverride, setCellOverrides, setColumnLabel, setLineItemOrder, restoreVersion, undo, redo } = useComparisonSheetView(userKey, rfq.id)
   const [previewPatch, setPreviewPatch] = useState<ComparisonViewPatch | null>(null)
 
   const items = useMemo(() => {
@@ -1723,7 +1916,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     const cells = selectedDataCells()
     const clickedCellIsSelected = cells.some((cell) => cell.item.id === rowKey && cell.col.key === colKey)
     if (cells.length > 1 && clickedCellIsSelected) {
-      for (const cell of cells) setCellOverride(cell.item.id, cell.col.key, '')
+      setCellOverrides(cells.map((cell) => ({ rowKey: cell.item.id, colKey: cell.col.key, value: '' })))
     } else if (rowKey && colKey) {
       setCellOverride(rowKey, colKey, '')
     }
@@ -1765,7 +1958,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
       setSelectedCellValue('')
       return
     }
-    for (const cell of cells) setCellOverride(cell.item.id, cell.col.key, '')
+    setCellOverrides(cells.map((cell) => ({ rowKey: cell.item.id, colKey: cell.col.key, value: '' })))
   }
 
   function copySelectedRange() {
@@ -1790,12 +1983,13 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     if (rows.length === 1 && rows[0].length === 1) {
       const cells = selectedDataCells()
       if (cells.length > 1) {
-        for (const cell of cells) setCellOverride(cell.item.id, cell.col.key, rows[0][0])
+        setCellOverrides(cells.map((cell) => ({ rowKey: cell.item.id, colKey: cell.col.key, value: rows[0][0] })))
         return
       }
       setSelectedCellValue(rows[0][0])
       return
     }
+    const cellUpdates: Array<{ rowKey: string; colKey: string; value: string }> = []
     rows.forEach((row, rowOffset) => {
       row.forEach((value, colOffset) => {
         const r = selectedRange.r1 + rowOffset
@@ -1807,9 +2001,10 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
           return
         }
         const item = visibleItems[r - dataStartRow]
-        if (item) setCellOverride(item.id, col.key, value)
+        if (item) cellUpdates.push({ rowKey: item.id, colKey: col.key, value })
       })
     })
+    if (cellUpdates.length > 0) setCellOverrides(cellUpdates)
   }
 
   function sortRowsByColumn(colKey: string | undefined, direction: 'asc' | 'desc') {
@@ -1879,6 +2074,17 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     setHistoryMenuOpen(false)
   }
 
+  async function applyWorkbookHistoryCommand(command: 'undo' | 'redo') {
+    if (command === 'undo') {
+      if (!canUndo) return false
+      await undo()
+      return true
+    }
+    if (!canRedo) return false
+    await redo()
+    return true
+  }
+
   // Layout constants
   const GUTTER_W = 44
   const ROW_H = 32
@@ -1905,6 +2111,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
 
   // Cell selection — bounds extend through the empty filler rows + cols.
   const [sel, setSel] = useState<{ r: number; c: number }>({ r: dataStartRow, c: 0 })
+  const [openSpecBubble, setOpenSpecBubble] = useState<{ itemId: string; bidId: string } | null>(null)
   const selectedRange = useMemo(() => {
     const start = rangeStart ?? sel
     return {
@@ -1918,6 +2125,16 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
   function isInSelectedRange(r: number, c: number) {
     return r >= selectedRange.r1 && r <= selectedRange.r2 && c >= selectedRange.c1 && c <= selectedRange.c2
   }
+  const activeSpecBubble = useMemo(() => {
+    if (!openSpecBubble) return undefined
+    const item = visibleItems.find((entry) => entry.id === openSpecBubble.itemId)
+    const bid = bids.find((entry) => entry.id === openSpecBubble.bidId)
+    const response = bid?.line_item_responses.find((entry) => entry.line_item_id === openSpecBubble.itemId)
+    if (!item || !bid || !response?.is_alternate) return undefined
+    const finding = lineSpecFinding(bid, item.id)
+    return finding?.review_kind === 'substitution' ? { finding, item, bid, response } : undefined
+  }, [bids, openSpecBubble, visibleItems])
+
   useEffect(() => {
     setSel((s) => ({ r: Math.min(s.r, lastEmptyRow), c: Math.min(s.c, Math.max(0, totalGridCols - 1)) }))
   }, [lastEmptyRow, totalGridCols])
@@ -1967,9 +2184,46 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     })
   }
 
+  function isTextEditingTarget(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement)) return false
+    return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'))
+  }
+
+  useEffect(() => {
+    function onWindowKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || isTextEditingTarget(event.target)) return
+      if (editingCell || editingHeader || editingGroupHeader) return
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return
+
+      const key = event.key.toLowerCase()
+      if (key === 'z') {
+        event.preventDefault()
+        if (event.shiftKey) void redo()
+        else void undo()
+      } else if (key === 'y') {
+        event.preventDefault()
+        void redo()
+      }
+    }
+
+    window.addEventListener('keydown', onWindowKeyDown)
+    return () => window.removeEventListener('keydown', onWindowKeyDown)
+  }, [editingCell, editingGroupHeader, editingHeader, redo, undo])
+
   function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     if (editingCell || editingHeader || editingGroupHeader) {
       if (e.key === 'Escape') { e.preventDefault(); setEditingCell(null); setEditingHeader(null); setEditingGroupHeader(null) }
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault()
+      if (e.shiftKey) void redo()
+      else void undo()
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') {
+      e.preventDefault()
+      void redo()
       return
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); dispatchAssistant(true); return }
@@ -2196,10 +2450,11 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
   const baseBorder = '1px solid #d9e0dc'
   const strongBorder = '1px solid #a8bbb1'
   const frozenColumnKey = '__item'
-  const cellBase: React.CSSProperties = { borderRight: baseBorder, borderBottom: baseBorder, padding: '0 10px', fontSize: 12, lineHeight: `${ROW_H - 2}px`, height: ROW_H, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', boxSizing: 'border-box', display: 'flex', alignItems: 'center', userSelect: 'none' }
+  const cellBase: React.CSSProperties = { borderRight: baseBorder, borderBottom: baseBorder, padding: '0 10px', fontSize: 12, lineHeight: `${ROW_H - 2}px`, height: ROW_H, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', boxSizing: 'border-box', display: 'flex', alignItems: 'center', userSelect: 'none', WebkitUserSelect: 'none' }
   const headerCellBase: React.CSSProperties = { ...cellBase, background: '#edf3f0', color: '#1e3a2f', fontWeight: 700, justifyContent: 'center' }
   const groupHeaderBase: React.CSSProperties = { ...headerCellBase, background: '#1e3a2f', color: '#ffffff', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0 }
   const gutterBase: React.CSSProperties = { ...headerCellBase, color: '#587067', fontWeight: 600, fontSize: 11, background: '#f4f7f5' }
+  const cellTextStyle: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', background: 'transparent', userSelect: 'none', WebkitUserSelect: 'none' }
 
   function alignToJustify(a: 'left' | 'right' | 'center') { return a === 'right' ? 'flex-end' : a === 'center' ? 'center' : 'flex-start' }
 
@@ -2215,7 +2470,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
     .filter((c): c is SheetColumn => Boolean(c))
 
   return (
-    <div className="flex h-full min-h-0 flex-col" style={{ background: '#eef3f0' }}>
+    <div className="relative flex h-full min-h-0 flex-col" style={{ background: '#eef3f0' }}>
       <div className="shrink-0 border-b" style={{ borderColor: '#d9e0dc', background: '#f8faf9' }}>
         <div className="flex flex-wrap items-center gap-3 px-4 py-3">
           <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -2236,13 +2491,38 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
             <span className="rounded-md border bg-white px-2.5 py-1 text-xs font-semibold" style={{ borderColor: '#d9e0dc', color: '#1e3a2f' }}>
               Fastest: {fastestBid ? `${fastestBid.vendor_name} ${fastestBid.lead_time_days}d` : 'None'}
             </span>
+            <div className="flex items-center rounded-md border bg-white" style={{ borderColor: '#d9e0dc' }}>
+              <button
+                type="button"
+                onClick={() => void undo()}
+                disabled={!canUndo}
+                aria-label="Undo last workbook edit"
+                title="Undo"
+                className="flex h-8 w-8 items-center justify-center transition disabled:cursor-not-allowed disabled:opacity-35"
+                style={{ color: '#4a6358' }}
+              >
+                <Undo2 className="h-4 w-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void redo()}
+                disabled={!canRedo}
+                aria-label="Redo workbook edit"
+                title="Redo"
+                className="flex h-8 w-8 items-center justify-center border-l transition disabled:cursor-not-allowed disabled:opacity-35"
+                style={{ borderColor: '#d9e0dc', color: '#4a6358' }}
+              >
+                <Redo2 className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
             <div className="relative" onClick={(event) => event.stopPropagation()}>
               <button
                 type="button"
                 onClick={() => setHistoryMenuOpen((open) => !open)}
-                className="rounded-md border bg-white px-3 py-1.5 text-xs font-bold transition"
+                className="flex h-8 items-center gap-1.5 rounded-md border bg-white px-2.5 text-xs font-bold transition"
                 style={{ borderColor: '#d9e0dc', color: '#4a6358' }}
               >
+                <Clock3 className="h-4 w-4" aria-hidden="true" />
                 History
               </button>
               {historyMenuOpen && (
@@ -2257,7 +2537,10 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                       className="block w-full rounded px-3 py-2 text-left hover:bg-[#edf3f0]"
                     >
                       <span className="block text-xs font-bold" style={{ color: '#1e3a2f' }}>
-                        Version {version.versionNumber} · {version.source.replace(/-/g, ' ')}
+                        Version {version.versionNumber} · {workbookVersionSourceLabel(version.source)}
+                      </span>
+                      <span className="block truncate text-[11px] font-semibold" style={{ color: version.source === 'agent-proposal' ? '#a85c2a' : '#4a6358' }}>
+                        {workbookVersionActorLabel(version)}
                       </span>
                       <span className="block truncate text-[11px]" style={{ color: '#587067' }}>{version.summary}</span>
                       <span className="block text-[10px]" style={{ color: '#8a9e96' }}>{new Date(version.createdAt).toLocaleString()}</span>
@@ -2332,7 +2615,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#fff7ed', border: '1.5px dotted #fa6b04' }} />
-            Alternate or substitution
+            Up-To-Spec Substitution
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#fdeaea', border: '1.5px solid #d64545' }} />
@@ -2357,8 +2640,68 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
         )}
       </div>
 
+      {activeSpecBubble && (
+        <div
+          className="absolute right-4 top-28 z-30 max-h-[calc(100%-8rem)] w-[min(460px,calc(100%-2rem))] overflow-auto rounded-xl border bg-white p-3 shadow-2xl"
+          style={{
+            borderColor: activeSpecBubble.finding.substitution_verdict === 'not_up_to_spec' ? '#f5c6c6' : '#fdc89a',
+            boxShadow: '0 18px 45px rgba(30,58,47,0.18)',
+          }}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-bold uppercase tracking-wide" style={{ color: activeSpecBubble.finding.substitution_verdict === 'not_up_to_spec' ? '#c0392b' : '#a85c2a' }}>
+                {activeSpecBubble.finding.substitution_verdict === 'up_to_spec' ? 'Up-To-Spec Substitution' : 'Not Up To Spec'}
+              </p>
+              <p className="mt-1 text-sm font-semibold leading-tight" style={{ color: '#1e3a2f' }}>
+                {activeSpecBubble.bid.vendor_name} · {activeSpecBubble.item.description}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <span className="rounded-full border px-2 py-0.5 text-[10px] font-bold capitalize" style={{
+                background: activeSpecBubble.finding.substitution_verdict === 'not_up_to_spec' ? '#fff5f5' : '#fff7ed',
+                borderColor: activeSpecBubble.finding.substitution_verdict === 'not_up_to_spec' ? '#f5c6c6' : '#fdc89a',
+                color: activeSpecBubble.finding.substitution_verdict === 'not_up_to_spec' ? '#c0392b' : '#a85c2a',
+              }}>
+                {activeSpecBubble.finding.substitution_verdict === 'up_to_spec' ? 'up to spec' : 'not up to spec'}
+              </span>
+              <button
+                type="button"
+                aria-label="Close spec justification"
+                onClick={() => setOpenSpecBubble(null)}
+                className="flex h-6 w-6 items-center justify-center rounded border text-sm font-bold"
+                style={{ borderColor: '#d9e0dc', color: '#587067', background: '#ffffff' }}
+              >
+                ×
+              </button>
+            </div>
+          </div>
+          <SubstitutionPacketSummary item={activeSpecBubble.item} response={activeSpecBubble.response} />
+          <p className="mt-2 text-xs leading-relaxed" style={{ color: '#4a6358' }}>
+            {activeSpecBubble.finding.explanation}
+          </p>
+          {activeSpecBubble.finding.evidence.length > 0 && (
+            <div className="mt-2 space-y-2">
+              {activeSpecBubble.finding.evidence.slice(0, 4).map((evidence, index) => (
+                <p key={`selected-substitution-evidence-${activeSpecBubble.finding.id}-${index}`} className="rounded border px-2.5 py-2 text-[11px] leading-relaxed" style={{ borderColor: '#d9e0dc', background: '#f8faf9', color: '#587067' }}>
+                  <span className="font-bold" style={{ color: '#1e3a2f' }}>
+                    {specDocumentHrefForEvidence(evidence, specDocuments) ? (
+                      <a href={specDocumentHrefForEvidence(evidence, specDocuments)} target="_blank" rel="noreferrer" className="underline-offset-2 hover:underline" style={{ color: '#1e3a2f' }}>
+                        {evidence.document_name}
+                      </a>
+                    ) : evidence.document_name}, p. {evidence.page_start}{evidence.page_end !== evidence.page_start ? `-${evidence.page_end}` : ''}
+                    {evidence.section_number ? ` · ${evidence.section_number}` : ''}
+                  </span>
+                  {`: ${evidence.quote}`}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Scrollable grid */}
-      <div ref={containerRef} className="flex-1 min-h-0 overflow-auto outline-none" tabIndex={0} onKeyDown={onKeyDown} style={{ background: '#ffffff' }}>
+      <div ref={containerRef} className="flex-1 min-h-0 overflow-auto outline-none" tabIndex={0} onKeyDown={onKeyDown} style={{ background: '#ffffff', userSelect: 'none', WebkitUserSelect: 'none' }}>
         <div
           style={{
             display: 'grid',
@@ -2463,7 +2806,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                         style={{ width: '100%', height: ROW_H - 6, border: '1px solid #2563eb', borderRadius: 3, padding: '0 6px', fontSize: 12, outline: 'none', background: '#ffffff', color: '#111827', fontWeight: 800, textAlign: 'center', textTransform: 'none' }}
                       />
                     ) : (
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{groupLabel}</span>
+                      <span style={cellTextStyle}>{groupLabel}</span>
                     )}
                   </div>,
                 )
@@ -2502,7 +2845,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                         style={{ width: '100%', height: ROW_H - 6, border: '1px solid #2563eb', borderRadius: 3, padding: '0 6px', fontSize: 12, outline: 'none', background: '#ffffff', color: '#111827', fontWeight: 800, textAlign: 'center', textTransform: 'none' }}
                       />
                     ) : (
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{stickyFrozen ? '' : groupLabel}</span>
+                      <span style={cellTextStyle}>{stickyFrozen ? '' : groupLabel}</span>
                     )}
                   </div>
                 )
@@ -2570,7 +2913,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                   style={{ width: '100%', height: ROW_H - 6, border: '1px solid #2563eb', borderRadius: 3, padding: '0 6px', fontSize: 12, outline: 'none', background: '#ffffff', color: '#111827', fontWeight: 700 }}
                 />
               ) : (
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.label}</span>
+                <span style={cellTextStyle}>{col.label}</span>
               )}
             </div>
           ))}
@@ -2627,14 +2970,34 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                       ? { background: '#fdeaea', color: '#8b1d1d', borderTop: '1.5px solid #d64545', borderBottom: '1.5px solid #d64545' }
                       : cellState.tone === 'review'
                         ? { background: '#fff7ed', color: '#7c3f12', borderTop: '1.5px dashed #f59e0b', borderBottom: '1.5px dashed #f59e0b' }
-                        : cellState.tone === 'alternate'
-                          ? { background: '#fff7ed', borderTop: '1.5px dotted #fa6b04', borderBottom: '1.5px dotted #fa6b04' }
-                          : {}
-                  if (cellState.tone !== 'normal' && col.kind === 'vendor' && col.vendorMetric === 'unit_price') stateStyle.borderLeft = cellState.tone === 'violation' ? '1.5px solid #d64545' : `1.5px ${cellState.tone === 'review' ? 'dashed' : 'dotted'} #fa6b04`
-                  if (cellState.tone !== 'normal' && col.kind === 'vendor' && col.vendorMetric === 'lead') stateStyle.borderRight = cellState.tone === 'violation' ? '1.5px solid #d64545' : `1.5px ${cellState.tone === 'review' ? 'dashed' : 'dotted'} #fa6b04`
+                        : cellState.tone === 'up_to_spec_substitution'
+                            ? { background: '#fff7ed', color: '#7c3f12', borderTop: '1.5px dotted #fa6b04', borderBottom: '1.5px dotted #fa6b04' }
+                          : cellState.tone === 'alternate'
+                            ? { background: '#fff7ed', borderTop: '1.5px dotted #fa6b04', borderBottom: '1.5px dotted #fa6b04' }
+                            : {}
+                  const stateBorderColor = cellState.tone === 'violation'
+                    ? '#d64545'
+                    : cellState.tone === 'up_to_spec_substitution'
+                      ? '#fa6b04'
+                      : '#fa6b04'
+                  const stateBorderStyle = cellState.tone === 'violation'
+                    ? 'solid'
+                    : cellState.tone === 'review'
+                      ? 'dashed'
+                      : 'dotted'
+                  if (cellState.tone !== 'normal' && col.kind === 'vendor' && col.vendorMetric === 'unit_price') stateStyle.borderLeft = `1.5px ${stateBorderStyle} ${stateBorderColor}`
+                  if (cellState.tone !== 'normal' && col.kind === 'vendor' && col.vendorMetric === 'lead') stateStyle.borderRight = `1.5px ${stateBorderStyle} ${stateBorderColor}`
+                  const canOpenSpecBubble = Boolean(
+                    bid &&
+                    response?.is_alternate &&
+                    isQuoteValueMetric &&
+                    'finding' in cellState &&
+                    cellState.finding?.review_kind === 'substitution',
+                  )
                   return (
                     <div
                       key={`cell-${item.id}-${col.key}`}
+                      className="group"
                       onMouseDown={() => startRangeSelect(r, c)}
                       onMouseEnter={() => extendRangeSelect(r, c)}
                       onDoubleClick={() => startCellEdit(item, col)}
@@ -2642,13 +3005,14 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                       title={[
                         isLowestPrice ? 'Lowest total price for this item.' : '',
                         isFastestLead ? 'Fastest lead time for this item.' : '',
-                        cellState.tooltip,
-                      ].filter(Boolean).join(' ')}
+                        canOpenSpecBubble ? 'Click the lightbulb for spec justification.' : cellState.tooltip,
+                      ].filter(Boolean).join('\n')}
                       style={{
                         ...cellBase,
                         gridRow: r + 1,
                         gridColumn: c + 2,
                         ...stateStyle,
+                        position: isFrozen ? 'sticky' : 'relative',
                         background: isSelected ? (highlight ?? '#dbeafe') : inRange ? (highlight ?? '#eff6ff') : (highlight ?? stateStyle.background ?? stripe),
                         fontWeight: col.kind === 'vendor' && col.vendorMetric === 'total' ? 600 : 400,
                         color: stateStyle.color ?? '#24292f',
@@ -2673,7 +3037,31 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
                           style={{ width: '100%', height: ROW_H - 6, border: '1px solid #2563eb', borderRadius: 3, padding: '0 6px', fontSize: 12, outline: 'none', background: '#ffffff', color: '#111827' }}
                         />
                       ) : (
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</span>
+                        <span style={cellTextStyle}>{value}</span>
+                      )}
+                      {canOpenSpecBubble && bid && (
+                        <button
+                          type="button"
+                          aria-label={`Open spec justification for ${bid.vendor_name} ${item.description}`}
+                          title="Open spec justification"
+                          onMouseDown={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                          }}
+                          onClick={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            setOpenSpecBubble({ itemId: item.id, bidId: bid.id })
+                          }}
+                          className="absolute right-1 top-1/2 z-10 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full border opacity-0 shadow-sm transition group-hover:opacity-100 focus:opacity-100"
+                          style={{
+                            background: '#fff7cc',
+                            borderColor: '#f4c95d',
+                            color: '#74531a',
+                          }}
+                        >
+                          <Lightbulb className="h-3 w-3" aria-hidden="true" />
+                        </button>
                       )}
                     </div>
                   )
@@ -2844,7 +3232,7 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
       {/* Status bar */}
       <div className="flex items-center justify-between shrink-0" style={{ borderTop: baseBorder, background: '#f6f8fa', padding: '4px 10px', fontSize: 11, color: '#57606a' }}>
         <span>{visibleItems.length} of {items.filter((item) => !(view.deletedLineItemIds ?? []).includes(item.id)).length} items · {bids.length} vendors · {visibleCols.length} of {activeCols.length} columns · {selectedRange.r2 - selectedRange.r1 + 1}x{selectedRange.c2 - selectedRange.c1 + 1} selected</span>
-        <span>Double-click or Enter to edit · Drag to select · Right-click rows/columns · ⌘K for AI</span>
+        <span>Double-click or Enter to edit · Drag to select · Right-click rows/columns · ⌘Z undo · ⌘Y redo · ⌘K AI</span>
       </div>
 
       <BidComparisonAssistant
@@ -2854,6 +3242,9 @@ function BidExcelSheet({ rfq, bids, vendorColors, userKey }: { rfq: ContractorRF
         sheetSchema={sheetSchema}
         snapshot={comparisonSheetSnapshot}
         onApply={applyPatchToView}
+        onHistoryCommand={applyWorkbookHistoryCommand}
+        canUndoSavedVersion={canUndo}
+        canRedoSavedVersion={canRedo}
         onPreviewChange={setPreviewPatch}
         onDismiss={() => dispatchAssistant(false)}
       />
@@ -2866,6 +3257,7 @@ export function BidDashboard({
   projectName = projectId,
   rfq,
   bids,
+  specDocuments = [],
   demoMode = false,
   section = 'all',
   userKey = 'anon',
@@ -2874,6 +3266,7 @@ export function BidDashboard({
   projectName?: string
   rfq: ContractorRFQ
   bids: ContractorBid[]
+  specDocuments?: ProjectSpecDocumentSummary[]
   demoMode?: boolean
   section?: 'all' | 'comparison' | 'decision'
   userKey?: string
@@ -3066,7 +3459,7 @@ export function BidDashboard({
   return (
     <div className={section === 'comparison' ? 'flex h-full min-h-0 flex-col' : section === 'all' ? 'mt-8' : ''}>
       {showComparison && (
-        <BidExcelSheet rfq={rfq} bids={bids} vendorColors={vendorColors} userKey={userKey} />
+        <BidExcelSheet rfq={rfq} bids={bids} vendorColors={vendorColors} userKey={userKey} specDocuments={specDocuments} />
       )}
 
       {showDecision && (
@@ -3367,9 +3760,16 @@ export function BidDashboard({
                                 color: finding.status === 'violation' ? '#c0392b' : finding.status === 'compliant' ? '#2d6a4f' : '#4a6358',
                                 border: '1px solid #e2d9cf',
                               }}>
-                                {finding.status.replace(/_/g, ' ')}
+                                {finding.substitution_verdict
+                                  ? finding.substitution_verdict.replace(/_/g, ' ')
+                                  : finding.status.replace(/_/g, ' ')}
                               </span>
                             </div>
+                            {finding.review_kind === 'substitution' && (
+                              <p className="mt-1 text-[11px] font-bold uppercase tracking-wide" style={{ color: finding.substitution_verdict === 'not_up_to_spec' ? '#c0392b' : '#2d6a4f' }}>
+                                Substitution spec verdict
+                              </p>
+                            )}
                             <p className="mt-2 text-xs leading-relaxed" style={{ color: '#4a6358' }}>{finding.explanation}</p>
                             {finding.requirement_summary && (
                               <p className="mt-2 text-xs" style={{ color: '#4a6358' }}><span className="font-bold">Spec:</span> {finding.requirement_summary}</p>
@@ -3384,7 +3784,11 @@ export function BidDashboard({
                               <div className="mt-2 space-y-1">
                                 {finding.evidence.slice(0, 2).map((evidence, index) => (
                                   <p key={`${finding.id}-evidence-${index}`} className="text-[11px] leading-relaxed" style={{ color: '#8a9e96' }}>
-                                    {evidence.document_name}, p. {evidence.page_start}{evidence.page_end !== evidence.page_start ? `-${evidence.page_end}` : ''}
+                                    {specDocumentHrefForEvidence(evidence, specDocuments) ? (
+                                      <a href={specDocumentHrefForEvidence(evidence, specDocuments)} target="_blank" rel="noreferrer" className="font-semibold underline-offset-2 hover:underline" style={{ color: '#587067' }}>
+                                        {evidence.document_name}
+                                      </a>
+                                    ) : evidence.document_name}, p. {evidence.page_start}{evidence.page_end !== evidence.page_start ? `-${evidence.page_end}` : ''}
                                     {evidence.section_number ? ` · ${evidence.section_number}` : ''}: {evidence.quote}
                                   </p>
                                 ))}
@@ -3415,6 +3819,12 @@ export function BidDashboard({
                     const unavailable = !response || response.availability === 'unavailable'
                     const quantity = response?.quoted_quantity ?? response?.quantity ?? item.quantity
                     const isAlternate = Boolean(response?.is_alternate)
+                    const substitutionFinding = lineSpecFinding(selectedBid, item.id)
+                    const substitutionLabel = substitutionFinding?.substitution_verdict === 'up_to_spec'
+                      ? 'Up-To-Spec Substitution'
+                      : substitutionFinding?.substitution_verdict === 'not_up_to_spec'
+                        ? 'Not Up To Spec'
+                        : 'Substitution'
                     return (
                       <tr key={`${selectedBid.id}-line-${item.id}`} className="align-middle" style={{ borderBottom: '1px solid #e2d9cf' }}>
                         <td className="px-5 py-3.5">
@@ -3423,8 +3833,12 @@ export function BidDashboard({
                               {item.description}
                             </p>
                             {isAlternate && (
-                              <span className="rounded px-1.5 py-0.5 text-[10px] font-bold" style={{ background: '#fff7cc', color: '#74531a', border: '1px solid #d7ad43' }}>
-                                Alternate
+                              <span className="rounded px-1.5 py-0.5 text-[10px] font-bold" style={{
+                                background: substitutionFinding?.substitution_verdict === 'not_up_to_spec' ? '#fdeaea' : substitutionFinding?.substitution_verdict === 'up_to_spec' ? '#e8f4ee' : '#fff7cc',
+                                color: substitutionFinding?.substitution_verdict === 'not_up_to_spec' ? '#c0392b' : substitutionFinding?.substitution_verdict === 'up_to_spec' ? '#2d6a4f' : '#74531a',
+                                border: `1px solid ${substitutionFinding?.substitution_verdict === 'not_up_to_spec' ? '#f5c6c6' : substitutionFinding?.substitution_verdict === 'up_to_spec' ? '#a8d5ba' : '#d7ad43'}`,
+                              }}>
+                                {substitutionLabel}
                               </span>
                             )}
                           </div>
@@ -3446,9 +3860,14 @@ export function BidDashboard({
                               {response.quoted_product_details}
                             </p>
                           )}
-                          {(response?.response_attributes ?? []).length > 0 && (
+                          {isAlternate && parseSubstitutionAttachments(response).length > 0 && (
                             <p className="mt-1 text-[11px] leading-snug" style={{ color: '#587067' }}>
-                              {response!.response_attributes!.map((attribute) => `${attribute.label}: ${attribute.value}`).join(' · ')}
+                              Attachments: {parseSubstitutionAttachments(response).map((file) => file.filename).join(', ')}
+                            </p>
+                          )}
+                          {(response?.response_attributes ?? []).filter((attribute) => attribute.key !== SUBSTITUTION_ATTACHMENTS_KEY).length > 0 && (
+                            <p className="mt-1 text-[11px] leading-snug" style={{ color: '#587067' }}>
+                              {response!.response_attributes!.filter((attribute) => attribute.key !== SUBSTITUTION_ATTACHMENTS_KEY).map((attribute) => `${attribute.label}: ${attribute.value}`).join(' · ')}
                             </p>
                           )}
                         </td>

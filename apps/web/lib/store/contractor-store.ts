@@ -28,7 +28,7 @@ import type {
   ContractorVendorInvite,
 } from '@/lib/types/contractor'
 import type { NegotiationMessage, VendorReliabilityFlag } from '@/lib/types/procurement'
-import { getBidSpecComplianceReport, listProjectSpecDocuments } from '@/lib/spec-compliance/store'
+import { getBidSpecComplianceReport, listProjectSpecDocuments, listProjectSpecPackages } from '@/lib/spec-compliance/store'
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback
@@ -268,7 +268,11 @@ export async function getAllProjects(): Promise<ContractorProject[]> {
 export async function getProject(id: string): Promise<ContractorProject | null> {
   const row = (await db.select().from(projectsTable).where(eq(projectsTable.id, id)))[0]
   if (!row) return null
-  return { ...rowToProject(row), spec_documents: await listProjectSpecDocuments(id) }
+  const [specDocuments, specPackages] = await Promise.all([
+    listProjectSpecDocuments(id),
+    listProjectSpecPackages(id),
+  ])
+  return { ...rowToProject(row), spec_documents: specDocuments, spec_packages: specPackages }
 }
 
 export async function saveProject(project: ContractorProject): Promise<void> {

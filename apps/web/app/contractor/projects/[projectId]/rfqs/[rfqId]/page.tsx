@@ -171,6 +171,7 @@ export default async function RFQDetailPage({
             projectName={project.name}
             rfq={rfq}
             bids={bids}
+            specDocuments={project.spec_documents ?? []}
             section="comparison"
             userKey={session?.userId ?? 'anon'}
           />
@@ -316,7 +317,7 @@ export default async function RFQDetailPage({
 
       {activeSection === 'bid-comparison' && rfq.status === 'active' && (
         <section>
-          <BidDashboard projectId={projectId} projectName={project.name} rfq={rfq} bids={bids} section="comparison" />
+          <BidDashboard projectId={projectId} projectName={project.name} rfq={rfq} bids={bids} specDocuments={project.spec_documents ?? []} section="comparison" />
         </section>
       )}
 

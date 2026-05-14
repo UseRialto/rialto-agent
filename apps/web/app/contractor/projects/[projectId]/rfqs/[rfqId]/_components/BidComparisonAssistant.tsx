@@ -11,6 +11,7 @@ import {
   type ComparisonAgentDebugResponse,
   type ComparisonAgentProgressEvent,
 } from '@/lib/procurement/comparison-agent-debug'
+import { resolveComparisonHistoryRequest, type ComparisonHistoryCommand } from '@/lib/procurement/comparison-fast-commands'
 
 interface SheetSchemaColumn {
   key: string
@@ -32,6 +33,9 @@ export interface BidComparisonAssistantProps {
   }
   snapshot?: ComparisonSheetSnapshot
   onApply: (patch: ComparisonViewPatch) => void
+  onHistoryCommand?: (command: ComparisonHistoryCommand) => Promise<boolean> | boolean
+  canUndoSavedVersion?: boolean
+  canRedoSavedVersion?: boolean
   onPreviewChange?: (patch: ComparisonViewPatch | null) => void
   onDismiss: () => void
 }
@@ -152,7 +156,19 @@ const TONE_STYLES: Record<PatchChip['tone'], React.CSSProperties> = {
   highlight: { background: '#fef3c7', border: '1px solid #fcd34d', color: '#92400e' },
 }
 
-export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSchema, snapshot, onApply, onPreviewChange, onDismiss }: BidComparisonAssistantProps) {
+export function BidComparisonAssistant({
+  isOpen,
+  isClosing,
+  currentView,
+  sheetSchema,
+  snapshot,
+  onApply,
+  onHistoryCommand,
+  canUndoSavedVersion = false,
+  canRedoSavedVersion = false,
+  onPreviewChange,
+  onDismiss,
+}: BidComparisonAssistantProps) {
   const [draft, setDraft] = useState('')
   const [messages, setMessages] = useState<AssistantMessage[]>([])
   const [proposal, setProposal] = useState<ComparisonViewPatch | null>(null)
@@ -265,6 +281,40 @@ export function BidComparisonAssistant({ isOpen, isClosing, currentView, sheetSc
     setIsSending(true)
     setError('')
     if (!proposal) setSummary('')
+    const historyRequest = resolveComparisonHistoryRequest(message, {
+      hasPendingPreview: Boolean(proposal),
+      canUndoSavedVersion,
+      canRedoSavedVersion,
+    })
+    if (historyRequest) {
+      try {
+        let responseSummary: string
+        if (historyRequest.action === 'discard-preview') {
+          setProposal(null)
+          onPreviewChange?.(null)
+          responseSummary = 'Discarded the pending preview.'
+        } else if (historyRequest.action === 'undo-version' || historyRequest.action === 'redo-version') {
+          const command = historyRequest.action === 'undo-version' ? 'undo' : 'redo'
+          const applied = await onHistoryCommand?.(command)
+          responseSummary = applied
+            ? command === 'undo' ? 'Undid the last workbook edit.' : 'Redid the workbook edit.'
+            : command === 'undo' ? 'There is no saved workbook edit to undo yet.' : 'There is no workbook edit to redo yet.'
+        } else {
+          responseSummary = historyRequest.command === 'undo'
+            ? 'There is no pending preview or saved workbook edit to undo yet.'
+            : 'There is no workbook edit to redo yet.'
+        }
+        setSummary(responseSummary)
+        setMessages((current) => [...current, { id: makeId(), role: 'assistant', content: responseSummary }])
+      } catch (caught) {
+        const responseSummary = caught instanceof Error ? caught.message : 'Could not update workbook history.'
+        setError(responseSummary)
+        setMessages((current) => [...current, { id: makeId(), role: 'assistant', content: responseSummary, tone: 'error' }])
+      }
+      setIsSending(false)
+      setStartedAt(null)
+      return
+    }
     if (debugMode) setDebugSteps(initialAgentProgressSteps(message))
     setStartedAt(Date.now())
     const controller = new AbortController()

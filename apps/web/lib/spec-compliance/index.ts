@@ -1,19 +1,23 @@
 import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { bids as bidsTable } from '@/lib/db/schema'
-import { getBidsForRFQ, getRFQById } from '@/lib/store/contractor-store'
+import { findUserById } from '@/lib/auth/users'
+import { contractorCustomizationFromUser } from '@/lib/contractor-customization'
+import { getBidsForRFQ, getProject, getRFQById } from '@/lib/store/contractor-store'
 import type { ContractorBid, ContractorBidLineItemResponse, ContractorRFQLineItem } from '@/lib/types/contractor'
 import type { BidSpecComplianceSummaryStatus } from '@/lib/types/procurement'
 import { chunkExtractedPages } from './chunk'
-import { evaluateLineItemCompliance, configuredComplianceModel } from './llm'
+import { evaluateLineItemCompliance, evaluateSubstitutionCompliance, configuredComplianceModel, configuredSubstitutionComplianceModel } from './llm'
 import { extractPdfPages } from './pdf'
 import { buildVendorProductProfile, enrichVendorProductProfile } from './product'
 import {
   countIndexedSpecChunks,
   countOversizedSpecChunks,
+  ensureProjectSpecPackage,
   getProjectSpecDocument,
   listProjectSpecDocuments,
   replaceProjectSpecChunks,
+  retrieveProjectSpecPackageChunksDetailed,
   retrieveSpecChunksDetailed,
   saveComplianceReport,
   saveNoSpecsComplianceReport,
@@ -55,6 +59,12 @@ function productProfileQuery(profile: VendorProductProfile) {
     profile.lookup?.summary,
     ...(profile.lookup?.results ?? []).flatMap((result) => [result.title, result.snippet]),
   ].map(compact).filter(Boolean).join(' ')
+}
+
+async function contractorTradeForProject(projectId: string) {
+  const project = await getProject(projectId)
+  const owner = project?.owner_id ? await findUserById(project.owner_id) : undefined
+  return contractorCustomizationFromUser(owner).trade ?? owner?.company_info?.contractor_trade ?? 'general'
 }
 
 function positive(value: unknown) {
@@ -164,6 +174,8 @@ export async function runBidSpecCompliance(bidId: string) {
   if (indexedChunkCount === 0) {
     return saveNoSpecsComplianceReport({ bidId: bid.id, rfqId: rfq.id, projectId: rfq.project_id })
   }
+  const contractorTrade = await contractorTradeForProject(rfq.project_id)
+  const specPackage = await ensureProjectSpecPackage(rfq.project_id, contractorTrade)
 
   const items: Array<ComplianceEvaluationResult & { rfq_line_item_id?: string }> = []
   for (const response of bid.line_item_responses) {
@@ -179,16 +191,25 @@ export async function runBidSpecCompliance(bidId: string) {
       responseQuery(lineItem, response),
       productProfileQuery(productProfile),
     ].map(compact).filter(Boolean).join(' ')
-    const retrieval = await retrieveSpecChunksDetailed(rfq.project_id, query, 7)
+    const isSubstitution = Boolean(response.is_alternate)
+    const retrieval = specPackage?.status === 'complete' && specPackage.selected_chunk_ids.length > 0
+      ? await retrieveProjectSpecPackageChunksDetailed(specPackage, query, isSubstitution ? 10 : 7)
+      : await retrieveSpecChunksDetailed(rfq.project_id, query, 7)
     const chunks = retrieval.chunks
     if (chunks.length === 0) {
       items.push({
         rfq_line_item_id: lineItem.id,
         status: 'no_spec_found',
+        review_kind: isSubstitution ? 'substitution' : 'line_item',
+        substitution_verdict: isSubstitution ? 'needs_review' : undefined,
         severity: 'low',
-        requirement_summary: 'No matching specification text was found for this line item.',
+        requirement_summary: isSubstitution
+          ? 'No matching trade-scoped specification text was found for this substitution.'
+          : 'No matching specification text was found for this line item.',
         vendor_summary: compact(response.quoted_product_details) || compact(response.notes) || 'No vendor product details provided.',
-        explanation: 'The indexed project specs did not return evidence for this requested SKU/product.',
+        explanation: isSubstitution
+          ? 'The trade-scoped project spec package did not return evidence for this explicit vendor substitution.'
+          : 'The indexed project specs did not return evidence for this requested SKU/product.',
         suggested_follow_up: 'If this item should be governed by the spec manual, confirm the RFQ description or SKU has enough searchable detail.',
         evidence: [],
         retrieval_diagnostics: retrieval.diagnostics,
@@ -197,7 +218,7 @@ export async function runBidSpecCompliance(bidId: string) {
       continue
     }
     try {
-      const result = await evaluateLineItemCompliance({
+      const evaluationInput = {
         rfq,
         bid,
         lineItem,
@@ -205,12 +226,17 @@ export async function runBidSpecCompliance(bidId: string) {
         chunks,
         productProfile,
         retrievalDiagnostics: retrieval.diagnostics,
-      })
+      }
+      const result = isSubstitution
+        ? await evaluateSubstitutionCompliance(evaluationInput)
+        : await evaluateLineItemCompliance(evaluationInput)
       items.push({ ...result, rfq_line_item_id: lineItem.id })
     } catch (error) {
       items.push({
         rfq_line_item_id: lineItem.id,
         status: 'needs_review',
+        review_kind: isSubstitution ? 'substitution' : 'line_item',
+        substitution_verdict: isSubstitution ? 'needs_review' : undefined,
         severity: 'high',
         requirement_summary: 'Relevant spec text was retrieved, but automated AI analysis failed.',
         vendor_summary: compact(response.quoted_product_details) || compact(response.notes) || 'No vendor product details provided.',
@@ -237,7 +263,9 @@ export async function runBidSpecCompliance(bidId: string) {
     projectId: rfq.project_id,
     status: 'complete',
     summaryStatus: summarize(items),
-    model: configuredComplianceModel(),
+    model: items.some((item) => item.review_kind === 'substitution')
+      ? configuredSubstitutionComplianceModel()
+      : configuredComplianceModel(),
     items,
   })
 }

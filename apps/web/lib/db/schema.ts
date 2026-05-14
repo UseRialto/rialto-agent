@@ -96,6 +96,24 @@ export const projectSpecChunks = pgTable('project_spec_chunks', {
   sectionIdx: index('idx_project_spec_chunks_section').on(table.project_id, table.canonical_section_number),
 }))
 
+export const projectSpecPackages = pgTable('project_spec_packages', {
+  id: serial('id').primaryKey(),
+  project_id: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  trade: text('trade').notNull(),
+  title: text('title').notNull(),
+  status: text('status', { enum: ['pending', 'complete', 'failed'] }).notNull().default('pending'),
+  source_document_ids_json: text('source_document_ids_json').notNull().default('[]'),
+  selected_chunk_ids_json: text('selected_chunk_ids_json').notNull().default('[]'),
+  content: text('content').notNull().default(''),
+  diagnostics_json: text('diagnostics_json').notNull().default('{}'),
+  error: text('error'),
+  created_at: text('created_at').notNull(),
+  updated_at: text('updated_at').notNull(),
+}, (table) => ({
+  projectTradeUnique: uniqueIndex('project_spec_packages_project_trade_unique').on(table.project_id, table.trade),
+  projectStatusIdx: index('idx_project_spec_packages_project_status').on(table.project_id, table.status),
+}))
+
 export const specProductLookupCache = pgTable('spec_product_lookup_cache', {
   id: serial('id').primaryKey(),
   lookup_key: text('lookup_key').notNull(),
@@ -298,6 +316,8 @@ export const bidSpecComplianceItems = pgTable('bid_spec_compliance_items', {
   bid_id: text('bid_id').notNull().references(() => bids.id, { onDelete: 'cascade' }),
   rfq_line_item_id: text('rfq_line_item_id').references(() => rfqLineItems.id, { onDelete: 'set null' }),
   status: text('status', { enum: ['compliant', 'violation', 'needs_review', 'no_spec_found', 'not_quoted'] }).notNull(),
+  review_kind: text('review_kind', { enum: ['line_item', 'substitution'] }).notNull().default('line_item'),
+  substitution_verdict: text('substitution_verdict', { enum: ['up_to_spec', 'not_up_to_spec', 'needs_review'] }),
   severity: text('severity', { enum: ['low', 'medium', 'high'] }).notNull().default('low'),
   requirement_summary: text('requirement_summary').notNull().default(''),
   vendor_summary: text('vendor_summary').notNull().default(''),

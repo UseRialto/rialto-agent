@@ -239,6 +239,31 @@ export function ProjectSettingsClient({ project }: { project: ContractorProject 
             ))
           )}
         </div>
+
+        {(project.spec_packages ?? []).length > 0 && (
+          <div className="mt-5 border-t pt-4" style={{ borderColor: '#e2d9cf' }}>
+            <h3 className="text-xs font-bold uppercase tracking-wide" style={{ color: '#4a6358' }}>Trade-Scoped Spec Packages</h3>
+            <div className="mt-2 space-y-2">
+              {project.spec_packages?.map((specPackage) => (
+                <div key={specPackage.id} className="rounded-md border px-3 py-2" style={{ borderColor: '#e2d9cf', background: '#fbfaf8' }}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold capitalize" style={{ color: '#1e3a2f' }}>{specPackage.title}</p>
+                    <span className="rounded-full px-2.5 py-1 text-xs font-semibold capitalize" style={{
+                      background: specPackage.status === 'complete' ? '#e8f4ee' : specPackage.status === 'failed' ? '#fdeaea' : '#fdf0e8',
+                      color: specPackage.status === 'complete' ? '#2d6a4f' : specPackage.status === 'failed' ? '#c0392b' : '#a85c2a',
+                    }}>
+                      {specPackage.status}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs" style={{ color: '#8a9e96' }}>
+                    {specPackage.selected_chunk_ids.length.toLocaleString()} relevant spec chunk{specPackage.selected_chunk_ids.length === 1 ? '' : 's'} retained for {specPackage.trade.replace(/_/g, ' ')} work.
+                  </p>
+                  {specPackage.error && <p className="mt-1 text-xs" style={{ color: '#c0392b' }}>{specPackage.error}</p>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Danger zone */}

@@ -4,6 +4,8 @@ import type {
   BidSpecComplianceItemStatus,
   SpecProductLookupResult,
   SpecRetrievalDiagnostics,
+  BidSpecComplianceReviewKind,
+  BidSpecComplianceSubstitutionVerdict,
 } from '@/lib/types/procurement'
 
 export interface ExtractedPdfPage {
@@ -82,6 +84,8 @@ export interface ComplianceEvaluationInput {
 
 export interface ComplianceEvaluationResult {
   status: BidSpecComplianceItemStatus
+  review_kind?: BidSpecComplianceReviewKind
+  substitution_verdict?: BidSpecComplianceSubstitutionVerdict
   severity: 'low' | 'medium' | 'high'
   requirement_summary: string
   vendor_summary: string

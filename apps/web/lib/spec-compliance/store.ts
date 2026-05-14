@@ -5,6 +5,7 @@ import {
   bidSpecComplianceReports,
   projectSpecChunks,
   projectSpecDocuments,
+  projectSpecPackages,
 } from '@/lib/db/schema'
 import type {
   BidSpecComplianceEvidence,
@@ -13,10 +14,12 @@ import type {
   BidSpecComplianceSummaryStatus,
   ProjectSpecDocumentStatus,
   ProjectSpecDocumentSummary,
+  ProjectSpecPackageSummary,
   SpecProductLookupResult,
   SpecRetrievalDiagnostics,
 } from '@/lib/types/procurement'
 import { generateEmbedding, generateEmbeddings } from './embeddings'
+import { buildTradeScopedSpecPackage, normalizeContractorTrade, type ProjectSpecPackageStatus } from './package'
 import type { ComplianceEvaluationResult, RetrievedSpecChunk, RetrievalCandidateDiagnostic, RetrievalResult, SpecChunkInput } from './types'
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -44,6 +47,23 @@ function rowToSpecDocument(row: typeof projectSpecDocuments.$inferSelect): Proje
   }
 }
 
+function rowToSpecPackage(row: typeof projectSpecPackages.$inferSelect): ProjectSpecPackageSummary {
+  return {
+    id: row.id,
+    project_id: row.project_id,
+    trade: row.trade,
+    title: row.title,
+    status: row.status as ProjectSpecPackageStatus,
+    source_document_ids: parseJson<number[]>(row.source_document_ids_json, []),
+    selected_chunk_ids: parseJson<number[]>(row.selected_chunk_ids_json, []),
+    content: row.content || undefined,
+    diagnostics: parseJson<Record<string, unknown>>(row.diagnostics_json, {}),
+    error: row.error ?? undefined,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }
+}
+
 function rowToComplianceItem(row: typeof bidSpecComplianceItems.$inferSelect): BidSpecComplianceItem {
   return {
     id: row.id,
@@ -51,6 +71,8 @@ function rowToComplianceItem(row: typeof bidSpecComplianceItems.$inferSelect): B
     bid_id: row.bid_id,
     rfq_line_item_id: row.rfq_line_item_id ?? undefined,
     status: row.status as BidSpecComplianceItem['status'],
+    review_kind: (row.review_kind ?? 'line_item') as BidSpecComplianceItem['review_kind'],
+    substitution_verdict: row.substitution_verdict as BidSpecComplianceItem['substitution_verdict'],
     severity: row.severity as BidSpecComplianceItem['severity'],
     requirement_summary: row.requirement_summary,
     vendor_summary: row.vendor_summary,
@@ -114,6 +136,143 @@ export async function listProjectSpecDocuments(projectId: string): Promise<Proje
     .where(eq(projectSpecDocuments.project_id, projectId))
     .orderBy(desc(projectSpecDocuments.created_at))
   return rows.map(rowToSpecDocument)
+}
+
+export async function listProjectSpecPackages(projectId: string): Promise<ProjectSpecPackageSummary[]> {
+  const rows = await db
+    .select()
+    .from(projectSpecPackages)
+    .where(eq(projectSpecPackages.project_id, projectId))
+    .orderBy(desc(projectSpecPackages.updated_at))
+  return rows.map(rowToSpecPackage)
+}
+
+export async function getProjectSpecPackage(projectId: string, trade?: string): Promise<ProjectSpecPackageSummary | null> {
+  const normalizedTrade = normalizeContractorTrade(trade)
+  const row = (await db
+    .select()
+    .from(projectSpecPackages)
+    .where(and(
+      eq(projectSpecPackages.project_id, projectId),
+      eq(projectSpecPackages.trade, normalizedTrade),
+    )))[0]
+  return row ? rowToSpecPackage(row) : null
+}
+
+async function listProjectSpecChunks(projectId: string): Promise<RetrievedSpecChunk[]> {
+  const rows = await db
+    .select({
+      id: projectSpecChunks.id,
+      document_id: projectSpecChunks.document_id,
+      document_name: projectSpecDocuments.filename,
+      page_start: projectSpecChunks.page_start,
+      page_end: projectSpecChunks.page_end,
+      section_number: projectSpecChunks.section_number,
+      canonical_section_number: projectSpecChunks.canonical_section_number,
+      section_title: projectSpecChunks.section_title,
+      content: projectSpecChunks.content,
+      rank: sql<number>`0`,
+      method: sql<string>`'package_source'`,
+    })
+    .from(projectSpecChunks)
+    .innerJoin(projectSpecDocuments, eq(projectSpecChunks.document_id, projectSpecDocuments.id))
+    .where(and(
+      eq(projectSpecChunks.project_id, projectId),
+      eq(projectSpecChunks.chunk_type, 'child'),
+    ))
+    .orderBy(projectSpecDocuments.filename, projectSpecChunks.page_start, projectSpecChunks.chunk_index)
+  return rows.map(rowToRetrievedSpecChunk)
+}
+
+export async function buildAndSaveProjectSpecPackage(projectId: string, trade?: string): Promise<ProjectSpecPackageSummary> {
+  const normalizedTrade = normalizeContractorTrade(trade)
+  const now = new Date().toISOString()
+  await db
+    .insert(projectSpecPackages)
+    .values({
+      project_id: projectId,
+      trade: normalizedTrade,
+      title: `${normalizedTrade.replace(/_/g, ' ')} project spec package`,
+      status: 'pending',
+      created_at: now,
+      updated_at: now,
+    })
+    .onConflictDoUpdate({
+      target: [projectSpecPackages.project_id, projectSpecPackages.trade],
+      set: {
+        status: 'pending',
+        error: null,
+        updated_at: now,
+      },
+    })
+
+  try {
+    const chunks = await listProjectSpecChunks(projectId)
+    const built = buildTradeScopedSpecPackage(chunks, normalizedTrade)
+    const sourceDocumentIds = [...new Set(built.selected.map((entry) => entry.chunk.document_id).filter(Boolean))]
+    const selectedChunkIds = built.selected.map((entry) => entry.chunk.id)
+    const row = (await db
+      .insert(projectSpecPackages)
+      .values({
+        project_id: projectId,
+        trade: normalizedTrade,
+        title: built.title,
+        status: 'complete',
+        source_document_ids_json: JSON.stringify(sourceDocumentIds),
+        selected_chunk_ids_json: JSON.stringify(selectedChunkIds),
+        content: built.content,
+        diagnostics_json: JSON.stringify(built.diagnostics),
+        error: null,
+        created_at: now,
+        updated_at: new Date().toISOString(),
+      })
+      .onConflictDoUpdate({
+        target: [projectSpecPackages.project_id, projectSpecPackages.trade],
+        set: {
+          title: built.title,
+          status: 'complete',
+          source_document_ids_json: JSON.stringify(sourceDocumentIds),
+          selected_chunk_ids_json: JSON.stringify(selectedChunkIds),
+          content: built.content,
+          diagnostics_json: JSON.stringify(built.diagnostics),
+          error: null,
+          updated_at: new Date().toISOString(),
+        },
+      })
+      .returning())[0]
+    return rowToSpecPackage(row)
+  } catch (error) {
+    const row = (await db
+      .insert(projectSpecPackages)
+      .values({
+        project_id: projectId,
+        trade: normalizedTrade,
+        title: `${normalizedTrade.replace(/_/g, ' ')} project spec package`,
+        status: 'failed',
+        error: error instanceof Error ? error.message : 'Failed to build project spec package.',
+        created_at: now,
+        updated_at: new Date().toISOString(),
+      })
+      .onConflictDoUpdate({
+        target: [projectSpecPackages.project_id, projectSpecPackages.trade],
+        set: {
+          status: 'failed',
+          error: error instanceof Error ? error.message : 'Failed to build project spec package.',
+          updated_at: new Date().toISOString(),
+        },
+      })
+      .returning())[0]
+    return rowToSpecPackage(row)
+  }
+}
+
+export async function ensureProjectSpecPackage(projectId: string, trade?: string): Promise<ProjectSpecPackageSummary | null> {
+  const normalizedTrade = normalizeContractorTrade(trade)
+  const existing = await getProjectSpecPackage(projectId, normalizedTrade)
+  if (existing?.status === 'complete' && existing.selected_chunk_ids.length > 0) return existing
+  const chunkCount = await countIndexedSpecChunks(projectId)
+  if (chunkCount === 0) return existing
+  return buildAndSaveProjectSpecPackage(projectId, normalizedTrade)
 }
 
 export async function updateProjectSpecDocument(
@@ -633,6 +792,66 @@ export async function retrieveSpecChunks(projectId: string, query: string, limit
   return (await retrieveSpecChunksDetailed(projectId, query, limit)).chunks
 }
 
+export async function retrieveProjectSpecPackageChunksDetailed(
+  specPackage: ProjectSpecPackageSummary,
+  query: string,
+  limit = 7,
+): Promise<RetrievalResult> {
+  const trimmed = query.replace(/\s+/g, ' ').trim()
+  const diagnostics: SpecRetrievalDiagnostics = {
+    query: trimmed,
+    expanded_query: expandedQueryText(trimmed),
+    section_numbers: sectionNumbersFromQuery(trimmed),
+    methods: ['trade_scoped_package'],
+    candidates: [],
+    errors: [],
+  }
+  if (!trimmed) {
+    return { chunks: [], diagnostics: { query, skipped_reason: 'Empty retrieval query.' } }
+  }
+  if (specPackage.selected_chunk_ids.length === 0) {
+    return {
+      chunks: [],
+      diagnostics: {
+        ...diagnostics,
+        skipped_reason: 'The trade-scoped project spec package does not contain selected chunks.',
+      },
+    }
+  }
+
+  const rows = await db
+    .select({
+      id: projectSpecChunks.id,
+      document_id: projectSpecChunks.document_id,
+      document_name: projectSpecDocuments.filename,
+      page_start: projectSpecChunks.page_start,
+      page_end: projectSpecChunks.page_end,
+      section_number: projectSpecChunks.section_number,
+      canonical_section_number: projectSpecChunks.canonical_section_number,
+      section_title: projectSpecChunks.section_title,
+      content: projectSpecChunks.content,
+      rank: sql<number>`0.5`,
+      method: sql<string>`'trade_scoped_package'`,
+    })
+    .from(projectSpecChunks)
+    .innerJoin(projectSpecDocuments, eq(projectSpecChunks.document_id, projectSpecDocuments.id))
+    .where(and(
+      eq(projectSpecChunks.project_id, specPackage.project_id),
+      inArray(projectSpecChunks.id, specPackage.selected_chunk_ids),
+    ))
+    .orderBy(projectSpecChunks.page_start, projectSpecChunks.chunk_index)
+
+  const expanded = expandedQueryText(trimmed)
+  const sections = sectionNumbersFromQuery(expanded)
+  const chunks = rows.map(rowToRetrievedSpecChunk)
+  diagnostics.candidates = chunks.map((chunk) => candidateDiagnostic(chunk, 'trade_scoped_package'))
+  const ranked = rankedRelevantChunks(chunks, expanded, sections, limit)
+  if (ranked.length === 0 && chunks.length > 0) {
+    diagnostics.errors?.push(`Filtered ${chunks.length} trade-scoped package chunk(s) because they did not match the RFQ item query.`)
+  }
+  return { chunks: ranked, diagnostics }
+}
+
 export async function getBidSpecComplianceReport(bidId: string): Promise<BidSpecComplianceReport | undefined> {
   const row = (await db
     .select()
@@ -702,6 +921,8 @@ export async function saveComplianceReport(input: {
         bid_id: input.bidId,
         rfq_line_item_id: item.rfq_line_item_id ?? null,
         status: item.status,
+        review_kind: item.review_kind ?? 'line_item',
+        substitution_verdict: item.substitution_verdict ?? null,
         severity: item.severity,
         requirement_summary: item.requirement_summary,
         vendor_summary: item.vendor_summary,
