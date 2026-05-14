@@ -129,6 +129,12 @@ function normalizeSku(value: string) {
     .replace(/\s+/g, '')
 }
 
+function skuLooksLikeSameItem(left: string, right: string) {
+  const a = normalizeSku(left)
+  const b = normalizeSku(right)
+  return Boolean(a && b && (a === b || a.startsWith(b) || b.startsWith(a)))
+}
+
 function normalizeUnit(value: string) {
   const unit = value.trim().toLowerCase()
   if (unit === 'each') return 'ea'
@@ -217,6 +223,66 @@ function parseQuoteLine(rawLine: string, sourceRow: number): ParsedQuoteLine | n
   }
 }
 
+function stripTrailingTableQuantity(value: string) {
+  return compact(value.replace(/\s+-?\s*[0-9][0-9,]*\.[0-9]+$/, ''))
+}
+
+function stripTrailingUnit(value: string) {
+  return compact(value.replace(/\s+(?:LF|EA|SF|SY|CY|Tube|Bundle)$/i, ''))
+}
+
+function trailingUnit(value: string) {
+  return compact(value).match(/\b(LF|EA|SF|SY|CY|Tube|Bundle)$/i)?.[1]
+}
+
+function descriptionLooksIncomplete(value: string) {
+  const description = compact(value)
+  if (!description) return true
+  if (/^(?:multi|varies?|n\/a|na)$/i.test(description)) return true
+  if (/^(?:\d+\s*)?'\s*\d+\s*"$/i.test(description)) return true
+  if (/^\d+\s*'\s*\d+\s*"$/i.test(description)) return true
+  if (/^\d+(?:\s+\d+\/\d+)?\s*(?:"|in|inch|inches)$/i.test(description)) return true
+  if (/^[0-9./\s'"-]+$/.test(description)) return true
+  return false
+}
+
+function repairSplitPdfDescription(
+  parsed: ParsedQuoteLine,
+  context: { previousDescription?: string; nextContinuation?: string },
+) {
+  const previousDescription = stripTrailingTableQuantity(context.previousDescription ?? '')
+  const nextContinuation = stripTrailingUnit(context.nextContinuation ?? '')
+  if (!previousDescription && !nextContinuation) return parsed
+
+  const parts = [
+    previousDescription,
+    parsed.description,
+    nextContinuation,
+  ].filter(Boolean)
+  const description = compact(parts.join(' '))
+  if (!description || description === parsed.description) return parsed
+
+  return {
+    ...parsed,
+    description,
+  }
+}
+
+function repairMultiSizePdfLine(
+  parsed: ParsedQuoteLine,
+  context: { sizeText?: string; nextContinuation?: string },
+) {
+  if (parsed.unit !== 'multi' || !/^multi\b/i.test(compact(context.sizeText ?? ''))) return parsed
+  const unit = trailingUnit(context.nextContinuation ?? '')
+  if (!unit) return parsed
+  const nextDescription = stripTrailingUnit(context.nextContinuation ?? '')
+  return {
+    ...parsed,
+    description: compact([parsed.description, 'Multi', nextDescription].filter(Boolean).join(' ')),
+    unit: normalizeUnit(unit),
+  }
+}
+
 function parseQuoteLines(text: string) {
   const lines = text
     .split('\n')
@@ -225,19 +291,23 @@ function parseQuoteLines(text: string) {
 
   return lines
     .map((line, index) => {
-      const direct = parseQuoteLine(line, index + 1)
-      if (direct) return direct
-
       const prefix = line.match(/^(\d+)\s+([A-Z0-9]+(?:\s*-\s*[A-Z0-9]+)?[A-Z0-9]*)\s+(.+)$/i)
-      if (!prefix) return null
+      if (!prefix) return parseQuoteLine(line, index + 1)
       const sku = normalizeSku(prefix[2])
       const previous = lines[index - 1] ?? ''
       const next = lines[index + 1] ?? ''
       const previousPrefix = previous.match(/^([A-Z0-9]+(?:\s*-\s*[A-Z0-9]+)?[A-Z0-9]*)\s+(.+)$/i)
-      const previousDescription = previousPrefix && normalizeSku(previousPrefix[1]) === sku ? previousPrefix[2] : ''
+      const previousDescription = previousPrefix && skuLooksLikeSameItem(previousPrefix[1], sku) ? previousPrefix[2] : ''
       const nextContinuation = next && !/^\d+\s+/.test(next) && !/^\d{3}\s+-\s+/.test(next) && !/^L n W Supply/i.test(next)
         ? next
         : ''
+
+      const direct = parseQuoteLine(line, index + 1)
+      if (direct && descriptionLooksIncomplete(direct.description)) {
+        return repairSplitPdfDescription(direct, { previousDescription, nextContinuation })
+      }
+      if (direct) return direct
+
       const candidates = [
         `${prefix[1]} ${prefix[2]} ${previousDescription} ${prefix[3]}`,
         `${prefix[1]} ${prefix[2]} ${prefix[3]} ${nextContinuation}`,
@@ -245,7 +315,10 @@ function parseQuoteLines(text: string) {
       ]
       for (const candidate of candidates) {
         const parsed = parseQuoteLine(compact(candidate), index + 1)
-        if (parsed) return parsed
+        if (parsed) return repairMultiSizePdfLine(parsed, {
+          sizeText: prefix[3],
+          nextContinuation,
+        })
       }
       return null
     })

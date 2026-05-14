@@ -135,6 +135,46 @@ describe('External Quote Import', () => {
     }))
   })
 
+  it('reassembles split PDF item descriptions around size-only priced rows', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'MCRD P-314',
+      filename: 'split-pdf-rows.pdf',
+      sourceKind: 'pdf',
+      text: `
+Quote ID : 0001 - The Raymond Group
+Supplier : L n W Supply - San Diego Expected Delivery Date : 08 / 01 / 2026 - 02 / 28 / 2027
+Michael Null 9 - MCRD P - 314 Company :
+Michael . Null @ raymondgroup . com Bid : 1.0 - Base Bid Job Site : San Diego , CA
+No . Item Description Item Notes Size Quantity Price Per Total
+250JS - 33 2 1 / 2 " X 20ga . Jamb
+3 250JS - 33 10 ' 0 " 1,094.00 LF 1250.000 1,000.00 LF $ 1,367.50
+Strut
+400S162 - 54 4 " X 16ga . 1 5 / 8 " 16,827.00
+25 400S162 - 54 Multi 1190.000 1,000.00 LF $ 20,024.13
+Flange Stud LF
+`,
+      now: '2026-05-11T12:00:00.000Z',
+    })
+
+    expect(result.rfq.line_items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sku: '250JS-33',
+        description: '2 1 / 2 " X 20ga . Jamb 10 \' 0 " Strut',
+        quantity: 1094,
+        unit: 'lf',
+      }),
+      expect.objectContaining({
+        sku: '400S162-54',
+        description: '4 " X 16ga . 1 5 / 8 " Multi Flange Stud',
+        quantity: 16827,
+        unit: 'lf',
+      }),
+    ]))
+    expect(result.rfq.line_items).not.toContainEqual(expect.objectContaining({ description: '10 \' 0 "' }))
+    expect(result.rfq.line_items).not.toContainEqual(expect.objectContaining({ unit: 'multi' }))
+  })
+
   it('creates one imported bid per supplier from a wide multi-supplier comparison file', () => {
     const result = createExternalQuoteImport({
       projectId: 'project-1',
