@@ -1573,14 +1573,20 @@ function vendorCellState(item: RFQLineItem, bid: ContractorBid, response?: BidLi
   if (finding?.status === 'violation') {
     return {
       tone: 'violation' as const,
-      tooltip: finding.explanation || 'Quoted item violates the project specification.',
+      tooltip: [
+        finding.explanation || 'Quoted item violates the project specification.',
+        response?.is_alternate ? 'Vendor also explicitly marked this line as an alternate or substitution.' : '',
+      ].filter(Boolean).join(' '),
       finding,
     }
   }
   if (finding?.status === 'needs_review') {
     return {
       tone: 'review' as const,
-      tooltip: finding.explanation || 'Quoted item needs spec review before award.',
+      tooltip: [
+        finding.explanation || 'Quoted item needs spec review before award.',
+        response?.is_alternate ? 'Vendor also explicitly marked this line as an alternate or substitution.' : '',
+      ].filter(Boolean).join(' '),
       finding,
     }
   }
@@ -2149,20 +2155,6 @@ function BidExcelSheet({
   }, [contextMenu])
 
   useEffect(() => {
-    if (!exportMenuOpen) return
-    const close = () => setExportMenuOpen(false)
-    window.addEventListener('click', close)
-    return () => window.removeEventListener('click', close)
-  }, [exportMenuOpen])
-
-  useEffect(() => {
-    if (!historyMenuOpen) return
-    const close = () => setHistoryMenuOpen(false)
-    window.addEventListener('click', close)
-    return () => window.removeEventListener('click', close)
-  }, [historyMenuOpen])
-
-  useEffect(() => {
     if (!isDraggingRange) return
     const stop = () => setIsDraggingRange(false)
     window.addEventListener('mouseup', stop)
@@ -2606,19 +2598,19 @@ function BidExcelSheet({
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-4 py-2 text-[11px] font-semibold" style={{ borderColor: '#e6ece8', background: '#ffffff', color: '#587067' }}>
           <span className="inline-flex items-center gap-1.5">
-            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#dcfce7', boxShadow: 'inset 0 -2px 0 #16a34a' }} />
+            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#dcfce7' }} />
             Lowest line total
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#dbeafe', boxShadow: 'inset 0 -2px 0 #2563eb' }} />
+            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#dbeafe' }} />
             Fastest lead time
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#fff7ed', border: '1.5px dotted #fa6b04' }} />
-            Up-To-Spec Substitution
+            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#ffffff', border: '3px dotted #f97316' }} />
+            Alternate or substitution
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#fdeaea', border: '1.5px solid #d64545' }} />
+            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: '#ffffff', border: '2px solid #d64545' }} />
             Spec issue
           </span>
         </div>
@@ -2966,27 +2958,19 @@ function BidExcelSheet({
                   const inRange = isInSelectedRange(r, c)
                   const isFrozen = col.key === frozenColumnKey
                   const stateStyle: React.CSSProperties =
-                    cellState.tone === 'violation'
-                      ? { background: '#fdeaea', color: '#8b1d1d', borderTop: '1.5px solid #d64545', borderBottom: '1.5px solid #d64545' }
-                      : cellState.tone === 'review'
-                        ? { background: '#fff7ed', color: '#7c3f12', borderTop: '1.5px dashed #f59e0b', borderBottom: '1.5px dashed #f59e0b' }
-                        : cellState.tone === 'up_to_spec_substitution'
-                            ? { background: '#fff7ed', color: '#7c3f12', borderTop: '1.5px dotted #fa6b04', borderBottom: '1.5px dotted #fa6b04' }
-                          : cellState.tone === 'alternate'
-                            ? { background: '#fff7ed', borderTop: '1.5px dotted #fa6b04', borderBottom: '1.5px dotted #fa6b04' }
-                            : {}
-                  const stateBorderColor = cellState.tone === 'violation'
-                    ? '#d64545'
-                    : cellState.tone === 'up_to_spec_substitution'
-                      ? '#fa6b04'
-                      : '#fa6b04'
-                  const stateBorderStyle = cellState.tone === 'violation'
-                    ? 'solid'
-                    : cellState.tone === 'review'
-                      ? 'dashed'
-                      : 'dotted'
-                  if (cellState.tone !== 'normal' && col.kind === 'vendor' && col.vendorMetric === 'unit_price') stateStyle.borderLeft = `1.5px ${stateBorderStyle} ${stateBorderColor}`
-                  if (cellState.tone !== 'normal' && col.kind === 'vendor' && col.vendorMetric === 'lead') stateStyle.borderRight = `1.5px ${stateBorderStyle} ${stateBorderColor}`
+                    cellState.tone === 'violation' || cellState.tone === 'review'
+                      ? { color: '#8b1d1d', borderTop: '2px solid #d64545', borderBottom: '2px solid #d64545' }
+                      : cellState.tone === 'up_to_spec_substitution' || cellState.tone === 'alternate'
+                        ? { borderTop: '3px dotted #f97316', borderBottom: '3px dotted #f97316' }
+                        : {}
+                  if (cellState.tone !== 'normal' && col.kind === 'vendor' && col.vendorMetric === 'unit_price') stateStyle.borderLeft =
+                    cellState.tone === 'violation' || cellState.tone === 'review'
+                      ? '2px solid #d64545'
+                      : '3px dotted #f97316'
+                  if (cellState.tone !== 'normal' && col.kind === 'vendor' && col.vendorMetric === 'lead') stateStyle.borderRight =
+                    cellState.tone === 'violation' || cellState.tone === 'review'
+                      ? '2px solid #d64545'
+                      : '3px dotted #f97316'
                   const canOpenSpecBubble = Boolean(
                     bid &&
                     response?.is_alternate &&
@@ -3018,7 +3002,6 @@ function BidExcelSheet({
                         color: stateStyle.color ?? '#24292f',
                         justifyContent: alignToJustify(col.align),
                         fontVariantNumeric: col.align === 'right' ? 'tabular-nums' : 'normal',
-                        ...(isLowestPrice || isFastestLead ? { boxShadow: `inset 0 -2px 0 ${isLowestPrice ? '#16a34a' : '#2563eb'}` } : {}),
                         ...(isFrozen ? { position: 'sticky', left: GUTTER_W, zIndex: 2, borderRight: strongBorder } : {}),
                         ...(hasPreview ? { boxShadow: 'inset 0 0 0 2px #f59e0b' } : {}),
                         ...(isSelected ? { boxShadow: 'inset 0 0 0 2px #2563eb' } : inRange ? { boxShadow: 'inset 0 0 0 1px #93c5fd' } : {}),
