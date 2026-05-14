@@ -340,6 +340,12 @@ export function RFQWizard({
     setFieldTemplate(sanitized)
   }
 
+  function addImportedSourceFile(file: { url: string }) {
+    setAttachmentUrls((current) => (
+      current.includes(file.url) ? current : [...current, file.url]
+    ))
+  }
+
   function updateVendorResponseTemplate(nextFields: CustomLineItemFieldDefinition[]) {
     setCustomizationDirty(true)
     setVendorResponseTemplate(sanitizeVendorResponseFields(nextFields))
@@ -752,6 +758,7 @@ export function RFQWizard({
             onVendorResponseFieldToggleRequired={toggleVendorResponseFieldRequired}
             onFieldRemove={(field) => setFieldVisible(field, false)}
             onFieldRestore={(field) => setFieldVisible(field, true)}
+            onImportedSourceFile={addImportedSourceFile}
             onItemsChange={setItems}
           />
         )}

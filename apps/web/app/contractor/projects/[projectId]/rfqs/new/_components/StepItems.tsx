@@ -63,6 +63,13 @@ const SECTION_HEADING_STYLE = { color: '#1e3a2f', fontFamily: 'var(--font-lora, 
 const CORE_VENDOR_RESPONSE_COLUMNS = ['Unit Price', 'Lead Time']
 const SPREADSHEET_CELL_SELECTOR = '[data-spreadsheet-cell="true"]'
 
+type ImportedSourceFile = {
+  url: string
+  filename: string
+  mimeType: string
+  sizeBytes: number
+}
+
 function RemoveFieldButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <button
@@ -179,6 +186,7 @@ interface Props {
   onVendorResponseFieldToggleRequired?: (key: string) => void
   onFieldRemove?: (field: RFQCreationFieldKey) => void
   onFieldRestore?: (field: RFQCreationFieldKey) => void
+  onImportedSourceFile?: (file: ImportedSourceFile) => void
   onItemsChange: (items: ItemRow[]) => void
 }
 
@@ -217,6 +225,7 @@ export function StepItems({
   onVendorResponseFieldRename,
   onVendorResponseFieldToggleRequired,
   onFieldRemove,
+  onImportedSourceFile,
   onItemsChange,
 }: Props) {
   const importInputId = useId()
@@ -401,6 +410,7 @@ export function StepItems({
           warnings?: Array<{ row?: number; message: string }>
           skippedRows?: number
           importedColumns?: CustomLineItemFieldDefinition[]
+          sourceFile?: ImportedSourceFile
         }
         error?: string
       }
@@ -434,6 +444,7 @@ export function StepItems({
       }).filter((row) => row.sku || row.description)
       if (parsed.length === 0) throw new Error('No usable material line items were found in this file.')
       onItemsChange(parsed)
+      if (json.metadata?.sourceFile?.url) onImportedSourceFile?.(json.metadata.sourceFile)
       setMaterialEntryMode('manual')
       setImportSuccess(`Imported ${parsed.length} item${parsed.length === 1 ? '' : 's'} from ${file.name}`)
     } catch (error) {

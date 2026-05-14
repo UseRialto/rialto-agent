@@ -42,9 +42,19 @@ test.describe('line item import API', () => {
         contractor_budget?: number
         suggested_lead_time_days?: number
       }>
-      metadata?: { parser?: string; importedColumns?: Array<{ key: string; label: string }> }
+      metadata?: {
+        parser?: string
+        importedColumns?: Array<{ key: string; label: string }>
+        sourceFile?: { url: string; filename: string; mimeType: string; sizeBytes: number }
+      }
     }
     expect(body.metadata?.parser).toBe('deterministic-table')
+    expect(body.metadata?.sourceFile).toMatchObject({
+      filename: 'messy-takeoff.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      sizeBytes: buffer.length,
+    })
+    expect(body.metadata?.sourceFile?.url).toContain('request-attachments/imports/')
     expect(body.items[0]).toMatchObject({
       description: 'Wide flange beams',
       quantity: 25,

@@ -1,15 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { randomUUID } from 'crypto'
 import {
   importLineItems,
   isProbablyText,
   type ImportWarning,
 } from '@/lib/ai/line-item-import'
+import { saveUploadedFile, type UploadedFileResult } from '@/lib/files/upload'
 import { loadPdfJs } from '@/lib/pdf/runtime'
 import type { RequestType } from '@/lib/types/procurement'
 
-const MAX_IMPORT_BYTES = 512 * 1024
-const MAX_PDF_BYTES = 4 * 1024 * 1024
-const MAX_EXCEL_BYTES = 4 * 1024 * 1024
+const MAX_IMPORT_BYTES = 1536 * 1024
+const MAX_PDF_BYTES = 12 * 1024 * 1024
+const MAX_EXCEL_BYTES = 12 * 1024 * 1024
+
+function formatSize(bytes: number) {
+  if (bytes >= 1024 * 1024) return `${bytes / 1024 / 1024} MB`
+  return `${bytes / 1024} KB`
+}
 
 function isExcelFile(file: File) {
   const name = file.name.toLowerCase()
@@ -144,20 +151,28 @@ export async function POST(request: NextRequest) {
     const isPdf = isPdfFile(file)
     const isExcel = isExcelFile(file)
     if (isPdf && file.size > MAX_PDF_BYTES) {
-      return NextResponse.json({ error: 'PDF import file is too large. Use a file under 4 MB.' }, { status: 400 })
+      return NextResponse.json({ error: `PDF import file is too large. Use a file under ${formatSize(MAX_PDF_BYTES)}.` }, { status: 400 })
     }
     if (isExcel && file.size > MAX_EXCEL_BYTES) {
-      return NextResponse.json({ error: 'Excel import file is too large. Use a file under 4 MB.' }, { status: 400 })
+      return NextResponse.json({ error: `Excel import file is too large. Use a file under ${formatSize(MAX_EXCEL_BYTES)}.` }, { status: 400 })
     }
     if (!isPdf && file.size > MAX_IMPORT_BYTES) {
       if (!isExcel) {
-        return NextResponse.json({ error: 'Import file is too large. Use a file under 512 KB.' }, { status: 400 })
+        return NextResponse.json({ error: `Import file is too large. Use a file under ${formatSize(MAX_IMPORT_BYTES)}.` }, { status: 400 })
       }
     }
 
     let text = ''
     let sourceKind: 'text' | 'pdf' | 'spreadsheet' = 'text'
     let extractionWarnings: ImportWarning[] = []
+    let sourceFile: UploadedFileResult | undefined
+    if (isPdf || isExcel) {
+      sourceFile = await saveUploadedFile({
+        file,
+        folder: `request-attachments/imports/${randomUUID()}`,
+      })
+    }
+
     if (isPdf) {
       sourceKind = 'pdf'
       text = await extractPdfText(buffer)
@@ -173,6 +188,10 @@ export async function POST(request: NextRequest) {
       if (!isProbablyText(buffer)) {
         return NextResponse.json({ error: 'Only CSV, TSV, TXT, PDF, Excel, or other text-like files are supported for this import.' }, { status: 400 })
       }
+      sourceFile = await saveUploadedFile({
+        file,
+        folder: `request-attachments/imports/${randomUUID()}`,
+      })
       text = buffer.toString('utf8')
     }
 
@@ -186,7 +205,13 @@ export async function POST(request: NextRequest) {
       extractionWarnings,
     })
 
-    return NextResponse.json({ items: result.items, metadata: result.metadata })
+    return NextResponse.json({
+      items: result.items,
+      metadata: {
+        ...result.metadata,
+        sourceFile,
+      },
+    })
   } catch (error) {
     console.error('Line item import failed:', error)
     return NextResponse.json(
