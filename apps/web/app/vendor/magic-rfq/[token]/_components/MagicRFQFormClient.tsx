@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { submitMagicRFQBidAction, submitMagicRFQMessageAction } from '@/lib/actions/vendor'
+import { submitMagicRFQMessageAction } from '@/lib/actions/vendor'
 import { uploadRequestAttachmentFile, type ClientUploadedFileResult } from '@/lib/files/blob-client-upload'
 import type { ContractorBid, ContractorRFQ, ContractorRFQLineItem } from '@/lib/types/contractor'
 import type { MagicRFQPreviewInput } from '@/lib/types/magic-rfq'
@@ -28,6 +28,33 @@ interface LineItemBid {
   response_attributes: Record<string, string>
 }
 
+interface MagicRFQAutosaveDraft {
+  version: 1
+  rfqId: string
+  vendorEmail: string
+  savedAt: string
+  vendorName: string
+  designerName: string
+  overallNotes: string
+  terms: BidTerms
+  complianceCodes: string[]
+  bids: LineItemBid[]
+}
+
+interface MagicRFQSubmitResult {
+  success: boolean
+  error?: string
+  submittedAt?: string
+}
+
+interface MagicRFQSubmissionStatus {
+  version: 1
+  firstSubmittedAt?: string
+  lastSubmittedAt?: string
+  hasSubmittedUpdate: boolean
+  lastSubmittedSignature?: string
+}
+
 const AVAILABILITY_OPTIONS = [
   { value: 'in_stock' as const, label: 'In Stock' },
   { value: 'unavailable' as const, label: 'Unavailable' },
@@ -38,6 +65,7 @@ const compactFieldClass = 'w-full rounded-md border bg-white px-2.5 py-1.5 text-
 const fieldStyle = { borderColor: '#c8bdb2', color: '#1e3a2f' }
 const fieldFocusStyle = { '--tw-ring-color': '#fdc89a' } as React.CSSProperties
 const SUBSTITUTION_ATTACHMENTS_KEY = 'substitution_attachments'
+const MAGIC_RFQ_AUTOSAVE_VERSION = 1
 
 const PRODUCT_IDENTITY_KEYS = [
   'manufacturer',
@@ -137,6 +165,138 @@ function calculateQuotedTotalPrice(quantity: string, unitPrice: string) {
   const parsedUnitPrice = parseFloat(unitPrice)
   if (!Number.isFinite(parsedQuantity) || !Number.isFinite(parsedUnitPrice)) return ''
   return (parsedQuantity * parsedUnitPrice).toFixed(2)
+}
+
+function hasPositiveUnitPrice(bid: LineItemBid) {
+  const unitPrice = parseFloat(bid.unit_price)
+  return Number.isFinite(unitPrice) && unitPrice > 0
+}
+
+function hasPositiveLeadTime(bid: LineItemBid) {
+  const leadTime = parseFloat(bid.lead_time_days)
+  return Number.isFinite(leadTime) && leadTime > 0
+}
+
+function formatSubmittedDateTime(value?: string) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  })
+}
+
+function sortedRecord(value: Record<string, string>) {
+  return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)))
+}
+
+function makeMagicRFQDraftSignature(params: {
+  vendorName: string
+  designerName: string
+  overallNotes: string
+  terms: BidTerms
+  complianceCodes: string[]
+  bids: LineItemBid[]
+}) {
+  return JSON.stringify({
+    vendorName: params.vendorName,
+    designerName: params.designerName,
+    overallNotes: params.overallNotes,
+    terms: params.terms,
+    complianceCodes: params.complianceCodes.slice().sort(),
+    bids: params.bids.map((bid) => ({
+      ...bid,
+      response_attributes: sortedRecord(bid.response_attributes),
+    })),
+  })
+}
+
+function magicRFQAutosaveKey(token: string, rfqId: string, vendorEmail: string) {
+  return `rialto:magic-rfq-autosave:${rfqId}:${vendorEmail}:${token}`
+}
+
+function magicRFQSubmissionStatusKey(token: string, rfqId: string, vendorEmail: string) {
+  return `rialto:magic-rfq-submission:${rfqId}:${vendorEmail}:${token}`
+}
+
+function readMagicRFQAutosave(key: string): MagicRFQAutosaveDraft | null {
+  if (!key || typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<MagicRFQAutosaveDraft>
+    if (parsed.version !== MAGIC_RFQ_AUTOSAVE_VERSION || !Array.isArray(parsed.bids)) return null
+    return parsed as MagicRFQAutosaveDraft
+  } catch {
+    return null
+  }
+}
+
+function writeMagicRFQAutosave(key: string, draft: MagicRFQAutosaveDraft) {
+  if (!key || typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(key, JSON.stringify(draft))
+  } catch {
+    // Autosave is a convenience only; storage limits or private mode should not block quoting.
+  }
+}
+
+function clearMagicRFQAutosave(key: string) {
+  if (!key || typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    // Ignore local storage cleanup failures.
+  }
+}
+
+function readMagicRFQSubmissionStatus(key: string): MagicRFQSubmissionStatus | null {
+  if (!key || typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<MagicRFQSubmissionStatus>
+    if (parsed.version !== MAGIC_RFQ_AUTOSAVE_VERSION) return null
+    return {
+      version: MAGIC_RFQ_AUTOSAVE_VERSION,
+      firstSubmittedAt: parsed.firstSubmittedAt,
+      lastSubmittedAt: parsed.lastSubmittedAt,
+      hasSubmittedUpdate: Boolean(parsed.hasSubmittedUpdate),
+      lastSubmittedSignature: parsed.lastSubmittedSignature,
+    }
+  } catch {
+    return null
+  }
+}
+
+function writeMagicRFQSubmissionStatus(key: string, status: MagicRFQSubmissionStatus) {
+  if (!key || typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(key, JSON.stringify(status))
+  } catch {
+    // Submission history improves the local confirmation message but is not required for quoting.
+  }
+}
+
+function mergeAutosavedBids(baseBids: LineItemBid[], autosavedBids?: LineItemBid[]) {
+  if (!autosavedBids?.length) return baseBids
+  const autosavedByLineItem = new Map(autosavedBids.map((bid) => [bid.line_item_id, bid]))
+  return baseBids.map((baseBid) => {
+    const autosavedBid = autosavedByLineItem.get(baseBid.line_item_id)
+    if (!autosavedBid) return baseBid
+    return {
+      ...baseBid,
+      ...autosavedBid,
+      line_item_id: baseBid.line_item_id,
+      response_attributes: autosavedBid.response_attributes && typeof autosavedBid.response_attributes === 'object'
+        ? autosavedBid.response_attributes
+        : baseBid.response_attributes,
+      substitution_attachments: Array.isArray(autosavedBid.substitution_attachments)
+        ? autosavedBid.substitution_attachments
+        : baseBid.substitution_attachments,
+    }
+  })
 }
 
 function titleCaseLabel(value: string) {
@@ -383,10 +543,16 @@ function VendorResponseFieldInput({
   field,
   value,
   onChange,
+  cellProps,
 }: {
   field: CustomLineItemFieldDefinition
   value: string
   onChange: (value: string) => void
+  cellProps?: {
+    'data-magic-rfq-cell-row': number
+    'data-magic-rfq-cell-col': number
+    onKeyDown: (event: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>) => void
+  }
 }) {
   const inputClass = 'w-full rounded-md px-2 py-1.5 text-sm focus:outline-none'
   const inputStyle = { background: '#fbf8f5', border: '1px solid #e2d9cf', color: '#1e3a2f' }
@@ -398,6 +564,7 @@ function VendorResponseFieldInput({
         onChange={(event) => onChange(event.target.value)}
         className={inputClass}
         style={inputStyle}
+        {...cellProps}
       >
         <option value="">-</option>
         <option value="Yes">Yes</option>
@@ -412,6 +579,7 @@ function VendorResponseFieldInput({
         onChange={(event) => onChange(event.target.value)}
         className={inputClass}
         style={inputStyle}
+        {...cellProps}
       >
         <option value="">-</option>
         {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
@@ -425,6 +593,7 @@ function VendorResponseFieldInput({
       onChange={(event) => onChange(event.target.value)}
       className={inputClass}
       style={inputStyle}
+      {...cellProps}
     />
   )
 }
@@ -746,12 +915,15 @@ function LineItemsWorkbook({
   bids,
   updateBid,
   uploadFolder,
+  pricingIssueLineItemIds,
 }: {
   rfq: ContractorRFQ
   bids: LineItemBid[]
   updateBid: (id: string, partial: Partial<LineItemBid>) => void
   uploadFolder: string
+  pricingIssueLineItemIds: Set<string>
 }) {
+  const sheetRef = useRef<HTMLDivElement>(null)
   const vendorResponseFields = visibleVendorResponseFields(rfq)
   const requestAttributeColumns = rfq.line_items
     .flatMap((item) => item.attributes ?? [])
@@ -799,6 +971,60 @@ function LineItemsWorkbook({
   const vendorGridWidth = responseColumns.reduce((sum, col) => sum + columnWidth(col.key, col.width), 0)
   const defaultVendorPaneWidth = 104 + 124 + 96
   const vendorPaneWidth = Math.max(140, Math.min(vendorPaneWidthOverride ?? defaultVendorPaneWidth, Math.max(defaultVendorPaneWidth, vendorGridWidth)))
+  const editableVendorColumnCount = 2 + vendorResponseFields.length
+
+  function editableCellProps(rowIndex: number, colIndex: number) {
+    return {
+      'data-magic-rfq-cell-row': rowIndex,
+      'data-magic-rfq-cell-col': colIndex,
+      onKeyDown: (event: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>) => handleCellKeyDown(event, rowIndex, colIndex),
+    }
+  }
+
+  function focusEditableCell(rowIndex: number, colIndex: number, options?: { preventScroll?: boolean }) {
+    const nextRow = Math.max(0, Math.min(rfq.line_items.length - 1, rowIndex))
+    const nextCol = Math.max(0, Math.min(editableVendorColumnCount - 1, colIndex))
+    const selector = `[data-magic-rfq-cell-row="${nextRow}"][data-magic-rfq-cell-col="${nextCol}"]`
+    const element = sheetRef.current?.querySelector<HTMLInputElement | HTMLSelectElement>(selector)
+    if (!element || element.disabled) return
+    element.focus({ preventScroll: options?.preventScroll })
+    if (element instanceof HTMLInputElement) element.select()
+  }
+
+  useEffect(() => {
+    const firstIssueRowIndex = rfq.line_items.findIndex((item) => pricingIssueLineItemIds.has(item.id))
+    if (firstIssueRowIndex === -1) return
+
+    const scrollFrame = window.requestAnimationFrame(() => {
+      const row = sheetRef.current?.querySelector<HTMLElement>(`[data-magic-rfq-pricing-row-index="${firstIssueRowIndex}"]`)
+      if (!row) return
+      const rowTop = row.getBoundingClientRect().top + window.scrollY
+      const targetTop = Math.max(0, rowTop - window.innerHeight * 0.42)
+      window.scrollTo({ top: targetTop, behavior: 'smooth' })
+    })
+
+    const focusTimer = window.setTimeout(() => {
+      const selector = `[data-magic-rfq-cell-row="${firstIssueRowIndex}"][data-magic-rfq-cell-col="0"]`
+      const element = sheetRef.current?.querySelector<HTMLInputElement | HTMLSelectElement>(selector)
+      if (!element || element.disabled) return
+      element.focus({ preventScroll: true })
+      if (element instanceof HTMLInputElement) element.select()
+    }, 450)
+
+    return () => {
+      window.cancelAnimationFrame(scrollFrame)
+      window.clearTimeout(focusTimer)
+    }
+  }, [pricingIssueLineItemIds, rfq.line_items])
+
+  function handleCellKeyDown(event: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>, rowIndex: number, colIndex: number) {
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return
+    event.preventDefault()
+    if (event.key === 'ArrowUp') focusEditableCell(rowIndex - 1, colIndex)
+    if (event.key === 'ArrowDown') focusEditableCell(rowIndex + 1, colIndex)
+    if (event.key === 'ArrowLeft') focusEditableCell(rowIndex, colIndex - 1)
+    if (event.key === 'ArrowRight') focusEditableCell(rowIndex, colIndex + 1)
+  }
 
   function startColumnResize(key: string, event: React.MouseEvent<HTMLDivElement>) {
     event.preventDefault()
@@ -878,7 +1104,7 @@ function LineItemsWorkbook({
 
   return (
     <>
-    <div className="overflow-hidden rounded-2xl border bg-white shadow-sm" style={{ borderColor: '#e2d9cf' }}>
+    <div ref={sheetRef} className="overflow-hidden rounded-2xl border bg-white shadow-sm" style={{ borderColor: '#e2d9cf' }}>
       <div className="flex flex-col gap-2 border-b px-5 py-4 sm:flex-row sm:items-end sm:justify-between" style={{ borderColor: '#e2d9cf' }}>
         <div>
           <p className="text-base font-bold" style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}>Line Items</p>
@@ -1087,6 +1313,10 @@ function LineItemsWorkbook({
                 const quotedQuantity = parseFloat(bid.quoted_quantity) || item.quantity || 0
                 const computedTotalPrice = unitPrice * quotedQuantity
                 const totalPrice = computedTotalPrice
+                const hasRowPricingIssue = pricingIssueLineItemIds.has(item.id)
+                const issueRowStyle = hasRowPricingIssue
+                  ? { borderColor: '#e49a9a', background: '#f4b4b4' }
+                  : { borderColor: '#f0ebe6', background: bid.is_alternate ? '#f8faf9' : '#ffffff' }
                 const renderResponseCells = (alternateRow: boolean) => {
                   if (bid.is_alternate && !alternateRow) {
                     return (
@@ -1104,9 +1334,20 @@ function LineItemsWorkbook({
                       </>
                     )
                   }
+                  const hasPricingIssue = hasRowPricingIssue && !alternateRow
+                  const cellBorderColor = hasPricingIssue ? '#d66f6f' : alternateRow ? '#f2c99d' : '#f0ebe6'
+                  const unitPriceBorder = hasPricingIssue
+                    ? '1.5px solid #c0392b'
+                    : alternateRow ? '1px dashed #fa6b04' : '1px solid #e2d9cf'
                   return (
                     <>
-                      <div className="overflow-hidden border-r p-1.5" style={{ borderColor: alternateRow ? '#f2c99d' : '#f0ebe6' }}>
+                      <div
+                        className="overflow-hidden border-r p-1.5"
+                        style={{
+                          background: hasPricingIssue ? '#f4b4b4' : undefined,
+                          borderColor: cellBorderColor,
+                        }}
+                      >
                         <label className="sr-only">Unit Price</label>
                         <input
                           type="text"
@@ -1120,20 +1361,21 @@ function LineItemsWorkbook({
                             })
                           }}
                           className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
-                          style={{ background: '#fbf8f5', border: alternateRow ? '1px dashed #fa6b04' : '1px solid #e2d9cf', color: '#1e3a2f' }}
+                          style={{ background: hasPricingIssue ? '#fff8f8' : '#fbf8f5', border: unitPriceBorder, color: '#1e3a2f' }}
+                          {...editableCellProps(index, 0)}
                         />
                       </div>
-                      <div className="min-w-0 overflow-hidden border-r p-1.5" style={{ borderColor: alternateRow ? '#f2c99d' : '#f0ebe6' }}>
+                      <div className="min-w-0 overflow-hidden border-r p-1.5" style={{ background: hasPricingIssue ? '#f4b4b4' : undefined, borderColor: cellBorderColor }}>
                         <div
                           className="min-w-0 overflow-hidden rounded-md px-2 py-1.5 text-right text-sm font-semibold"
-                          style={{ background: '#fff', border: alternateRow ? '1px dashed #fa6b04' : '1px solid #f2c99d', color: '#8a4615' }}
+                          style={{ background: hasPricingIssue ? '#fff8f8' : '#fff', border: hasPricingIssue ? '1px solid #c0392b' : alternateRow ? '1px dashed #fa6b04' : '1px solid #f2c99d', color: hasPricingIssue ? '#7f1d1d' : '#8a4615' }}
                         >
                           <span className="block truncate">
                             {bid.unit_price ? `$${totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
                           </span>
                         </div>
                       </div>
-                      <div className="overflow-hidden border-r p-1.5" style={{ borderColor: alternateRow ? '#f2c99d' : '#f0ebe6' }}>
+                      <div className="overflow-hidden border-r p-1.5" style={{ background: hasPricingIssue ? '#f4b4b4' : undefined, borderColor: cellBorderColor }}>
                         <label className="sr-only">Lead Time</label>
                         <input
                           type="number"
@@ -1141,15 +1383,17 @@ function LineItemsWorkbook({
                           value={bid.lead_time_days}
                           onChange={(event) => updateBid(item.id, { lead_time_days: event.target.value })}
                           className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
-                          style={{ background: '#fbf8f5', border: alternateRow ? '1px dashed #fa6b04' : '1px solid #e2d9cf', color: '#1e3a2f' }}
+                          style={{ background: hasPricingIssue ? '#fff8f8' : '#fbf8f5', border: hasPricingIssue ? '1px solid #c0392b' : alternateRow ? '1px dashed #fa6b04' : '1px solid #e2d9cf', color: '#1e3a2f' }}
+                          {...editableCellProps(index, 1)}
                         />
                       </div>
-                      {vendorResponseFields.map((field) => (
-                        <div key={`${item.id}-${alternateRow ? 'alternate' : 'response'}-${field.key}`} className="overflow-hidden border-r p-1.5" style={{ borderColor: alternateRow ? '#f2c99d' : '#f0ebe6' }}>
+                      {vendorResponseFields.map((field, fieldIndex) => (
+                        <div key={`${item.id}-${alternateRow ? 'alternate' : 'response'}-${field.key}`} className="overflow-hidden border-r p-1.5" style={{ background: hasPricingIssue ? '#f4b4b4' : undefined, borderColor: cellBorderColor }}>
                           <VendorResponseFieldInput
                             field={field}
                             value={bid.response_attributes[field.key] ?? ''}
                             onChange={(value) => updateResponseAttribute(bid, field.key, value)}
+                            cellProps={editableCellProps(index, 2 + fieldIndex)}
                           />
                         </div>
                       ))}
@@ -1157,18 +1401,20 @@ function LineItemsWorkbook({
                   )
                 }
                 return (
-                  <div key={`${item.id}-response-rows`}>
+                  <div key={`${item.id}-response-rows`} data-magic-rfq-pricing-row-index={index}>
                     <div
                       className="grid h-16 items-stretch gap-0 border-b"
-                      style={{ gridTemplateColumns: vendorGridTemplateColumns, borderColor: '#f0ebe6', background: bid.is_alternate ? '#f8faf9' : '#ffffff' }}
+                      style={{ gridTemplateColumns: vendorGridTemplateColumns, ...issueRowStyle }}
                     >
                       {renderResponseCells(false)}
-                      <div className="flex items-center overflow-hidden border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
+                      <div className="flex items-center overflow-hidden border-r p-1.5" style={{ background: hasRowPricingIssue ? '#f4b4b4' : undefined, borderColor: hasRowPricingIssue ? '#d66f6f' : '#f0ebe6' }}>
                         <button
                           type="button"
                           onClick={() => setSubstitutionLineItemId(item.id)}
                           className="w-full rounded-md border px-2 py-1.5 text-xs font-semibold leading-tight transition-colors disabled:opacity-60"
-                          style={bid.is_alternate
+                          style={hasRowPricingIssue
+                            ? { borderColor: '#c0392b', background: '#fff8f8', color: '#7f1d1d' }
+                            : bid.is_alternate
                             ? { borderColor: '#e2d9cf', background: '#ffffff', color: '#4a6358' }
                             : { borderColor: '#fdc89a', background: '#fff3eb', color: '#a85c2a' }}
                         >
@@ -1246,43 +1492,140 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
   const existingBid = isPreview ? null : props.existingBid
   const initialMessages = isPreview ? [] : props.initialMessages ?? []
   const submittedAt = isPreview ? undefined : props.submittedAt
-  const [vendorName, setVendorName] = useState(existingBid?.vendor_name ?? '')
-  const [designerName, setDesignerName] = useState(existingBid?.designer_name ?? initialVendorName)
-  const [overallNotes, setOverallNotes] = useState(existingBid?.notes ?? '')
-  const [terms, setTerms] = useState<BidTerms>(existingBid?.terms ?? {})
-  const [complianceCodes, setComplianceCodes] = useState<string[]>(
+  const initialSubmittedAt = existingBid?.submitted_at ?? submittedAt
+  const autosaveKey = isPreview ? '' : magicRFQAutosaveKey(props.token, rfq.id, vendorEmail)
+  const submissionStatusKey = isPreview ? '' : magicRFQSubmissionStatusKey(props.token, rfq.id, vendorEmail)
+  const initialVendorNameValue = existingBid?.vendor_name ?? ''
+  const initialDesignerNameValue = existingBid?.designer_name ?? initialVendorName
+  const initialOverallNotesValue = existingBid?.notes ?? ''
+  const initialTermsValue = existingBid?.terms ?? {}
+  const initialComplianceCodesValue = (
     (existingBid?.compliance_declarations ?? [])
       .filter((entry) => entry.status === 'verified' || entry.status === 'self_reported')
-      .map((entry) => entry.code),
+      .map((entry) => entry.code)
   )
-  const [bids, setBids] = useState<LineItemBid[]>(() => defaultBids(rfq, existingBid))
+  const initialBidsValue = defaultBids(rfq, existingBid)
+  const initialDraftSignature = makeMagicRFQDraftSignature({
+    vendorName: initialVendorNameValue,
+    designerName: initialDesignerNameValue,
+    overallNotes: initialOverallNotesValue,
+    terms: initialTermsValue,
+    complianceCodes: initialComplianceCodesValue,
+    bids: initialBidsValue,
+  })
+  const [vendorName, setVendorName] = useState(initialVendorNameValue)
+  const [designerName, setDesignerName] = useState(initialDesignerNameValue)
+  const [overallNotes, setOverallNotes] = useState(initialOverallNotesValue)
+  const [terms, setTerms] = useState<BidTerms>(initialTermsValue)
+  const [complianceCodes, setComplianceCodes] = useState<string[]>(initialComplianceCodesValue)
+  const [bids, setBids] = useState<LineItemBid[]>(initialBidsValue)
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(Boolean(submittedAt))
+  const [firstSubmittedAt, setFirstSubmittedAt] = useState(initialSubmittedAt)
+  const [lastSubmittedAt, setLastSubmittedAt] = useState(submittedAt ?? existingBid?.submitted_at)
+  const [hasSubmittedUpdate, setHasSubmittedUpdate] = useState(false)
+  const [lastSubmittedSignature, setLastSubmittedSignature] = useState(initialSubmittedAt ? initialDraftSignature : '')
+  const [submitSuccessVisible, setSubmitSuccessVisible] = useState(false)
   const [error, setError] = useState('')
+  const [pricingIssueLineItemIds, setPricingIssueLineItemIds] = useState<Set<string>>(() => new Set())
   const [messages, setMessages] = useState<NegotiationMessage[]>(initialMessages)
   const [messageDraft, setMessageDraft] = useState('')
   const [sendingMessage, setSendingMessage] = useState(false)
   const [messageError, setMessageError] = useState('')
   const [messageComposerOpen, setMessageComposerOpen] = useState(false)
+  const [loadedLocalState, setLoadedLocalState] = useState(false)
   const successRef = useRef<HTMLDivElement>(null)
+  const currentDraftSignature = makeMagicRFQDraftSignature({
+    vendorName,
+    designerName,
+    overallNotes,
+    terms,
+    complianceCodes,
+    bids,
+  })
 
   useEffect(() => {
     if (!submitted) return
+    setSubmitting(false)
     successRef.current?.focus()
     successRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [submitted])
 
+  useEffect(() => {
+    if (!submittedAt) return
+    setSubmitted(true)
+    setFirstSubmittedAt((prev) => prev ?? submittedAt)
+    setLastSubmittedAt(submittedAt)
+    setSubmitting(false)
+  }, [submittedAt])
+
+  useEffect(() => {
+    if (isPreview || loadedLocalState) return
+    const savedDraft = readMagicRFQAutosave(autosaveKey)
+    if (savedDraft) {
+      setVendorName(savedDraft.vendorName)
+      setDesignerName(savedDraft.designerName)
+      setOverallNotes(savedDraft.overallNotes)
+      setTerms(savedDraft.terms)
+      setComplianceCodes(savedDraft.complianceCodes)
+      setBids(mergeAutosavedBids(defaultBids(rfq, existingBid), savedDraft.bids))
+    }
+
+    const savedStatus = readMagicRFQSubmissionStatus(submissionStatusKey)
+    if (savedStatus) {
+      setFirstSubmittedAt(savedStatus.firstSubmittedAt ?? initialSubmittedAt)
+      setLastSubmittedAt(savedStatus.lastSubmittedAt ?? submittedAt ?? existingBid?.submitted_at)
+      setHasSubmittedUpdate(savedStatus.hasSubmittedUpdate)
+      setLastSubmittedSignature(savedStatus.lastSubmittedSignature ?? (initialSubmittedAt ? initialDraftSignature : ''))
+    }
+    setLoadedLocalState(true)
+  }, [autosaveKey, existingBid, initialDraftSignature, initialSubmittedAt, isPreview, loadedLocalState, rfq, submittedAt, submissionStatusKey])
+
+  useEffect(() => {
+    if (!submitSuccessVisible) return
+    const timeout = window.setTimeout(() => setSubmitSuccessVisible(false), 1200)
+    return () => window.clearTimeout(timeout)
+  }, [submitSuccessVisible])
+
+  useEffect(() => {
+    if (isPreview || !loadedLocalState) return
+    const timeout = window.setTimeout(() => {
+      writeMagicRFQAutosave(autosaveKey, {
+        version: MAGIC_RFQ_AUTOSAVE_VERSION,
+        rfqId: rfq.id,
+        vendorEmail,
+        savedAt: new Date().toISOString(),
+        vendorName,
+        designerName,
+        overallNotes,
+        terms,
+        complianceCodes,
+        bids,
+      })
+    }, 500)
+    return () => window.clearTimeout(timeout)
+  }, [autosaveKey, currentDraftSignature, isPreview, loadedLocalState, rfq.id, vendorEmail])
+
   function updateBid(id: string, partial: Partial<LineItemBid>) {
+    setPricingIssueLineItemIds((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
     setBids((prev) => prev.map((entry) => (entry.line_item_id === id ? { ...entry, ...partial } : entry)))
   }
 
   async function handleSubmit() {
     if (isPreview) return
     const vendorResponseFields = visibleVendorResponseFields(rfq)
-    const missing = bids.some((bid) => bid.availability !== 'unavailable' && (!bid.unit_price || !bid.lead_time_days))
+    const pricingIssues = bids.filter((bid) => (
+      !hasPositiveUnitPrice(bid) &&
+      hasPositiveLeadTime(bid)
+    ))
     const missingAlternate = bids.some((bid) => {
       if (!bid.is_alternate || bid.availability === 'unavailable') return false
-      return !bid.alternate_description.trim() || !bid.quoted_quantity.trim() || !bid.quoted_unit.trim() || !bid.unit_price.trim() || !bid.lead_time_days.trim()
+      return !bid.alternate_description.trim() || !bid.quoted_quantity.trim() || !bid.quoted_unit.trim() || !hasPositiveUnitPrice(bid) || !hasPositiveLeadTime(bid)
     })
     if (!vendorName.trim()) {
       setError('Company name is required.')
@@ -1292,10 +1635,12 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
       setError('Responder name is required.')
       return
     }
-    if (missing) {
-      setError('Please fill in unit price and lead time for all available items.')
+    if (pricingIssues.length > 0) {
+      setPricingIssueLineItemIds(new Set(pricingIssues.map((bid) => bid.line_item_id)))
+      setError('Some line items have lead time but no unit price. Add a unit price greater than 0, or clear the lead time to skip quoting that material.')
       return
     }
+    setPricingIssueLineItemIds(new Set())
     if (missingAlternate) {
       setError('For substitutions, add an alternate item, quantity, unit, unit price, and lead time.')
       return
@@ -1305,11 +1650,13 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
     setError('')
     const responses = bids.map((bid) => {
       const item = rfq.line_items.find((entry) => entry.id === bid.line_item_id)!
+      const hasUnitPrice = hasPositiveUnitPrice(bid)
+      const isNoQuote = bid.availability === 'unavailable' || (!bid.is_alternate && !hasUnitPrice && !hasPositiveLeadTime(bid))
       const unitPrice = parseFloat(bid.unit_price) || 0
-      const quotedQuantity = parseFloat(bid.quoted_quantity) || 0
+      const quotedQuantity = parseFloat(bid.quoted_quantity) || item.quantity || 0
       const unitsAvailable = bid.units_available ? parseFloat(bid.units_available) : undefined
       const pricedQuantity = unitsAvailable && unitsAvailable > 0 ? unitsAvailable : quotedQuantity
-      const isAlternate = bid.is_alternate && bid.availability !== 'unavailable'
+      const isAlternate = bid.is_alternate && !isNoQuote
       const calculatedAlternateTotalPrice = calculateQuotedTotalPrice(bid.quoted_quantity, bid.unit_price)
       return {
         line_item_id: bid.line_item_id,
@@ -1320,8 +1667,8 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
         unit_price: unitPrice,
         total_price: isAlternate ? parseFloat(calculatedAlternateTotalPrice) || 0 : unitPrice * pricedQuantity,
         quoted_quantity: quotedQuantity,
-        lead_time_days: parseInt(bid.lead_time_days, 10) || 0,
-        availability: bid.availability,
+        lead_time_days: isNoQuote ? 0 : parseInt(bid.lead_time_days, 10) || 0,
+        availability: isNoQuote ? 'unavailable' as const : bid.availability,
         units_available: unitsAvailable,
         delivery_terms: bid.delivery_terms || undefined,
         substitution_notes: isAlternate ? bid.substitution_notes || undefined : undefined,
@@ -1342,16 +1689,51 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
     }))
 
     try {
-      const result = await submitMagicRFQBidAction(props.token, vendorName, responses, overallNotes, {
-        terms,
-        complianceDeclarations,
-        designerName,
+      const response = await fetch(`/api/magic-rfq/${encodeURIComponent(props.token)}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vendorName,
+          lineItemResponses: responses,
+          notes: overallNotes,
+          meta: {
+            terms,
+            complianceDeclarations,
+            designerName,
+          },
+        }),
       })
+      const result = await response.json() as MagicRFQSubmitResult
       if (!result.success) {
         setError(result.error ?? 'Failed to submit quote.')
         return
       }
+      clearMagicRFQAutosave(autosaveKey)
+      const nextSubmittedAt = result.submittedAt ?? new Date().toISOString()
+      const wasAlreadySubmitted = submitted
+      const nextFirstSubmittedAt = firstSubmittedAt ?? nextSubmittedAt
+      const nextHasSubmittedUpdate = wasAlreadySubmitted || hasSubmittedUpdate
+      const nextSubmittedSignature = makeMagicRFQDraftSignature({
+        vendorName,
+        designerName,
+        overallNotes,
+        terms,
+        complianceCodes,
+        bids,
+      })
+      setFirstSubmittedAt(nextFirstSubmittedAt)
+      setLastSubmittedAt(nextSubmittedAt)
+      setHasSubmittedUpdate(nextHasSubmittedUpdate)
+      setLastSubmittedSignature(nextSubmittedSignature)
+      writeMagicRFQSubmissionStatus(submissionStatusKey, {
+        version: MAGIC_RFQ_AUTOSAVE_VERSION,
+        firstSubmittedAt: nextFirstSubmittedAt,
+        lastSubmittedAt: nextSubmittedAt,
+        hasSubmittedUpdate: nextHasSubmittedUpdate,
+        lastSubmittedSignature: nextSubmittedSignature,
+      })
       setSubmitted(true)
+      setSubmitSuccessVisible(true)
     } finally {
       setSubmitting(false)
     }
@@ -1385,8 +1767,21 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
     setSendingMessage(false)
   }
 
+  const firstSubmittedLabel = formatSubmittedDateTime(firstSubmittedAt)
+  const lastSubmittedLabel = formatSubmittedDateTime(lastSubmittedAt)
+  const hasChangesSinceSubmit = !submitted || currentDraftSignature !== lastSubmittedSignature
+  const updateDisabledUntilChanged = submitted && !hasChangesSinceSubmit && !submitSuccessVisible
+
   return (
       <div className="mx-auto max-w-[96rem] px-4 py-10 lg:px-8">
+      <style>{`
+        @keyframes magic-rfq-check-fade {
+          0% { opacity: 0; transform: scale(0.82); }
+          18% { opacity: 1; transform: scale(1); }
+          72% { opacity: 1; transform: scale(1); }
+          100% { opacity: 0; transform: scale(0.96); }
+        }
+      `}</style>
       <div className="mb-6 rounded-2xl border bg-white p-6 shadow-sm" style={{ borderColor: '#e2d9cf' }}>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -1516,7 +1911,11 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
           className="mb-6 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 outline-none"
         >
           <p className="font-semibold">Quote submitted successfully.</p>
-          <p className="mt-1">You can continue editing and resubmit from this same link until the RFQ deadline.</p>
+          <div className="mt-1 space-y-0.5">
+            {firstSubmittedLabel ? <p>Submitted {firstSubmittedLabel}.</p> : null}
+            {hasSubmittedUpdate && lastSubmittedLabel ? <p>Updated {lastSubmittedLabel}.</p> : null}
+            <p>You can continue editing and resubmit from this same link until the RFQ deadline.</p>
+          </div>
         </div>
       ) : null}
 
@@ -1572,7 +1971,13 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
       )}
 
       <div className="space-y-4">
-        <LineItemsWorkbook rfq={rfq} bids={bids} updateBid={updateBid} uploadFolder={`magic-rfq/${rfq.id}/${vendorEmail || 'vendor'}`} />
+        <LineItemsWorkbook
+          rfq={rfq}
+          bids={bids}
+          updateBid={updateBid}
+          uploadFolder={`magic-rfq/${rfq.id}/${vendorEmail || 'vendor'}`}
+          pricingIssueLineItemIds={pricingIssueLineItemIds}
+        />
       </div>
 
       <div className="mt-5 rounded-2xl border bg-white p-6 shadow-sm" style={{ borderColor: '#e2d9cf' }}>
@@ -1657,11 +2062,27 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
         <button
           type="button"
           onClick={handleSubmit}
-          disabled={submitting || isPreview}
-          className="rounded-md px-5 py-2 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-          style={{ background: '#1e3a2f' }}
+          disabled={submitting || submitSuccessVisible || updateDisabledUntilChanged || isPreview}
+          title={updateDisabledUntilChanged ? 'Make a change before updating this quote.' : undefined}
+          className="inline-flex items-center gap-2 rounded-md px-5 py-2 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+          style={{ background: submitSuccessVisible ? '#2d6a4f' : updateDisabledUntilChanged ? '#8a9e96' : '#1e3a2f' }}
         >
-          {isPreview ? 'Preview Only' : submitting ? 'Submitting…' : submitted ? 'Update Quote' : 'Submit Quote'}
+          {submitting ? (
+            <span
+              aria-hidden="true"
+              className="h-4 w-4 animate-spin rounded-full border-2 border-white/35 border-t-white"
+            />
+          ) : null}
+          {submitSuccessVisible ? (
+            <span
+              aria-hidden="true"
+              className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-white text-[11px] font-bold"
+              style={{ animation: 'magic-rfq-check-fade 1200ms ease-out forwards', color: '#2d6a4f' }}
+            >
+              ✓
+            </span>
+          ) : null}
+          {isPreview ? 'Preview Only' : submitting ? 'Submitting…' : submitSuccessVisible ? 'Submitted' : submitted ? 'Update Quote' : 'Submit Quote'}
         </button>
       </div>
     </div>

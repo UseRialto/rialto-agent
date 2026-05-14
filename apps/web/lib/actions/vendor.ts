@@ -165,7 +165,6 @@ export async function submitMagicRFQBidAction(
       revalidatePath(`/contractor/projects/${rfq.project_id}`)
       revalidatePath(`/contractor/projects/${rfq.project_id}/rfqs/${rfq.id}`)
     }
-    revalidatePath(`/vendor/magic-rfq/${token}`)
     return { success: true }
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Failed to submit quote.' }
