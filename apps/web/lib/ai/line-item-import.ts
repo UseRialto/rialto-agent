@@ -2,11 +2,9 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { z } from 'zod'
 import {
-  BUILT_IN_LINE_ITEM_FIELD_BANK,
-  isCoreLineItemFieldLike,
-  isCoreVendorResponseFieldLike,
   makeFieldDefinition,
   normalizeFieldKey,
+  type CustomLineItemFieldDefinition,
 } from '@/lib/contractor-customization'
 import type { RequestType } from '@/lib/types/procurement'
 import type { ProcurementLineItemAttribute } from '@/lib/types/procurement'
@@ -30,6 +28,15 @@ export interface ImportWarning {
   message: string
 }
 
+type ImportColumnRole = { key: string; label: string; role: 'item' | 'quantity' | 'unit' | 'custom'; sourceIndex: number }
+type SourceColumnRole = 'item' | 'quantity' | 'unit' | 'custom' | 'ignore'
+type SourceColumnDecision = {
+  sourceIndex: number
+  role: SourceColumnRole
+  itemValueKind?: 'sku' | 'description'
+  label?: string
+}
+
 export interface ImportLineItemsResult {
   items: ImportedLineItem[]
   metadata: {
@@ -37,6 +44,9 @@ export interface ImportLineItemsResult {
     confidence: number
     warnings: ImportWarning[]
     skippedRows: number
+    importedColumns?: CustomLineItemFieldDefinition[]
+    columnRoles?: ImportColumnRole[]
+    columnRoleSource?: 'ai' | 'deterministic'
   }
 }
 
@@ -70,6 +80,8 @@ type ParsedAttempt = {
   warnings: ImportWarning[]
   skippedRows: number
   confidence: number
+  importedColumns?: CustomLineItemFieldDefinition[]
+  columnRoles?: ImportColumnRole[]
 }
 
 const importedItemSchema = z.object({
@@ -87,6 +99,19 @@ const importedItemSchema = z.object({
 
 const importResponseSchema = z.object({
   items: z.array(importedItemSchema),
+  warnings: z.array(z.union([
+    z.string(),
+    z.object({ row: z.number().optional(), message: z.string() }),
+  ])).optional().default([]),
+})
+
+const columnRoleResponseSchema = z.object({
+  columns: z.array(z.object({
+    sourceIndex: z.number().int().nonnegative(),
+    role: z.enum(['item', 'quantity', 'unit', 'custom', 'ignore']),
+    itemValueKind: z.string().optional(),
+    label: z.string().optional(),
+  })),
   warnings: z.array(z.union([
     z.string(),
     z.object({ row: z.number().optional(), message: z.string() }),
@@ -111,10 +136,10 @@ function ensureLocalEnvLoaded() {
   } catch {}
 }
 
-const UNIT_CELL_PATTERN = /^(?:ea|each|pcs?|pieces?|sf|sq\.?\s*ft|sqft|ft2|lf|lft|lin\.?\s*ft|linear\s*ft|ft|cy|cu\.?\s*yd|cubic\s*yd|yd3|tons?|tn|tonnes?|bf|sheets?|lbs?|lb|pounds?)$/i
+const UNIT_CELL_PATTERN = /^(?:ea|each|pcs?|pieces?|sf|sq\.?\s*ft|sqft|ft2|sy|sq\.?\s*yd|sqyd|yd2|lf|lft|lin\.?\s*ft|linear\s*ft|ft|cy|cu\.?\s*yd|cubic\s*yd|yd3|tons?|tn|tonnes?|bf|sheets?|lbs?|lb|pounds?)$/i
 
 const FIELD_ALIASES = {
-  sku: ['sku', 'item no', 'item #', 'item number', 'part', 'part no', 'part number', 'code', 'product code', 'material code'],
+  sku: ['sku', 'item code', 'item no', 'item #', 'item number', 'part', 'part no', 'part number', 'product code', 'material code'],
   description: ['description', 'desc', 'material', 'item', 'product', 'product type', 'scope', 'name', 'material description'],
   quantity: ['qty', 'quantity', 'amount', 'count', 'takeoff', 'take off', 'qnty', 'order qty', 'required qty'],
   unit: ['u/m', 'uom', 'unit', 'unit of measure', 'measure', 'units'],
@@ -283,35 +308,33 @@ function rowLooksLikeLineItemData(row: string[]) {
   return hasDescription && (hasCombinedQuantityUnit || hasAdjacentQuantityUnit)
 }
 
-function mapHeaderToAttribute(header: string, order: number): ProcurementLineItemAttribute | null {
-  const label = header.replace(/[_/-]+/g, ' ').replace(/\s+/g, ' ').trim()
-  if (!label) return null
-  if (isCoreLineItemFieldLike(label) || isCoreVendorResponseFieldLike(label)) return null
+function importedFieldFromHeader(header: string, sourceIndex: number, order: number, seenKeys: Set<string>): CustomLineItemFieldDefinition | null {
+  const label = header.replace(/[_/-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60)
+  if (!label || /^(#|no\.?)$/i.test(label)) return null
+  if (toNumber(label) !== undefined || isUnitCell(label)) return null
 
-  const key = normalizeFieldKey(label)
-  const bank = BUILT_IN_LINE_ITEM_FIELD_BANK.find((entry) => {
-    const entryKey = normalizeFieldKey(entry.key)
-    const entryLabel = normalizeFieldKey(entry.label)
-    return key === entryKey || key.includes(entryKey) || key.includes(entryLabel) || entryLabel.includes(key)
-  })
-  const field = makeFieldDefinition(bank?.label ?? label, order, 'spreadsheet', {
-    key: bank?.key ?? key,
-    group: bank?.group ?? 'From uploaded file',
-  })
-
-  return {
-    key: field.key,
-    label: field.label,
-    value: '',
-    group: field.group,
-    helperText: field.helperText,
-    inputType: field.inputType,
-    required: field.required,
-    visible: field.visible,
-    options: field.options,
-    source: field.source,
-    order: field.order,
+  const baseKey = `imported_${normalizeFieldKey(label) || `column_${sourceIndex + 1}`}`
+  let key = baseKey
+  let suffix = 2
+  while (seenKeys.has(key)) {
+    key = `${baseKey}_${suffix}`
+    suffix += 1
   }
+  seenKeys.add(key)
+
+  return makeFieldDefinition(label, order, 'spreadsheet', {
+    key,
+    label,
+    group: 'From uploaded file',
+    inputType: 'text',
+    visible: true,
+    required: false,
+    options: [],
+  })
+}
+
+function importedFieldFromLabel(label: string, sourceIndex: number, order: number, seenKeys: Set<string>) {
+  return importedFieldFromHeader(label, sourceIndex, order, seenKeys)
 }
 
 function findColumns(headers: string[], aliases: readonly string[]) {
@@ -319,6 +342,123 @@ function findColumns(headers: string[], aliases: readonly string[]) {
     .map((header, index) => ({ header, index }))
     .filter(({ header }) => aliasMatches(header, aliases))
     .map(({ index }) => index)
+}
+
+function findExplicitDescriptionColumns(headers: string[]) {
+  return headers
+    .map((header, index) => ({ header: normalizeHeader(header), index }))
+    .filter(({ header }) => /\bdesc(?:ription)?\b/.test(header))
+    .map(({ index }) => index)
+}
+
+function chooseDescriptionColumns(headers: string[], skuColumns: number[]) {
+  const explicitDescriptionColumns = findExplicitDescriptionColumns(headers)
+  const candidates = (explicitDescriptionColumns.length > 0 ? explicitDescriptionColumns : findColumns(headers, FIELD_ALIASES.description))
+    .filter((index) => !skuColumns.includes(index))
+  const nonScopeCandidates = candidates.filter((index) => normalizeHeader(headers[index]) !== 'scope')
+  return nonScopeCandidates.length > 0 ? nonScopeCandidates : candidates
+}
+
+function itemValueKindForHeader(header: string): 'sku' | 'description' {
+  const normalized = normalizeHeader(header)
+  if (/\b(?:sku|part|product code|material code|item no|item number)\b/.test(normalized)) return 'sku'
+  return 'description'
+}
+
+function columnDecisionsFromDeterministicRules(headers: string[]) {
+  const allSkuCols = findColumns(headers, FIELD_ALIASES.sku)
+  const itemCodeCols = headers
+    .map((header, index) => ({ header: normalizeHeader(header), index }))
+    .filter(({ header }) => header === 'item code')
+    .map(({ index }) => index)
+  const explicitDescCols = findExplicitDescriptionColumns(headers)
+  const skuCols = itemCodeCols.length > 0 && explicitDescCols.length > 0
+    ? allSkuCols.filter((index) => !itemCodeCols.includes(index))
+    : allSkuCols
+  const descCols = chooseDescriptionColumns(headers, skuCols)
+  const qtyCols = findColumns(headers, FIELD_ALIASES.quantity)
+  const unitCols = findColumns(headers, FIELD_ALIASES.unit)
+  return {
+    skuCols,
+    descCols,
+    qtyCols,
+    unitCols,
+    customCols: [] as number[],
+    ignoredCols: [] as number[],
+  }
+}
+
+function columnDecisionsFromAi(headers: string[], decisions: SourceColumnDecision[]) {
+  const byIndex = new Map<number, SourceColumnDecision>()
+  decisions.forEach((decision) => {
+    if (decision.sourceIndex >= 0 && decision.sourceIndex < headers.length && !byIndex.has(decision.sourceIndex)) {
+      byIndex.set(decision.sourceIndex, decision)
+    }
+  })
+
+  const itemDecisions = [...byIndex.values()].filter((decision) => decision.role === 'item')
+  const skuCols = itemDecisions
+    .filter((decision) => (decision.itemValueKind ?? itemValueKindForHeader(headers[decision.sourceIndex])) === 'sku')
+    .map((decision) => decision.sourceIndex)
+  const descCols = itemDecisions
+    .filter((decision) => (decision.itemValueKind ?? itemValueKindForHeader(headers[decision.sourceIndex])) === 'description')
+    .map((decision) => decision.sourceIndex)
+  const qtyCols = [...byIndex.values()].filter((decision) => decision.role === 'quantity').map((decision) => decision.sourceIndex)
+  const unitCols = [...byIndex.values()].filter((decision) => decision.role === 'unit').map((decision) => decision.sourceIndex)
+  const customCols = [...byIndex.values()].filter((decision) => decision.role === 'custom').map((decision) => decision.sourceIndex)
+  const ignoredCols = [...byIndex.values()].filter((decision) => decision.role === 'ignore').map((decision) => decision.sourceIndex)
+
+  return { skuCols, descCols, qtyCols, unitCols, customCols, ignoredCols }
+}
+
+function strongSkuHeader(header: string) {
+  return /^(?:sku|product code|material code|part|part no|part number)$/.test(normalizeHeader(header))
+}
+
+function applyColumnDecisionSafetyRails(headers: string[], decisions: SourceColumnDecision[]) {
+  const next = new Map<number, SourceColumnDecision>()
+  decisions.forEach((decision) => next.set(decision.sourceIndex, { ...decision }))
+
+  const explicitDescriptionColumns = findExplicitDescriptionColumns(headers)
+  const itemCodeColumns = headers
+    .map((header, index) => ({ header: normalizeHeader(header), index }))
+    .filter(({ header }) => header === 'item code')
+    .map(({ index }) => index)
+
+  if (explicitDescriptionColumns.length > 0) {
+    explicitDescriptionColumns.forEach((sourceIndex) => {
+      const existing = next.get(sourceIndex)
+      next.set(sourceIndex, {
+        sourceIndex,
+        label: existing?.label,
+        role: 'item',
+        itemValueKind: 'description',
+      })
+    })
+  }
+
+  itemCodeColumns.forEach((sourceIndex) => {
+    if (explicitDescriptionColumns.length === 0) return
+    const existing = next.get(sourceIndex)
+    next.set(sourceIndex, {
+      sourceIndex,
+      label: existing?.label,
+      role: 'custom',
+    })
+  })
+
+  headers.forEach((header, sourceIndex) => {
+    if (!strongSkuHeader(header)) return
+    const existing = next.get(sourceIndex)
+    next.set(sourceIndex, {
+      sourceIndex,
+      label: existing?.label,
+      role: 'item',
+      itemValueKind: 'sku',
+    })
+  })
+
+  return [...next.values()].sort((a, b) => a.sourceIndex - b.sourceIndex)
 }
 
 function scoreHeader(headers: string[]) {
@@ -405,7 +545,7 @@ function toNumber(value: unknown): number | undefined {
 function parseQuantityUnit(value: unknown) {
   const text = compactCell(value, 120)
   if (!text) return { quantity: undefined, unit: '' }
-  const match = text.match(/([0-9][0-9,\s]*(?:\.[0-9]+)?)\s*(tons?|tn|tonnes?|ea|each|pcs?|pieces?|sf|sq\.?\s*ft|sqft|ft2|lf|lin\.?\s*ft|linear\s*ft|cy|cu\.?\s*yd|cubic\s*yd|yd3|bf|sheets?|lbs?|pounds?)\b/i)
+  const match = text.match(/([0-9][0-9,\s]*(?:\.[0-9]+)?)\s*(tons?|tn|tonnes?|ea|each|pcs?|pieces?|sf|sq\.?\s*ft|sqft|ft2|sy|sq\.?\s*yd|sqyd|yd2|lf|lin\.?\s*ft|linear\s*ft|cy|cu\.?\s*yd|cubic\s*yd|yd3|bf|sheets?|lbs?|pounds?)\b/i)
   if (!match) return { quantity: toNumber(text), unit: '' }
   return {
     quantity: toNumber(match[1]),
@@ -429,6 +569,11 @@ function normalizeUnit(unit: string, item: Pick<ImportedLineItem, 'sku' | 'descr
     'sq ft': 'sf',
     'sq. ft': 'sf',
     ft2: 'sf',
+    sy: 'sy',
+    sqyd: 'sy',
+    'sq yd': 'sy',
+    'sq. yd': 'sy',
+    yd2: 'sy',
     lf: 'lf',
     lft: 'lf',
     'lin ft': 'lf',
@@ -462,6 +607,37 @@ function normalizeUnit(unit: string, item: Pick<ImportedLineItem, 'sku' | 'descr
   if (/(lumber|2x|board foot|glulam)/.test(text)) return 'bf'
   if (/(plywood|osb|drywall|gypsum|sheet)/.test(text)) return 'sheets'
   return raw || 'ea'
+}
+
+function rowHasPositiveQuantity(row: string[], quantityColumns: number[]) {
+  const quantityText = joinCells(row, quantityColumns)
+  const quantityUnit = parseQuantityUnit(quantityText)
+  return (quantityUnit.quantity ?? toNumber(quantityText) ?? 0) > 0
+}
+
+function sectionHeaderFromRow(row: string[], quantityColumns: number[], unitColumns: number[]) {
+  if (rowHasPositiveQuantity(row, quantityColumns)) return ''
+  if (row.some((cell, index) => unitColumns.includes(index) && isUnitCell(cell))) return ''
+
+  const nonEmpty = row
+    .map((cell, index) => ({ index, value: compactCell(cell, 160) }))
+    .filter(({ value }) => value)
+  if (nonEmpty.length === 0 || nonEmpty.length > 2) return ''
+
+  const text = nonEmpty.map(({ value }) => value).join(' ').replace(/\s+/g, ' ').trim()
+  if (!/[A-Za-z]/.test(text) || text.length < 4) return ''
+  if (/^(?:total|subtotal|grand total|page|date|estimator|project|status|schedule|market sector|signature|prepared by)\b/i.test(text)) return ''
+  if (/\b(?:am|pm)\b/i.test(text) || /^\d+\s*\/\s*\d+$/.test(text)) return ''
+
+  const firstColumn = nonEmpty[0]?.index ?? 0
+  const csiSection = /^\d{2}\s+\d{2}\s+\d{2}(?:\.\d+)?\s*[-–—:]\s*\S/.test(text)
+  if (csiSection) return text
+  if (firstColumn <= 1 && nonEmpty.length === 1 && textValueScore(text) > 16 && !hasNumericCell(text)) return text
+  return ''
+}
+
+function sourceColumnHasValues(rows: string[][], columnIndex: number) {
+  return rows.some((row) => Boolean(compactCell(row[columnIndex])))
 }
 
 function sanitizeItems(rawItems: RawItem[], category?: string): ParsedAttempt {
@@ -534,7 +710,7 @@ function buildStructuredHint(text: string) {
   }
 }
 
-function deterministicTableImport(text: string, category?: string): ParsedAttempt {
+function deterministicTableImport(text: string, category?: string, aiColumnDecisions?: SourceColumnDecision[]): ParsedAttempt {
   const { rows } = tableRowsFromText(text)
   if (rows.length < 2) return { items: [], warnings: [], skippedRows: 0, confidence: 0 }
 
@@ -543,53 +719,119 @@ function deterministicTableImport(text: string, category?: string): ParsedAttemp
 
   const headers = rows[headerIndex]
   const dataRows = rows.slice(headerIndex + 1)
-  const budgetCols = findColumns(headers, FIELD_ALIASES.budget)
-  const leadCols = findColumns(headers, FIELD_ALIASES.leadTime)
-  const skuCols = findColumns(headers, FIELD_ALIASES.sku)
-  const descCols = findColumns(headers, FIELD_ALIASES.description)
-    .filter((index) => !skuCols.includes(index))
-  const qtyCols = findColumns(headers, FIELD_ALIASES.quantity)
-    .filter((index) => !budgetCols.includes(index) && !leadCols.includes(index))
-  const unitCols = findColumns(headers, FIELD_ALIASES.unit)
-    .filter((index) => !budgetCols.includes(index) && !leadCols.includes(index))
-  const certCols = findColumns(headers, FIELD_ALIASES.certifications)
-  const specCols = findColumns(headers, FIELD_ALIASES.specs)
-    .filter((index) => !certCols.includes(index))
-  const constraintsCols = findColumns(headers, FIELD_ALIASES.constraints)
-  const notesCols = findColumns(headers, FIELD_ALIASES.notes)
-  const attributeColumns = headers
-    .map((header, index) => ({ index, attribute: mapHeaderToAttribute(header, index) }))
-    .filter((entry): entry is { index: number; attribute: ProcurementLineItemAttribute } => Boolean(entry.attribute))
+  const columnSelection = aiColumnDecisions?.length
+    ? columnDecisionsFromAi(headers, aiColumnDecisions)
+    : columnDecisionsFromDeterministicRules(headers)
+  const { skuCols, descCols, qtyCols, unitCols, customCols, ignoredCols } = columnSelection
+  const explicitCustomColumns = new Set(customCols)
+  const ignoredColumns = new Set(ignoredCols)
+  const itemCols = skuCols.length > 0 ? skuCols : descCols
+  const descriptionContextColumns = new Set(skuCols.length > 0 ? descCols : [])
+  const consumedColumns = new Set([...itemCols, ...qtyCols, ...unitCols, ...ignoredCols])
+  const seenImportedKeys = new Set<string>()
+  const rowClassifications = dataRows.map((row) => {
+    const isMaterial = rowHasPositiveQuantity(row, qtyCols) && Boolean(joinCells(row, [...skuCols, ...descCols]))
+    return {
+      row,
+      isMaterial,
+      section: sectionHeaderFromRow(row, qtyCols, unitCols),
+    }
+  })
+  const materialRows = rowClassifications.filter((entry) => entry.isMaterial).map((entry) => entry.row)
+  const inferredSections = rowClassifications.some((entry) => Boolean(entry.section))
+  const scopeLabel = headers.some((header) => normalizeHeader(header) === 'scope') ? 'Section' : 'Scope'
+  const scopeField = inferredSections
+    ? importedFieldFromLabel(scopeLabel, -1, 0, seenImportedKeys)
+    : null
+  const importedColumns = headers
+    .map((header, index) => ({
+      index,
+      field: consumedColumns.has(index)
+        ? null
+        : (descriptionContextColumns.has(index) || explicitCustomColumns.size === 0 || explicitCustomColumns.has(index) || !aiColumnDecisions?.length) &&
+          !ignoredColumns.has(index) &&
+          sourceColumnHasValues(materialRows, index)
+          ? importedFieldFromHeader(header, index, index + (scopeField ? 1 : 0), seenImportedKeys)
+          : null,
+    }))
+    .filter((entry): entry is { index: number; field: CustomLineItemFieldDefinition } => Boolean(entry.field))
+  const columnRoles: ImportColumnRole[] = headers.flatMap((header, index): ImportColumnRole[] => {
+    const field = importedColumns.find((entry) => entry.index === index)?.field
+    const label = header.replace(/[_/-]+/g, ' ').replace(/\s+/g, ' ').trim()
+    if (!label) return []
+    if (itemCols.includes(index)) return [{ key: skuCols.length > 0 ? 'sku' : 'description', label, role: 'item' as const, sourceIndex: index }]
+    if (qtyCols.includes(index)) return [{ key: 'quantity', label, role: 'quantity' as const, sourceIndex: index }]
+    if (unitCols.includes(index)) return [{ key: 'unit', label, role: 'unit' as const, sourceIndex: index }]
+    if (field) return [{ key: field.key, label: field.label, role: 'custom' as const, sourceIndex: index }]
+    return []
+  })
+  if (scopeField) {
+    columnRoles.unshift({ key: scopeField.key, label: scopeField.label, role: 'custom', sourceIndex: -1 })
+  }
 
   if (descCols.length === 0 && skuCols.length === 0) return { items: [], warnings: [], skippedRows: 0, confidence: 0 }
   if (qtyCols.length === 0 && !headers.some((header) => /qty|quantity|takeoff|amount/i.test(header))) {
     return { items: [], warnings: [], skippedRows: 0, confidence: 0 }
   }
 
-  const rawItems = dataRows.map((row, index): RawItem => {
+  const rawItems: RawItem[] = []
+  let activeSection = ''
+  rowClassifications.forEach(({ row, isMaterial, section }, index) => {
+    if (section) {
+      activeSection = section
+      return
+    }
+    if (!isMaterial) return
+
     const quantityText = joinCells(row, qtyCols)
     const quantityUnit = parseQuantityUnit(quantityText)
     const unitText = joinCells(row, unitCols) || quantityUnit.unit
+    const attributes: ProcurementLineItemAttribute[] = []
+    if (scopeField && activeSection) {
+      attributes.push({
+        key: scopeField.key,
+        label: scopeField.label,
+        value: activeSection,
+        group: scopeField.group,
+        helperText: scopeField.helperText,
+        inputType: scopeField.inputType,
+        required: scopeField.required,
+        visible: scopeField.visible,
+        options: scopeField.options,
+        source: scopeField.source,
+        order: scopeField.order,
+      })
+    }
+    attributes.push(...importedColumns
+      .map(({ index: columnIndex, field }) => ({
+        key: field.key,
+        label: field.label,
+        value: compactCell(row[columnIndex]),
+        group: field.group,
+        helperText: field.helperText,
+        inputType: field.inputType,
+        required: field.required,
+        visible: field.visible,
+        options: field.options,
+        source: field.source,
+        order: field.order,
+      }))
+      .filter((attribute) => attribute.value))
 
-    return {
+    rawItems.push({
       sourceRow: headerIndex + index + 2,
       sku: joinCells(row, skuCols),
       description: joinCells(row, descCols),
       quantity: quantityText,
       unit: unitText,
-      attributes: attributeColumns
-        .map(({ index: columnIndex, attribute }) => ({
-          ...attribute,
-          value: compactCell(row[columnIndex]),
-        }))
-        .filter((attribute) => attribute.value),
-      specs: joinCells(row, specCols),
-      constraints: joinCells(row, constraintsCols),
-      certifications: joinCells(row, certCols),
-      notes: joinCells(row, notesCols),
-      contractor_budget: joinCells(row, budgetCols) || undefined,
-      suggested_lead_time_days: joinCells(row, leadCols) || undefined,
-    }
+      attributes,
+      specs: '',
+      constraints: '',
+      certifications: [],
+      notes: '',
+      contractor_budget: undefined,
+      suggested_lead_time_days: undefined,
+    })
   })
 
   const result = sanitizeItems(rawItems, category)
@@ -598,15 +840,16 @@ function deterministicTableImport(text: string, category?: string): ParsedAttemp
     descCols,
     qtyCols,
     unitCols,
-    specCols,
-    constraintsCols,
-    certCols,
-    notesCols,
-    budgetCols,
-    leadCols,
+    importedColumns.map(({ index }) => index),
+    scopeField ? [-1] : [],
   ].filter((cols) => cols.length > 0).length
   return {
     ...result,
+    importedColumns: [
+      ...(scopeField ? [scopeField] : []),
+      ...importedColumns.map(({ field }) => field),
+    ],
+    columnRoles,
     confidence: result.items.length > 0 ? Math.min(0.99, 0.55 + mappedFieldCount * 0.05) : 0,
   }
 }
@@ -731,7 +974,7 @@ function deterministicHeaderlessTableImport(text: string, category?: string): Pa
 }
 
 function deterministicQuantityLineImport(text: string, category?: string): ParsedAttempt {
-  const unitPattern = '(?:ea|each|pcs?|pieces?|sf|sq\\.?\\s*ft|sqft|lf|lin\\.?\\s*ft|linear\\s*ft|cy|cu\\.?\\s*yd|cubic\\s*yd|tons?|tn|tonnes?|bf|sheets?)'
+  const unitPattern = '(?:ea|each|pcs?|pieces?|sf|sq\\.?\\s*ft|sqft|sy|sq\\.?\\s*yd|sqyd|lf|lin\\.?\\s*ft|linear\\s*ft|cy|cu\\.?\\s*yd|cubic\\s*yd|tons?|tn|tonnes?|bf|sheets?)'
   const linePattern = new RegExp(`^(.+?)\\s+([0-9][0-9,]*(?:\\.\\d+)?)\\s+(${unitPattern})\\b\\s*(.*)$`, 'i')
   const rawItems = text
     .split('\n')
@@ -761,6 +1004,103 @@ function warningObjects(warnings: z.infer<typeof importResponseSchema>['warnings
       ? { message: warning }
       : { row: warning.row, message: warning.message }
   ))
+}
+
+async function aiColumnRoleDecisions(input: ImportInput, normalizedText: string): Promise<{ decisions: SourceColumnDecision[]; warnings: ImportWarning[] } | null> {
+  ensureLocalEnvLoaded()
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey || process.env.DISABLE_AI_COLUMN_ROLES === '1') return null
+
+  const { rows, delimiter } = tableRowsFromText(normalizedText)
+  const headerIndex = detectHeaderRow(rows)
+  if (headerIndex < 0) return null
+
+  const headers = rows[headerIndex]
+  const sampleRows = rows
+    .slice(headerIndex + 1, headerIndex + 17)
+    .filter((row) => row.some((cell) => compactCell(cell)))
+    .map((row, offset) => ({
+      sourceRow: headerIndex + offset + 2,
+      cells: headers.map((header, index) => ({
+        sourceIndex: index,
+        header: compactCell(header, 80),
+        value: compactCell(row[index], 160),
+      })).filter((cell) => cell.header || cell.value),
+    }))
+
+  const prompt = [
+    `Filename: ${input.filename}`,
+    `Request type: ${input.requestType ?? 'rfq'}`,
+    `Project: ${input.projectName || 'unknown'}`,
+    `Category: ${input.category || 'unknown'}`,
+    `Source kind: ${input.sourceKind ?? 'text'}`,
+    `Delimiter: ${delimiter === '\t' ? 'tab' : delimiter}`,
+    '',
+    'Detected source headers:',
+    JSON.stringify(headers.map((header, sourceIndex) => ({ sourceIndex, header })), null, 2),
+    '',
+    'Sample rows below the header:',
+    JSON.stringify(sampleRows, null, 2),
+  ].join('\n')
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    signal: AbortSignal.timeout(30000),
+    headers: { authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: process.env.OPENAI_COLUMN_ROLE_MODEL || process.env.OPENAI_MODEL || 'gpt-5-mini',
+      response_format: { type: 'json_object' },
+      max_completion_tokens: 3000,
+      reasoning_effort: 'low',
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You classify columns in construction RFQ material import tables.',
+            'Return strict JSON: { "columns": [{ "sourceIndex": number, "role": "item"|"quantity"|"unit"|"custom"|"ignore", "itemValueKind": "sku"|"description", "label": string }], "warnings": [] }.',
+            'Choose which source column should populate Rialto\'s required Item Description/SKU field.',
+            'Use role item with itemValueKind description for human-readable material descriptions.',
+            'Use role item with itemValueKind sku only for true catalog identifiers, SKUs, part numbers, or product codes that should be the primary required item cell.',
+            'If a file has Item Code plus Item Description, usually make Item Description the item and Item Code custom.',
+            'Make quantity the column containing requested quantities, including combined values like "25 tons".',
+            'Make unit the explicit UOM/unit column only; if units are combined with quantity, leave unit absent.',
+            'Make source columns like Scope, Section, Variant, Per, Notes, Spec, Budget, Lead Time, Manufacturer, Grade, Compliance custom unless they are the required item/quantity/unit.',
+            'Use ignore for blank spacer columns, formatting-only columns, price columns with no values, metadata, totals, signatures, and footer-only columns.',
+            'Classify every meaningful source column exactly once.',
+          ].join(' '),
+        },
+        { role: 'user', content: prompt },
+      ],
+    }),
+  })
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    throw new Error(`OpenAI column classification failed with ${response.status}. ${detail.slice(0, 180)}`)
+  }
+  const json = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
+  const choice = json.choices?.[0] as { finish_reason?: string; message?: { content?: string | Array<{ text?: string; type?: string }> } } | undefined
+  const rawContent = choice?.message?.content
+  const content = (typeof rawContent === 'string'
+    ? rawContent
+    : Array.isArray(rawContent)
+      ? rawContent.map((part) => part.text ?? '').join('')
+      : '').trim()
+  if (!content) {
+    throw new Error(`OpenAI column classification returned an empty response${choice?.finish_reason ? ` (${choice.finish_reason})` : ''}.`)
+  }
+  const parsed = columnRoleResponseSchema.parse(parseJsonResponse<unknown>(content))
+  const validDecisions = parsed.columns
+    .filter((decision) => decision.sourceIndex < headers.length)
+    .map((decision): SourceColumnDecision => ({
+      ...decision,
+      itemValueKind: decision.itemValueKind === 'sku' || decision.itemValueKind === 'description'
+        ? decision.itemValueKind
+        : undefined,
+    }))
+  return {
+    decisions: applyColumnDecisionSafetyRails(headers, validDecisions),
+    warnings: warningObjects(parsed.warnings),
+  }
 }
 
 async function aiLineItemImport(input: ImportInput, normalizedText: string): Promise<ParsedAttempt | null> {
@@ -828,15 +1168,31 @@ export async function importLineItems(input: ImportInput): Promise<ImportLineIte
   const normalizedText = normalizeText(input.text)
   if (!normalizedText) throw new Error('Import file is empty.')
 
-  const tableResult = deterministicTableImport(normalizedText, input.category)
+  let aiColumnWarnings: ImportWarning[] = []
+  let aiColumnDecisions: SourceColumnDecision[] | undefined
+  try {
+    const aiColumns = await aiColumnRoleDecisions(input, normalizedText)
+    if (aiColumns?.decisions.length) {
+      aiColumnDecisions = aiColumns.decisions
+      aiColumnWarnings = aiColumns.warnings
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'AI column classification failed.'
+    aiColumnWarnings = [{ message: `${message} Falling back to deterministic column matching.` }]
+  }
+
+  const tableResult = deterministicTableImport(normalizedText, input.category, aiColumnDecisions)
   if (tableResult.items.length > 0 && tableResult.confidence >= 0.7) {
     return {
       items: tableResult.items,
       metadata: {
         parser: 'deterministic-table',
         confidence: tableResult.confidence,
-        warnings: [...(input.extractionWarnings ?? []), ...tableResult.warnings],
+        warnings: [...(input.extractionWarnings ?? []), ...aiColumnWarnings, ...tableResult.warnings],
         skippedRows: tableResult.skippedRows,
+        importedColumns: tableResult.importedColumns,
+        columnRoles: tableResult.columnRoles,
+        columnRoleSource: aiColumnDecisions?.length ? 'ai' : 'deterministic',
       },
     }
   }
@@ -848,7 +1204,7 @@ export async function importLineItems(input: ImportInput): Promise<ImportLineIte
       metadata: {
         parser: 'deterministic-headerless-table',
         confidence: headerlessTableResult.confidence,
-        warnings: [...(input.extractionWarnings ?? []), ...headerlessTableResult.warnings],
+        warnings: [...(input.extractionWarnings ?? []), ...aiColumnWarnings, ...headerlessTableResult.warnings],
         skippedRows: headerlessTableResult.skippedRows,
       },
     }
@@ -861,7 +1217,7 @@ export async function importLineItems(input: ImportInput): Promise<ImportLineIte
       metadata: {
         parser: 'deterministic-lines',
         confidence: lineResult.confidence,
-        warnings: [...(input.extractionWarnings ?? []), ...lineResult.warnings],
+        warnings: [...(input.extractionWarnings ?? []), ...aiColumnWarnings, ...lineResult.warnings],
         skippedRows: lineResult.skippedRows,
       },
     }
@@ -875,7 +1231,7 @@ export async function importLineItems(input: ImportInput): Promise<ImportLineIte
         metadata: {
           parser: 'ai-table',
           confidence: aiResult.confidence,
-          warnings: [...(input.extractionWarnings ?? []), ...aiResult.warnings],
+          warnings: [...(input.extractionWarnings ?? []), ...aiColumnWarnings, ...aiResult.warnings],
           skippedRows: aiResult.skippedRows,
         },
       }
@@ -903,10 +1259,14 @@ export async function importLineItems(input: ImportInput): Promise<ImportLineIte
         confidence: bestFallback.confidence,
         warnings: [
           ...(input.extractionWarnings ?? []),
+          ...aiColumnWarnings,
           ...bestFallback.warnings,
           { message: 'Imported with low confidence. Review quantities, units, and specs before publishing.' },
         ],
         skippedRows: bestFallback.skippedRows,
+        importedColumns: bestFallback.importedColumns,
+        columnRoles: bestFallback.columnRoles,
+        columnRoleSource: bestFallback === tableResult && aiColumnDecisions?.length ? 'ai' : 'deterministic',
       },
     }
   }

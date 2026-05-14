@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { GripVertical, Plus, Settings, UploadCloud, X } from 'lucide-react'
+import { FileSpreadsheet, GripVertical, Plus, Settings, Sparkles, UploadCloud, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { SKU_CATALOG, SKU_CATEGORIES, type SKUEntry } from '@/lib/fixtures/sku-catalog'
 import type { ContractorRFQLineItem } from '@/lib/types/contractor'
@@ -61,6 +61,7 @@ const SAMPLE_LINE_ITEM_CSV = [
 ].join('\n')
 const SECTION_HEADING_STYLE = { color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)', fontWeight: 700 } as const
 const CORE_VENDOR_RESPONSE_COLUMNS = ['Unit Price', 'Lead Time']
+const SPREADSHEET_CELL_SELECTOR = '[data-spreadsheet-cell="true"]'
 
 function RemoveFieldButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
@@ -153,6 +154,7 @@ interface Props {
   vendorResponseFields?: CustomLineItemFieldDefinition[]
   availableFieldBank?: ContractorFieldBankEntry[]
   fieldVisibility?: RFQCreationFieldVisibility
+  importedSchemaActive?: boolean
   isCustomizingFields?: boolean
   onToggleCustomizeFields?: () => void
   existingCategories: string[]
@@ -168,7 +170,7 @@ interface Props {
   onTemplateFieldAdd?: (key: string) => void
   onTemplateFieldRemove?: (key: string) => void
   onTemplateFieldMove?: (dragKey: string, targetKey: string, position?: 'before' | 'after') => void
-  onTemplateReplace?: (fields: CustomLineItemFieldDefinition[]) => void
+  onImportedTemplateReplace?: (fields: CustomLineItemFieldDefinition[]) => void
   onTemplateFieldRename?: (key: string, newLabel: string) => void
   onTemplateFieldAddCustom?: () => void
   onVendorResponseFieldAdd?: () => void
@@ -193,6 +195,7 @@ export function StepItems({
   vendorResponseFields = [],
   availableFieldBank = [],
   fieldVisibility = DEFAULT_RFQ_CREATION_FIELD_VISIBILITY,
+  importedSchemaActive = false,
   isCustomizingFields = false,
   onToggleCustomizeFields,
   existingCategories,
@@ -206,7 +209,7 @@ export function StepItems({
   onTemplateFieldAdd,
   onTemplateFieldRemove,
   onTemplateFieldMove,
-  onTemplateReplace,
+  onImportedTemplateReplace,
   onTemplateFieldRename,
   onTemplateFieldAddCustom,
   onVendorResponseFieldAdd,
@@ -214,13 +217,13 @@ export function StepItems({
   onVendorResponseFieldRename,
   onVendorResponseFieldToggleRequired,
   onFieldRemove,
-  onFieldRestore,
   onItemsChange,
 }: Props) {
   const importInputId = useId()
   const [skuDropdowns, setSkuDropdowns] = useState<Record<string, SKUEntry[]>>({})
   const [skuCategoryFilters] = useState<Record<string, string | null>>({})
   const [importError, setImportError] = useState('')
+  const [importSuccess, setImportSuccess] = useState('')
   const [uploadingFiles, setUploadingFiles] = useState(false)
   const [isDraggingImport, setIsDraggingImport] = useState(false)
   const [isHydrated, setIsHydrated] = useState(false)
@@ -240,7 +243,6 @@ export function StepItems({
   const requestLabel = requestType === 'rfp' ? 'RFP' : 'RFQ'
   const isVisible = (field: RFQCreationFieldKey) => fieldVisibility[field] !== false
   const removeField = (field: RFQCreationFieldKey) => onFieldRemove?.(field)
-  const restoreField = (field: RFQCreationFieldKey) => onFieldRestore?.(field)
 
   function toTitleCase(s: string) {
     return s.trim().replace(/\b\w/g, (c) => c.toUpperCase())
@@ -257,13 +259,6 @@ export function StepItems({
     setEditingColKey(null)
     setEditingColValue('')
   }
-  const hiddenMaterialFields = ([
-    { key: 'specifications', label: 'Notes / Specifications' },
-    { key: 'targetBudget', label: 'Target Budget' },
-    { key: 'suggestedLeadTime', label: 'Suggested Lead Time' },
-    { key: 'certifications', label: 'Certifications Required' },
-  ] as const).filter((field) => !isVisible(field.key))
-
   useEffect(() => {
     setIsHydrated(true)
 
@@ -384,47 +379,11 @@ export function StepItems({
     setSkuDropdowns((prev) => ({ ...prev, [key]: [] }))
   }
 
-  async function inferTemplateFromImport(file: File) {
-    const formData = new FormData()
-    formData.append('file', file)
-    formData.append('trade', category)
-    formData.append('preferUploadedColumns', 'true')
-    const response = await fetch('/api/contractor-customization/infer-template', {
-      method: 'POST',
-      body: formData,
-    })
-    const json = await response.json() as {
-      customization?: { lineItemFields?: CustomLineItemFieldDefinition[] }
-      detectedHeaders?: string[]
-      warnings?: string[]
-      error?: string
-    }
-    if (!response.ok) {
-      console.warn('Import template inference failed:', json.error)
-      return { fields: [] as CustomLineItemFieldDefinition[], detectedHeaders: [] as string[], warnings: json.error ? [json.error] : [] }
-    }
-    return {
-      fields: json.customization?.lineItemFields ?? [],
-      detectedHeaders: json.detectedHeaders ?? [],
-      warnings: json.warnings ?? [],
-    }
-  }
-
   async function importFile(file: File) {
     setImportError('')
+    setImportSuccess('')
     try {
       setUploadingFiles(true)
-      const inferredTemplate = await inferTemplateFromImport(file)
-      const importFields = inferredTemplate.fields.length
-        ? inferredTemplate.fields
-        : inferredTemplate.detectedHeaders.length === 0
-          ? []
-          : fieldTemplate
-      if (inferredTemplate.fields.length) {
-        onTemplateReplace?.(inferredTemplate.fields)
-      } else if (inferredTemplate.detectedHeaders.length === 0) {
-        onTemplateReplace?.([])
-      }
       const formData = new FormData()
       formData.append('file', file)
       formData.append('requestType', requestType)
@@ -441,12 +400,16 @@ export function StepItems({
           confidence?: number
           warnings?: Array<{ row?: number; message: string }>
           skippedRows?: number
+          importedColumns?: CustomLineItemFieldDefinition[]
         }
         error?: string
       }
       if (!response.ok || !json.items) {
         throw new Error(json.error ?? 'Failed to import line items.')
       }
+      const hasImportedSchema = Array.isArray(json.metadata?.importedColumns)
+      const importFields = json.metadata?.importedColumns ?? []
+      if (hasImportedSchema) onImportedTemplateReplace?.(importFields)
       const parsed: ItemRow[] = json.items.map((item) => {
         const visibleSku = item.sku || item.description || ''
         const rowForUnit = { sku: item.sku ?? '', description: item.description ?? '' }
@@ -460,7 +423,9 @@ export function StepItems({
           constraints: item.constraints ?? '',
           attributes: importFields.length
             ? fieldsToAttributes(importFields, item.attributes)
-            : buildLineItemAttributes(category, item.attributes),
+            : item.attributes?.length
+              ? item.attributes
+              : buildLineItemAttributes(category, item.attributes),
           certifications: item.certifications ?? [],
           notes: item.notes ?? '',
           contractor_budget: item.contractor_budget,
@@ -470,6 +435,7 @@ export function StepItems({
       if (parsed.length === 0) throw new Error('No usable material line items were found in this file.')
       onItemsChange(parsed)
       setMaterialEntryMode('manual')
+      setImportSuccess(`Imported ${parsed.length} item${parsed.length === 1 ? '' : 's'} from ${file.name}`)
     } catch (error) {
       setImportError(error instanceof Error ? error.message : 'Failed to import file.')
     } finally {
@@ -496,6 +462,7 @@ export function StepItems({
   const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0]
   const spreadsheetAttributes = items[0]?.attributes ?? (fieldTemplate.length ? fieldsToAttributes(fieldTemplate) : buildLineItemAttributes(category))
   const vendorResponseColumns = [...CORE_VENDOR_RESPONSE_COLUMNS, ...vendorResponseFields.map((field) => field.label)]
+  const showStandardMaterialColumns = !importedSchemaActive
   const spreadsheetColumnWidths = [
     40,
     54,
@@ -504,11 +471,11 @@ export function StepItems({
     132,
     ...spreadsheetAttributes.map(() => 184),
     ...(isCustomizingFields ? [128] : []),
-    ...(requestType === 'rfp' && isVisible('specifications') ? [240, 260] : []),
-    ...(isVisible('targetBudget') ? [144] : []),
-    ...(isVisible('suggestedLeadTime') ? [144] : []),
-    ...(isVisible('specifications') ? [300] : []),
-    ...(isVisible('certifications') ? [260] : []),
+    ...(showStandardMaterialColumns && requestType === 'rfp' && isVisible('specifications') ? [240, 260] : []),
+    ...(showStandardMaterialColumns && isVisible('targetBudget') ? [144] : []),
+    ...(showStandardMaterialColumns && isVisible('suggestedLeadTime') ? [144] : []),
+    ...(showStandardMaterialColumns && isVisible('specifications') ? [300] : []),
+    ...(showStandardMaterialColumns && isVisible('certifications') ? [260] : []),
     ...vendorResponseColumns.map(() => 150),
     ...(isCustomizingFields ? [160] : []),
   ]
@@ -535,6 +502,72 @@ export function StepItems({
     const to = source === 'viewport' ? spreadsheetScrollbarRef.current : spreadsheetViewportRef.current
     if (!from || !to || to.scrollLeft === from.scrollLeft) return
     to.scrollLeft = from.scrollLeft
+  }
+
+  function focusSpreadsheetCell(rowIndex: number, colIndex: number) {
+    const viewport = spreadsheetViewportRef.current
+    if (!viewport) return
+    const rowCells = Array.from(viewport.querySelectorAll<HTMLElement>(`${SPREADSHEET_CELL_SELECTOR}[data-row-index="${rowIndex}"]`))
+      .sort((a, b) => Number(a.dataset.colIndex ?? 0) - Number(b.dataset.colIndex ?? 0))
+    if (rowCells.length === 0) return
+
+    const exactCell = rowCells.find((cell) => Number(cell.dataset.colIndex) === colIndex)
+    const fallbackCell = rowCells.reduce<HTMLElement | null>((best, cell) => {
+      if (!best) return cell
+      const cellDistance = Math.abs(Number(cell.dataset.colIndex ?? 0) - colIndex)
+      const bestDistance = Math.abs(Number(best.dataset.colIndex ?? 0) - colIndex)
+      return cellDistance < bestDistance ? cell : best
+    }, null)
+    const target = exactCell ?? fallbackCell
+    if (!target) return
+    target.focus()
+    target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }
+
+  function handleSpreadsheetCellKeyDown(event: React.KeyboardEvent<HTMLElement>) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      const target = event.currentTarget
+      if (target instanceof HTMLInputElement && ['text', 'search', 'url', 'tel', 'email', 'password'].includes(target.type)) {
+        const valueLength = target.value.length
+        const selectionStart = target.selectionStart ?? 0
+        const selectionEnd = target.selectionEnd ?? selectionStart
+        const hasSelection = selectionStart !== selectionEnd
+        const atLeftEdge = selectionStart === 0 && selectionEnd === 0
+        const atRightEdge = selectionStart === valueLength && selectionEnd === valueLength
+        if (hasSelection || (event.key === 'ArrowLeft' && !atLeftEdge) || (event.key === 'ArrowRight' && !atRightEdge)) return
+      }
+    }
+    const keyToDelta: Partial<Record<string, { row: number; col: number }>> = {
+      ArrowUp: { row: -1, col: 0 },
+      ArrowDown: { row: 1, col: 0 },
+      ArrowLeft: { row: 0, col: -1 },
+      ArrowRight: { row: 0, col: 1 },
+      Enter: { row: event.shiftKey ? -1 : 1, col: 0 },
+    }
+    const delta = keyToDelta[event.key]
+    if (!delta) return
+
+    const current = event.currentTarget
+    const currentRow = Number(current.dataset.rowIndex)
+    const currentCol = Number(current.dataset.colIndex)
+    if (!Number.isFinite(currentRow) || !Number.isFinite(currentCol)) return
+
+    const targetRow = Math.max(0, Math.min(items.length - 1, currentRow + delta.row))
+    const targetCol = Math.max(0, currentCol + delta.col)
+    if (targetRow === currentRow && targetCol === currentCol) return
+
+    event.preventDefault()
+    focusSpreadsheetCell(targetRow, targetCol)
+  }
+
+  function spreadsheetCellProps(rowIndex: number, colIndex: number) {
+    return {
+      'data-spreadsheet-cell': 'true',
+      'data-row-index': rowIndex,
+      'data-col-index': colIndex,
+      onKeyDown: handleSpreadsheetCellKeyDown,
+    } as const
   }
 
   return (
@@ -800,37 +833,55 @@ export function StepItems({
               }}
               onDrop={handleImportDrop}
               className={cn(
-                'flex min-h-56 cursor-pointer flex-col items-center justify-center rounded-2xl px-6 py-10 text-center transition-colors',
-                uploadingFiles && 'pointer-events-none opacity-60',
+                'relative flex min-h-56 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl px-6 py-10 text-center transition-colors',
+                uploadingFiles && 'pointer-events-none',
                 isDraggingImport && 'shadow-lg',
               )}
-              style={isDraggingImport
+              style={uploadingFiles
+                ? { background: '#fffaf4', border: '2px solid #fa6b04', color: '#4a6358' }
+                : isDraggingImport
                 ? { background: '#fff5eb', border: '2px dashed #fa6b04', color: '#4a6358' }
                 : { background: '#f5f0eb', border: '2px dashed #d4c7bb', color: '#4a6358' }}
             >
+              {uploadingFiles && (
+                <span
+                  className="pointer-events-none absolute inset-0 opacity-50"
+                  style={{ background: 'linear-gradient(120deg, rgba(250,107,4,0.08), rgba(30,58,47,0.04), rgba(255,255,255,0))' }}
+                />
+              )}
               <span
-                className="mb-4 flex h-16 w-16 shrink-0 items-center justify-center rounded-full"
-                style={{ background: '#ffffff', border: '1px solid #e2d9cf', color: '#fa6b04' }}
+                className={cn(
+                  'relative mb-4 flex h-16 w-16 shrink-0 items-center justify-center rounded-full',
+                  uploadingFiles && 'animate-[rfq-import-icon-pulse_2.2s_ease-in-out_infinite]',
+                )}
+                style={{ background: '#ffffff', border: uploadingFiles ? '1px solid #fa6b04' : '1px solid #e2d9cf', color: '#fa6b04' }}
               >
-                <UploadCloud className="h-8 w-8" aria-hidden="true" />
+                {uploadingFiles ? (
+                  <>
+                    <FileSpreadsheet className="h-8 w-8" aria-hidden="true" />
+                    <Sparkles className="absolute -right-1 -top-1 h-4 w-4" aria-hidden="true" />
+                  </>
+                ) : (
+                  <UploadCloud className="h-8 w-8" aria-hidden="true" />
+                )}
               </span>
-              <span>
+              <span className="relative">
                 <span className="block text-sm font-semibold" style={{ color: '#1e3a2f' }}>
-                  {uploadingFiles ? 'Importing file...' : isDraggingImport ? 'Drop the takeoff file here' : 'Drop or click to import a takeoff file'}
+                  {uploadingFiles ? 'Reading the file and building your material grid' : isDraggingImport ? 'Drop the takeoff file here' : 'Drop or click to import a takeoff file'}
                 </span>
-                <span className="mt-2 block max-w-md text-xs" style={{ color: '#8a9e96' }}>
-                  Upload a CSV, TSV, TXT, PDF, or Excel takeoff with SKU, description, quantity, unit, specs, constraints, notes, target budget, and lead time.
-                </span>
+                {!uploadingFiles && (
+                  <span className="mt-2 block max-w-md text-xs" style={{ color: '#8a9e96' }}>
+                    Upload a CSV, TSV, TXT, PDF, or Excel takeoff with SKU, description, quantity, unit, specs, constraints, notes, target budget, and lead time.
+                  </span>
+                )}
                 {uploadingFiles && (
-                  <span
-                    className="mt-5 block h-2 w-64 max-w-full overflow-hidden rounded-full"
-                    style={{ background: '#e2d9cf' }}
-                    aria-label="Import progress"
-                  >
-                    <span
-                      className="block h-full w-full animate-[pulse_1.1s_ease-in-out_infinite] rounded-full"
-                      style={{ background: '#fa6b04' }}
-                    />
+                  <span className="mt-5 flex flex-col items-center gap-3" aria-label="Import progress">
+                    <span className="relative block h-2 w-72 max-w-full overflow-hidden rounded-full" style={{ background: '#e2d9cf' }}>
+                      <span
+                        className="absolute inset-y-0 left-0 block w-1/2 rounded-full animate-[rfq-import-bar_2.4s_ease-in-out_infinite]"
+                        style={{ background: '#fa6b04' }}
+                      />
+                    </span>
                   </span>
                 )}
               </span>
@@ -980,11 +1031,11 @@ export function StepItems({
                 </button>
               )}
               {[
-                ...(requestType === 'rfp' && isVisible('specifications') ? ['Spec Summary', 'Spec Notes'] : []),
-                ...(isVisible('targetBudget') ? ['Budget'] : []),
-                ...(isVisible('suggestedLeadTime') ? ['Lead Time'] : []),
-                ...(isVisible('specifications') ? ['Notes / Specs'] : []),
-                ...(isVisible('certifications') ? ['Certifications'] : []),
+                ...(showStandardMaterialColumns && requestType === 'rfp' && isVisible('specifications') ? ['Spec Summary', 'Spec Notes'] : []),
+                ...(showStandardMaterialColumns && isVisible('targetBudget') ? ['Budget'] : []),
+                ...(showStandardMaterialColumns && isVisible('suggestedLeadTime') ? ['Lead Time'] : []),
+                ...(showStandardMaterialColumns && isVisible('specifications') ? ['Notes / Specs'] : []),
+                ...(showStandardMaterialColumns && isVisible('certifications') ? ['Certifications'] : []),
               ].map((heading, index) => (
                 <div key={`${heading}-${index}`} className="truncate whitespace-nowrap border-r px-3 py-3" style={{ borderColor: '#e2d9cf' }}>{heading}</div>
               ))}
@@ -1072,6 +1123,7 @@ export function StepItems({
               const visibleAttributes = row.attributes ?? (fieldTemplate.length ? fieldsToAttributes(fieldTemplate) : buildLineItemAttributes(inferredCategory))
               const additionalSpecNotes = getAdditionalSpecNotes(row)
               const specSummary = composeLineItemSpecs(visibleAttributes, additionalSpecNotes)
+              let spreadsheetColIndex = 0
               return (
                 <div
                   key={row._key}
@@ -1106,10 +1158,12 @@ export function StepItems({
                     onChange={(value) => handleSkuInput(row._key, value)}
                     onSelect={(entry) => selectSku(row._key, entry)}
                     stickyLeft={94}
+                    cellProps={spreadsheetCellProps(idx, spreadsheetColIndex++)}
                   />
                   <div className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
                     <label className="sr-only">Quantity</label>
                     <input
+                      {...spreadsheetCellProps(idx, spreadsheetColIndex++)}
                       type="number"
                       min="0"
                       step="0.01"
@@ -1123,6 +1177,7 @@ export function StepItems({
                   <div className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
                     <label className="sr-only">Units</label>
                     <select
+                      {...spreadsheetCellProps(idx, spreadsheetColIndex++)}
                       value={row.unit}
                       onChange={(e) => updateItem(row._key, 'unit', e.target.value)}
                       className="w-full truncate rounded-md px-2 py-1.5 text-sm focus:outline-none"
@@ -1146,6 +1201,7 @@ export function StepItems({
                         <label className="sr-only">{attribute.label}{attribute.required ? ' required' : ''}</label>
                         {attribute.inputType === 'boolean' ? (
                           <button
+                            {...spreadsheetCellProps(idx, spreadsheetColIndex++)}
                             type="button"
                             aria-pressed={attribute.value === 'Yes'}
                             onClick={() => updateAttribute(row._key, attribute.key, attribute.value === 'Yes' ? '' : 'Yes')}
@@ -1158,6 +1214,7 @@ export function StepItems({
                           </button>
                         ) : canUseSelect ? (
                           <select
+                            {...spreadsheetCellProps(idx, spreadsheetColIndex++)}
                             value={attribute.value}
                             onChange={(e) => updateAttribute(row._key, attribute.key, e.target.value)}
                             className="w-full truncate rounded-md px-2 py-1.5 text-sm focus:outline-none"
@@ -1170,6 +1227,7 @@ export function StepItems({
                           </select>
                         ) : (
                           <input
+                            {...spreadsheetCellProps(idx, spreadsheetColIndex++)}
                             type={attribute.inputType === 'number' || attribute.inputType === 'date' ? attribute.inputType : 'text'}
                             value={attribute.value}
                             onChange={(e) => updateAttribute(row._key, attribute.key, e.target.value)}
@@ -1185,11 +1243,12 @@ export function StepItems({
                     <div className="border-r" style={{ borderColor: '#e2d9cf', background: '#f9f6f2' }} />
                   )}
 
-                  {requestType === 'rfp' && isVisible('specifications') && (
+                  {showStandardMaterialColumns && requestType === 'rfp' && isVisible('specifications') && (
                     <>
                       <div className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
                         <label className="sr-only">Specifications Summary</label>
                         <input
+                          {...spreadsheetCellProps(idx, spreadsheetColIndex++)}
                           type="text"
                           value={specSummary}
                           readOnly
@@ -1201,6 +1260,7 @@ export function StepItems({
                       <div className="border-r p-1.5" style={{ borderColor: '#f0ebe6' }}>
                         <label className="sr-only">Additional Spec Notes</label>
                         <input
+                          {...spreadsheetCellProps(idx, spreadsheetColIndex++)}
                           type="text"
                           value={additionalSpecNotes}
                           onChange={(e) => updateAdditionalSpecNotes(row._key, e.target.value)}
@@ -1212,13 +1272,14 @@ export function StepItems({
                     </>
                   )}
 
-                  {isVisible('targetBudget') && (
+                  {showStandardMaterialColumns && isVisible('targetBudget') && (
                     <div className={cn('relative border-r p-1.5', isCustomizingFields && 'bg-[#fff1e8]')} style={{ borderColor: '#f0ebe6' }}>
                       {isCustomizingFields && <RemoveFieldButton label="Target Budget" onClick={() => removeField('targetBudget')} />}
                       <label className="sr-only">Target Budget</label>
                       <div className="relative">
                         <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-2 text-xs" style={{ color: '#8a9e96' }}>$</span>
                         <input
+                          {...spreadsheetCellProps(idx, spreadsheetColIndex++)}
                           type="number"
                           min="0"
                           step="0.01"
@@ -1232,11 +1293,12 @@ export function StepItems({
                     </div>
                   )}
 
-                  {isVisible('suggestedLeadTime') && (
+                  {showStandardMaterialColumns && isVisible('suggestedLeadTime') && (
                     <div className={cn('relative border-r p-1.5', isCustomizingFields && 'bg-[#fff1e8]')} style={{ borderColor: '#f0ebe6' }}>
                       {isCustomizingFields && <RemoveFieldButton label="Suggested Lead Time" onClick={() => removeField('suggestedLeadTime')} />}
                       <label className="sr-only">Suggested Lead Time</label>
                       <input
+                        {...spreadsheetCellProps(idx, spreadsheetColIndex++)}
                         type="number"
                         min="1"
                         value={row.suggested_lead_time_days ?? ''}
@@ -1248,11 +1310,12 @@ export function StepItems({
                     </div>
                   )}
 
-                  {isVisible('specifications') && (
+                  {showStandardMaterialColumns && isVisible('specifications') && (
                     <div className={cn('relative border-r p-1.5', isCustomizingFields && 'bg-[#fff1e8]')} style={{ borderColor: '#f0ebe6' }}>
                       {isCustomizingFields && <RemoveFieldButton label="Notes / Specifications" onClick={() => removeField('specifications')} />}
                       <label className="sr-only">Notes/Specifications</label>
                       <input
+                        {...spreadsheetCellProps(idx, spreadsheetColIndex++)}
                         type="text"
                         value={row.specs ?? ''}
                         onChange={(e) => updateItem(row._key, 'specs', e.target.value)}
@@ -1263,11 +1326,12 @@ export function StepItems({
                     </div>
                   )}
 
-                  {isVisible('certifications') && (
+                  {showStandardMaterialColumns && isVisible('certifications') && (
                     <div className={cn('relative border-r p-1.5', isCustomizingFields && 'bg-[#fff1e8]')} style={{ borderColor: '#f0ebe6' }}>
                       {isCustomizingFields && <RemoveFieldButton label="Certifications Required" onClick={() => removeField('certifications')} />}
                       <label className="sr-only">Certifications Required</label>
                       <input
+                        {...spreadsheetCellProps(idx, spreadsheetColIndex++)}
                         type="text"
                         value={(row.certifications ?? []).join(', ')}
                         onChange={(e) => updateItem(row._key, 'certifications', e.target.value.split(',').map((entry) => entry.trim()).filter(Boolean))}
@@ -1285,6 +1349,7 @@ export function StepItems({
                       style={{ borderColor: '#f2c99d', background: '#fffaf4' }}
                     >
                       <input
+                        {...spreadsheetCellProps(idx, spreadsheetColIndex++)}
                         type="text"
                         value={vendorIndex === 0 ? '$ --' : vendorIndex === 1 ? '-- days' : ''}
                         readOnly
@@ -1332,6 +1397,17 @@ export function StepItems({
       </div>
         )}
       </div>
+
+      <style jsx>{`
+        @keyframes rfq-import-icon-pulse {
+          0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(250, 107, 4, 0.12); }
+          50% { transform: scale(1.025); box-shadow: 0 0 0 7px rgba(250, 107, 4, 0); }
+        }
+        @keyframes rfq-import-bar {
+          0%, 100% { transform: translateX(0); opacity: 0.7; }
+          50% { transform: translateX(100%); opacity: 1; }
+        }
+      `}</style>
 
       {selectedRowKeys.size > 0 && (
         <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-2xl px-5 py-3 shadow-2xl" style={{ background: '#1e3a2f', border: '1px solid #2f4a3a' }}>
@@ -1387,12 +1463,14 @@ function SkuCell({
   onChange,
   onSelect,
   stickyLeft,
+  cellProps,
 }: {
   sku: string
   entries: SKUEntry[]
   onChange: (value: string) => void
   onSelect: (entry: SKUEntry) => void
   stickyLeft?: number
+  cellProps?: React.InputHTMLAttributes<HTMLInputElement>
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null)
@@ -1427,6 +1505,7 @@ function SkuCell({
     >
       <label className="sr-only">Item Description or SKU</label>
       <input
+        {...cellProps}
         type="text"
         value={sku}
         onChange={(e) => onChange(e.target.value)}

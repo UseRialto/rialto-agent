@@ -156,6 +156,7 @@ export function RFQWizard({
   )
   const [step, setStep] = useState(Math.max(0, Math.min(initialStep, STEPS.length - 1)))
   const [fieldTemplate, setFieldTemplate] = useState<CustomLineItemFieldDefinition[]>(initialTemplateFields)
+  const [importedSchemaActive, setImportedSchemaActive] = useState(false)
   const [vendorResponseTemplate, setVendorResponseTemplate] = useState<CustomLineItemFieldDefinition[]>(
     sanitizeVendorResponseFields(contractorCustomization.vendorResponseFields),
   )
@@ -331,6 +332,12 @@ export function RFQWizard({
     setCustomizationDirty(true)
     setFieldTemplate(sanitized)
     setItems((current) => current.map((item) => ({ ...item, attributes: fieldsToAttributes(sanitized, item.attributes) })))
+  }
+
+  function applyImportedTemplate(nextFields: CustomLineItemFieldDefinition[]) {
+    const sanitized = sanitizeLineItemFields(nextFields).map((field, index) => ({ ...field, order: index }))
+    setImportedSchemaActive(true)
+    setFieldTemplate(sanitized)
   }
 
   function updateVendorResponseTemplate(nextFields: CustomLineItemFieldDefinition[]) {
@@ -716,6 +723,7 @@ export function RFQWizard({
             vendorResponseFields={vendorResponseTemplate}
             availableFieldBank={availableFieldBank}
             fieldVisibility={fieldVisibility}
+            importedSchemaActive={importedSchemaActive}
             isCustomizingFields={fieldSettingsOpen}
             onToggleCustomizeFields={() => {
               setFieldSettingsStuck(false)
@@ -735,7 +743,7 @@ export function RFQWizard({
             onTemplateFieldAdd={addTemplateField}
             onTemplateFieldRemove={removeTemplateField}
             onTemplateFieldMove={moveTemplateField}
-            onTemplateReplace={syncRowsToTemplate}
+            onImportedTemplateReplace={applyImportedTemplate}
             onTemplateFieldRename={renameTemplateField}
             onTemplateFieldAddCustom={addCustomTemplateField}
             onVendorResponseFieldAdd={addVendorResponseField}

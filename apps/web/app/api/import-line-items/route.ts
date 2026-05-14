@@ -54,7 +54,7 @@ async function extractPdfText(buffer: Buffer) {
   return pageTexts.filter(Boolean).join('\n')
 }
 
-const SPREADSHEET_UNIT_PATTERN = /^(?:ea|each|pcs?|pieces?|sf|sq\.?\s*ft|sqft|ft2|lf|lft|lin\.?\s*ft|linear\s*ft|ft|cy|cu\.?\s*yd|cubic\s*yd|yd3|tons?|tn|tonnes?|bf|sheets?|lbs?|lb|pounds?)$/i
+const SPREADSHEET_UNIT_PATTERN = /^(?:ea|each|pcs?|pieces?|sf|sq\.?\s*ft|sqft|ft2|sy|sq\.?\s*yd|sqyd|yd2|lf|lft|lin\.?\s*ft|linear\s*ft|ft|cy|cu\.?\s*yd|cubic\s*yd|yd3|tons?|tn|tonnes?|bf|sheets?|lbs?|lb|pounds?)$/i
 
 function spreadsheetNumber(value: string) {
   const match = value.match(/-?\$?\s*[0-9][0-9,\s]*(?:\.[0-9]+)?/)
@@ -70,7 +70,7 @@ function scoreWorksheetRows(rows: string[][]) {
     const cells = row.map((cell) => cell.trim()).filter(Boolean)
     if (cells.length === 0) continue
     const hasText = cells.some((cell) => /[A-Za-z]/.test(cell) && cell.length > 3 && !SPREADSHEET_UNIT_PATTERN.test(cell))
-    const hasCombinedQuantityUnit = cells.some((cell) => /[0-9]/.test(cell) && /\b(?:ea|each|sf|lf|cy|tons?|tn|bf|sheets?|lbs?)\b/i.test(cell))
+    const hasCombinedQuantityUnit = cells.some((cell) => /[0-9]/.test(cell) && /\b(?:ea|each|sf|sy|sq\.?\s*yd|lf|cy|tons?|tn|bf|sheets?|lbs?)\b/i.test(cell))
     const hasAdjacentQuantityUnit = row.some((cell, index) => (
       spreadsheetNumber(cell) !== undefined &&
       (SPREADSHEET_UNIT_PATTERN.test(row[index + 1]?.trim() ?? '') || SPREADSHEET_UNIT_PATTERN.test(row[index - 1]?.trim() ?? ''))
