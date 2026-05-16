@@ -507,6 +507,54 @@ export async function updateRFQInviteList(
   }
 }
 
+export async function appendRFQLineItemsAndInvites(
+  rfqId: string,
+  lineItems: ContractorRFQLineItem[],
+  invites: NonNullable<ContractorRFQ['invites']> = [],
+): Promise<void> {
+  const existingLineItems = await db.select({ sort_order: rfqLineItemsTable.sort_order })
+    .from(rfqLineItemsTable)
+    .where(eq(rfqLineItemsTable.rfq_id, rfqId))
+  const nextSortOrder = existingLineItems.reduce((max, row) => Math.max(max, row.sort_order), -1) + 1
+
+  if (lineItems.length > 0) {
+    await db.insert(rfqLineItemsTable)
+      .values(
+        lineItems.map((li, idx) => ({
+          id: li.id,
+          rfq_id: rfqId,
+          sku: li.sku || null,
+          description: li.description,
+          quantity: li.quantity,
+          unit: li.unit,
+          specs: li.specs ?? null,
+          constraints: li.constraints ?? null,
+          attributes_json: li.attributes ? JSON.stringify(li.attributes) : null,
+          certifications: li.certifications ? JSON.stringify(li.certifications) : null,
+          notes: li.notes ?? null,
+          contractor_budget: li.contractor_budget ?? null,
+          suggested_lead_time_days: li.suggested_lead_time_days ?? null,
+          sort_order: nextSortOrder + idx,
+        })),
+      )
+  }
+
+  const inviteRows = invites
+    .filter((invite) => invite.vendor_id || invite.vendor_email)
+    .map((invite) => ({
+      rfq_id: rfqId,
+      vendor_id: invite.vendor_id ?? null,
+      vendor_email: invite.vendor_email || null,
+      vendor_name: invite.vendor_name || null,
+      vendor_first_name: invite.vendor_first_name ?? null,
+      vendor_last_name: invite.vendor_last_name ?? null,
+      on_platform: invite.on_platform,
+    }))
+  if (inviteRows.length > 0) {
+    await db.insert(rfqInvitesTable).values(inviteRows)
+  }
+}
+
 export async function deleteRFQ(rfqId: string): Promise<void> {
   await db.delete(rfqsTable).where(eq(rfqsTable.id, rfqId))
   // Cascades: rfq_line_items, rfq_invites, bids → bid_line_items

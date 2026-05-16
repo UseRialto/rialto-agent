@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import * as XLSX from 'xlsx'
-import { createExternalQuoteImport, createExternalQuoteImportFromFiles } from './external-quote-import'
-import { extractExternalQuoteImportText } from './external-quote-file-text'
+import { createExternalQuoteImport, createExternalQuoteImportFromFiles, mergeExternalQuoteImportIntoRFQ } from './external-quote-import'
+import { extractExternalQuoteImportText, importSourceKindForFile } from './external-quote-file-text'
 import { InMemoryUserContextProvider } from '../../../../src/context/user-context-provider.js'
 import { RialtoAgentCore } from '../../../../src/agent/core.js'
 import { QuoteComparisonArchitectureRuntime } from '../../../../src/agent/quote-comparison-architecture-suite.js'
@@ -71,6 +71,16 @@ A001,250CH-33,2 1/2 in 22ga CH Stud 10 ft,2420,LF,BuildCo Materials,1.06,2565.2,
 A002,250JR-33,2 1/2 in 20ga J Track 12 ft,458,LF,BuildCo Materials,1.13,517.54,4 weeks,alternate manufacturer
 `
 
+function generatedSingleVendorQuoteText(vendorName: string, index: number) {
+  const priceBump = index / 100
+  return [
+    'Line #,Part No,Material Name,Required Qty,UOM,Vendor,Quoted Unit Cost,Extended Cost,ETA,Clarifications',
+    `A001,250CH-33,2 1/2 in 22ga CH Stud 10 ft,2420,LF,${vendorName},${(1.05 + priceBump).toFixed(2)},${((1.05 + priceBump) * 2420).toFixed(2)},${10 + index} days,`,
+    `A002,250JR-33,2 1/2 in 20ga J Track 12 ft,458,LF,${vendorName},${(1.14 + priceBump).toFixed(2)},${((1.14 + priceBump) * 458).toFixed(2)},${10 + index} days,`,
+    `A003,ACSEAL,USG 29oz Acoustical Sealant,889,Tube,${vendorName},${(8.25 + index / 10).toFixed(2)},${((8.25 + index / 10) * 889).toFixed(2)},${10 + index} days,`,
+  ].join('\n')
+}
+
 const repeatedSupplierBlocksText = `
 Item,SKU,Description,Qty,Unit,Active,Supplier,Unit Price,Total,Variation,Active,Supplier,Unit Price,Total,Variation,Active,Supplier,Unit Price,Total,Variation,Active,Supplier,Unit Price,Total,Variation
 A001,250CH-33,2 1/2 in 22ga CH Stud 10 ft,2420,LF,TRUE,Foundation - San Diego,320.000,774400,+0%,TRUE,L n W Supply - San Diego,350.000,847000,+9%,TRUE,Action Gypsum Supply,310.000,750200,-3%,TRUE,J n B Materials - Perris,315.000,762300,-2%
@@ -78,7 +88,10 @@ A002,250JR-33,2 1/2 in 20ga J Track 12 ft,458,LF,TRUE,Foundation - San Diego,92.
 A003,250JS-33,2 1/2 in 20ga Jamb Strut 10 ft,1094,LF,TRUE,Foundation - San Diego,205.000,224270,+0%,TRUE,L n W Supply - San Diego,230.000,251620,+12%,TRUE,Action Gypsum Supply,195.000,213330,-5%,TRUE,J n B Materials - Perris,193.000,211142,-6%
 `
 
-const generatedFixtureDir = path.resolve(process.cwd(), 'data/test_files')
+const generatedFixtureDir = [
+  path.resolve(process.cwd(), 'data/test_files'),
+  path.resolve(process.cwd(), '../data/test_files'),
+].find((candidate) => fs.existsSync(candidate)) ?? path.resolve(process.cwd(), 'data/test_files')
 const hasGeneratedFixtures = fs.existsSync(generatedFixtureDir)
 
 function extractWorkbookTextLikeImportRoute(filename: string) {
@@ -101,7 +114,66 @@ function extractWorkbookTextLikeImportRoute(filename: string) {
     .join('\n')
 }
 
+function workbookBufferFromText(text: string, bookType: XLSX.BookType = 'xlsx') {
+  const rows = text
+    .trim()
+    .split('\n')
+    .map((row) => row.split(','))
+  const workbook = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Comparison')
+  return XLSX.write(workbook, { type: 'buffer', bookType }) as Buffer
+}
+
 describe('External Quote Import', () => {
+  it('recognizes CSV uploads as spreadsheet quote imports', async () => {
+    for (const file of [
+      { name: '01-multi-supplier-wide-comparison.csv', type: 'text/csv' },
+      { name: 'excel-exported-comparison.csv', type: 'application/vnd.ms-excel' },
+    ]) {
+      const text = await extractExternalQuoteImportText(file, Buffer.from(multiSupplierWideText, 'utf8'))
+      const result = createExternalQuoteImport({
+        projectId: 'project-1',
+        projectName: 'MCRD P-314',
+        filename: file.name,
+        sourceKind: importSourceKindForFile(file) ?? 'spreadsheet',
+        text,
+        now: '2026-05-11T12:00:00.000Z',
+      })
+
+      expect(importSourceKindForFile(file)).toBe('spreadsheet')
+      expect(result.bids.map((bid) => bid.vendor_name)).toContain('BuildCo Materials')
+      expect(result.rfq.line_items).toHaveLength(12)
+    }
+  })
+
+  it('recognizes Excel upload extensions and extracts workbook rows as quote import text', async () => {
+    for (const [filename, bookType] of [
+      ['vendor-comparison.xlsx', 'xlsx'],
+      ['vendor-comparison.xls', 'biff8'],
+      ['vendor-comparison.xsl', 'biff8'],
+    ] as const) {
+      const file = { name: filename, type: '' }
+      const text = await extractExternalQuoteImportText(file, workbookBufferFromText(multiSupplierWideText, bookType))
+      const result = createExternalQuoteImport({
+        projectId: 'project-1',
+        projectName: 'MCRD P-314',
+        filename,
+        sourceKind: importSourceKindForFile(file) ?? 'spreadsheet',
+        text,
+        now: '2026-05-11T12:00:00.000Z',
+      })
+
+      expect(importSourceKindForFile(file)).toBe('spreadsheet')
+      expect(result.bids.map((bid) => bid.vendor_name)).toEqual([
+        'L n W Supply - San Diego',
+        'Acme Drywall Supply',
+        'BuildCo Materials',
+        'Metro Door Hardware',
+      ])
+      expect(result.rfq.line_items).toHaveLength(12)
+    }
+  })
+
   it('creates a Quote Request and imported vendor response from single-vendor quote text', () => {
     const result = createExternalQuoteImport({
       projectId: 'project-1',
@@ -122,9 +194,13 @@ describe('External Quote Import', () => {
       sku: '250CH-33',
       quantity: 2420,
       unit: 'lf',
-      unit_price: 1100,
+      unit_price: 1.1,
       total_price: 2662,
     })
+    expect(result.bid.line_item_responses[0].response_attributes).toContainEqual(expect.objectContaining({
+      key: 'price_basis',
+      value: '1100 per 1000 lf',
+    }))
     expect(result.bid.line_item_responses[3]).toMatchObject({
       sku: '362S125-30',
       quantity: 606,
@@ -268,6 +344,111 @@ Flange Stud LF
     }))
   })
 
+  it('imports 2 through 10 separate quote files into renderable comparison sheets', () => {
+    const extensions = ['csv', 'xlsx', 'pdf', 'txt', 'tsv', 'xls', 'xsl', 'csv', 'xlsx', 'txt']
+
+    for (let fileCount = 2; fileCount <= 10; fileCount += 1) {
+      const files = Array.from({ length: fileCount }, (_, index) => {
+        const vendorName = `Batch Vendor ${String(index + 1).padStart(2, '0')}`
+        return {
+          filename: `batch-vendor-${index + 1}.${extensions[index]}`,
+          sourceKind: extensions[index] === 'pdf' ? 'pdf' as const : 'spreadsheet' as const,
+          text: generatedSingleVendorQuoteText(vendorName, index + 1),
+        }
+      })
+
+      const result = createExternalQuoteImportFromFiles({
+        projectId: 'project-1',
+        projectName: 'MCRD P-314',
+        title: `Batch Import ${fileCount}`,
+        now: `2026-05-11T12:00:${String(fileCount).padStart(2, '0')}.000Z`,
+        files,
+      })
+      const snapshot = importedComparisonSnapshot(result.rfq, result.bids)
+
+      expect(result.rfq.line_items).toHaveLength(3)
+      expect(result.bids).toHaveLength(fileCount)
+      expect(result.bids.map((bid) => bid.vendor_name)).toEqual(
+        Array.from({ length: fileCount }, (_, index) => `Batch Vendor ${String(index + 1).padStart(2, '0')}`),
+      )
+      expect(result.bids.every((bid) => bid.line_item_responses.length === result.rfq.line_items.length)).toBe(true)
+      expect(new Set(result.bids.map((bid) => bid.id)).size).toBe(fileCount)
+      expect(new Set(result.rfq.line_items.map((line) => line.id)).size).toBe(3)
+      expect(result.bids.flatMap((bid) => bid.line_item_responses).some((line) => line.is_alternate)).toBe(false)
+      expect(snapshot.columns).toHaveLength(4 + fileCount * 2 + 1)
+      expect(snapshot.vendors).toHaveLength(fileCount)
+      expect(snapshot.rows).toHaveLength(3)
+      for (const bid of result.bids) {
+        const vendorId = idPartForSnapshot(bid.vendor_name)
+        expect(snapshot.columns.map((column) => column.key)).toEqual(expect.arrayContaining([
+          `${vendorId}-price`,
+          `${vendorId}-lead`,
+        ]))
+        for (const row of snapshot.rows) {
+          expect(row.values[`${vendorId}-price`]).not.toBe('')
+          expect(row.values[`${vendorId}-lead`]).toMatch(/days/)
+        }
+      }
+      expect(result.warnings).toContainEqual(expect.objectContaining({
+        message: expect.stringContaining(`Imported ${fileCount} vendor quote responses from ${fileCount} files`),
+      }))
+    }
+  })
+
+  it('merges an additional quote import into an existing comparison without replacing current lines or bids', () => {
+    const initial = createExternalQuoteImportFromFiles({
+      projectId: 'project-1',
+      projectName: 'MCRD P-314',
+      title: 'MCRD P-314 Metal Framing',
+      now: '2026-05-11T12:00:00.000Z',
+      files: [{
+        filename: 'acme-drywall.pdf',
+        sourceKind: 'pdf',
+        text: acmeSingleVendorText,
+      }],
+    })
+    const additional = createExternalQuoteImportFromFiles({
+      projectId: 'project-1',
+      projectName: 'MCRD P-314',
+      title: 'MCRD P-314 Metal Framing',
+      now: '2026-05-11T12:00:00.000Z',
+      files: [{
+        filename: 'buildco-materials.pdf',
+        sourceKind: 'pdf',
+        text: [
+          buildCoSingleVendorText.trim(),
+          'A003,GWB-58X,5/8 Type X Gypsum Board 4x12,620,Sheet,BuildCo Materials,17.66,10949.2,4 weeks,',
+        ].join('\n'),
+      }],
+    })
+
+    const merged = mergeExternalQuoteImportIntoRFQ({
+      targetRfq: initial.rfq,
+      existingBids: initial.bids,
+      imported: additional,
+      now: '2026-05-12T12:00:00.000Z',
+    })
+
+    expect(merged.rfq.id).toBe(initial.rfq.id)
+    expect(merged.rfq.line_items.map((line) => line.id)).toEqual([
+      ...initial.rfq.line_items.map((line) => line.id),
+      expect.stringContaining(`${initial.rfq.id}-line-gwb-58x`),
+    ])
+    expect(merged.addedLineItems).toHaveLength(1)
+    expect(merged.bids).toHaveLength(1)
+    expect(merged.bids[0].rfq_id).toBe(initial.rfq.id)
+    expect(merged.bids[0].id).not.toBe(additional.bids[0].id)
+    expect(merged.bids[0].line_item_responses.map((line) => line.line_item_id)).toEqual([
+      initial.rfq.line_items[0].id,
+      initial.rfq.line_items[1].id,
+      merged.addedLineItems[0].id,
+    ])
+    expect(merged.bids[0].line_item_responses.some((line) => line.is_alternate)).toBe(false)
+    expect(merged.warnings).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('Added 1 imported vendor quote response'),
+    }))
+  })
+
   it('imports repeated supplier blocks like customer comparison screenshots', () => {
     const result = createExternalQuoteImport({
       projectId: 'project-1',
@@ -294,6 +475,139 @@ Flange Stud LF
     expect(result.warnings).toContainEqual(expect.objectContaining({
       message: expect.stringContaining('repeated supplier block'),
     }))
+  })
+
+  it('imports simple inline email quote prose without smart-agent fallback', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'Willow Middle School',
+      filename: 'inline-email-reply-quote.txt',
+      sourceKind: 'spreadsheet',
+      text: [
+        'Tomasz,',
+        '',
+        'Here is our quote for the ceiling grid package:',
+        '',
+        'DXL 4 ft cross tee 15/16 fire-rated, qty 420 ea, unit price $1.82, lead time 5 days',
+        'DXL 12 ft main runner heavy-duty 15/16, qty 96 ea, unit price $6.10, lead time 5 days',
+        'Armstrong Ultima 24x24 tegular panel ACM-24X24-580, qty 900 sf, unit price $2.39, lead time 7 days',
+        '',
+        'Freight included. Quote good for 30 days.',
+      ].join('\n'),
+      now: '2026-05-11T12:00:00.000Z',
+    })
+
+    expect(result.rfq.line_items).toHaveLength(3)
+    expect(result.bid.vendor_name).toBe('Imported Vendor')
+    expect(result.bid.line_item_responses).toHaveLength(3)
+    expect(result.bid.line_item_responses[0]).toMatchObject({
+      description: 'DXL 4 ft cross tee 15/16 fire-rated',
+      quantity: 420,
+      unit: 'ea',
+      unit_price: 1.82,
+      total_price: 764.4,
+    })
+    expect(result.bid.line_item_responses[2]).toMatchObject({
+      sku: 'ACM-24X24-580',
+      quantity: 900,
+      total_price: 2151,
+    })
+  })
+
+  it('deterministically imports XML, YAML, HTML, and fixed-width quote exports', () => {
+    const fixtures = [
+      {
+        filename: 'vendor-comparison-xml-surprise.xml',
+        text: `<?xml version="1.0"?>
+<vendorComparison project="Cypress Hall Renovation" package="Interior framing">
+  <requestedItems>
+    <item line="A101" sku="362S125-30" description="3 5/8 in 20ga stud 12 ft" quantity="740" unit="EA" />
+    <item line="A102" sku="250T125-33" description="2 1/2 in 20ga track 10 ft" quantity="420" unit="LF" />
+  </requestedItems>
+  <vendor name="Harbor Wall Supply">
+    <quote line="A101" unitPrice="9.85" total="7289.00" leadTime="11 days" notes="stocked locally" />
+    <quote line="A102" unitPrice="1.42" total="596.40" leadTime="11 days" notes="" />
+  </vendor>
+  <vendor name="North Coast Interiors">
+    <quote line="A101" unitPrice="10.10" total="7474.00" leadTime="2 weeks" notes="" />
+    <quote line="A102" unitPrice="1.37" total="575.40" leadTime="2 weeks" notes="alternate manufacturer acceptable" />
+  </vendor>
+</vendorComparison>`,
+        expectedVendors: ['Harbor Wall Supply', 'North Coast Interiors'],
+      },
+      {
+        filename: 'vendor-comparison-yaml-export.yaml',
+        text: `project: Juniper Labs
+items:
+  - id: C-01
+    sku: ACT-24X24
+    description: 24x24 acoustical ceiling tile
+    qty: 960
+    unit: SF
+  - id: C-02
+    sku: GRID-15/16
+    description: 15/16 inch exposed tee grid
+    qty: 960
+    unit: SF
+vendors:
+  - name: Acoustic Pros
+    quotes:
+      - item: C-01
+        unit_price: 2.18
+        total: 2092.80
+        lead: 9 days
+      - item: C-02
+        unit_price: 1.44
+        total: 1382.40
+        lead: 9 days
+  - name: Ceiling Depot
+    quotes:
+      - item: C-01
+        unit_price: 2.05
+        total: 1968.00
+        lead: 16 days
+        notes: alternate manufacturer
+      - item: C-02
+        unit_price: 1.51
+        total: 1449.60
+        lead: 16 days`,
+        expectedVendors: ['Acoustic Pros', 'Ceiling Depot'],
+      },
+      {
+        filename: 'vendor-comparison-html-table.weird',
+        text: `<table><thead><tr><th>Line</th><th>Part</th><th>Description</th><th>Qty</th><th>UOM</th><th>Summit Supply Unit</th><th>Summit Supply Extended</th><th>Summit Lead</th><th>Metro Materials Unit</th><th>Metro Materials Extended</th><th>Metro Lead</th><th>Metro Notes</th></tr></thead><tbody><tr><td>H01</td><td>HM-FRAME</td><td>Hollow metal frame 3070</td><td>18</td><td>EA</td><td>188.40</td><td>3391.20</td><td>21 days</td><td>181.00</td><td>3258.00</td><td>28 days</td><td>shop drawings required</td></tr><tr><td>H02</td><td>HM-DOOR</td><td>18ga flush hollow metal door</td><td>18</td><td>EA</td><td>214.00</td><td>3852.00</td><td>21 days</td><td>209.50</td><td>3771.00</td><td>28 days</td><td></td></tr></tbody></table>`,
+        expectedVendors: ['Summit Supply', 'Metro Materials'],
+      },
+      {
+        filename: 'vendor-comparison-fixed-width.txtx',
+        text: `PROJECT: Willow Middle School Addition
+LINE  SKU          DESCRIPTION                         QTY   UNIT   VENDOR                 UNIT PRICE   TOTAL      LEAD       NOTES
+F01   FAST-114     1 1/4 drywall screws                44    Box    Anchor Supply          39.75        1749.00    7 days
+F01   FAST-114     1 1/4 drywall screws                44    Box    Westside Materials     41.10        1808.40    5 days      rush stock
+F02   CORNER-BEAD  Vinyl corner bead 10 ft             1100  LF     Anchor Supply          1.22         1342.00    7 days
+F02   CORNER-BEAD  Vinyl corner bead 10 ft             1100  LF     Westside Materials     1.19         1309.00    5 days`,
+        expectedVendors: ['Anchor Supply', 'Westside Materials'],
+      },
+    ]
+
+    for (const fixture of fixtures) {
+      const result = createExternalQuoteImport({
+        projectId: 'project-1',
+        projectName: 'MCRD P-314',
+        filename: fixture.filename,
+        sourceKind: 'spreadsheet',
+        text: fixture.text,
+        now: '2026-05-11T12:00:00.000Z',
+      })
+      const snapshot = importedComparisonSnapshot(result.rfq, result.bids)
+
+      expect(result.bids.map((bid) => bid.vendor_name)).toEqual(fixture.expectedVendors)
+      expect(result.rfq.line_items.length).toBeGreaterThan(0)
+      expect(snapshot.rows).toHaveLength(result.rfq.line_items.length)
+      expect(snapshot.vendors.map((vendor) => vendor.name)).toEqual(fixture.expectedVendors)
+      expect(result.bids.flatMap((bid) => bid.line_item_responses).some((line) => line.is_alternate)).toBe(false)
+      expect(result.warnings.some((warning) => /XML|YAML|HTML|fixed-width/i.test(warning.message))).toBe(true)
+    }
   })
 
   it.skipIf(!hasGeneratedFixtures)('imports generated stress fixture files as base quote comparisons', () => {
@@ -370,7 +684,7 @@ Flange Stud LF
   it.skipIf(!hasGeneratedFixtures)('imports every generated stress fixture into a quote comparison shape', async () => {
     const fixtureDir = generatedFixtureDir
     const filenames = fs.readdirSync(fixtureDir)
-      .filter((filename) => /\.(?:csv|tsv|txt|xlsx|pdf)$/i.test(filename))
+      .filter((filename) => quoteImportFixtureExtensionPattern.test(filename))
       .sort()
     const failures: string[] = []
 
@@ -409,7 +723,7 @@ Flange Stud LF
   it.skipIf(!hasGeneratedFixtures)('lets the agent run edits and queries on every imported stress fixture comparison', async () => {
     const fixtureDir = generatedFixtureDir
     const filenames = fs.readdirSync(fixtureDir)
-      .filter((filename) => /\.(?:csv|tsv|txt|xlsx|pdf)$/i.test(filename))
+      .filter((filename) => quoteImportFixtureExtensionPattern.test(filename))
       .sort()
     const core = new RialtoAgentCore(new InMemoryUserContextProvider(), new QuoteComparisonArchitectureRuntime())
     const user: AuthenticatedUser = {
@@ -473,10 +787,15 @@ function mimeTypeForFixture(filename: string) {
   const lower = filename.toLowerCase()
   if (lower.endsWith('.pdf')) return 'application/pdf'
   if (lower.endsWith('.xlsx')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  if (lower.endsWith('.xls') || lower.endsWith('.xsl')) return 'application/vnd.ms-excel'
   if (lower.endsWith('.csv')) return 'text/csv'
   if (lower.endsWith('.tsv')) return 'text/tab-separated-values'
+  if (lower.endsWith('.xml')) return 'application/xml'
+  if (lower.endsWith('.html') || lower.endsWith('.weird')) return 'text/html'
   return 'text/plain'
 }
+
+const quoteImportFixtureExtensionPattern = /\.(?:csv|tsv|txt|txtx|xlsx|xls|xsl|pdf|xml|yaml|yml|weird)$/i
 
 function importedComparisonSnapshot(rfq: ContractorRFQ, bids: ContractorBid[]) {
   const columns = [

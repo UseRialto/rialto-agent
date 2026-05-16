@@ -9,9 +9,26 @@ export function isExcelImportFile(file: Pick<File, 'name' | 'type'>) {
   return (
     name.endsWith('.xlsx') ||
     name.endsWith('.xls') ||
+    name.endsWith('.xsl') ||
     file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
     file.type === 'application/vnd.ms-excel'
   )
+}
+
+export function isDelimitedSpreadsheetImportFile(file: Pick<File, 'name' | 'type'>) {
+  const name = file.name.toLowerCase()
+  return (
+    name.endsWith('.csv') ||
+    name.endsWith('.tsv') ||
+    file.type === 'text/csv' ||
+    file.type === 'text/tab-separated-values'
+  )
+}
+
+export function importSourceKindForFile(file: Pick<File, 'name' | 'type'>) {
+  if (isPdfImportFile(file)) return 'pdf' as const
+  if (isDelimitedSpreadsheetImportFile(file) || isExcelImportFile(file)) return 'spreadsheet' as const
+  return undefined
 }
 
 export async function extractPdfImportText(buffer: Buffer) {
@@ -74,6 +91,7 @@ export async function extractExcelImportText(buffer: Buffer) {
 
 export async function extractExternalQuoteImportText(file: Pick<File, 'name' | 'type'>, buffer: Buffer) {
   if (isPdfImportFile(file)) return extractPdfImportText(buffer)
+  if (isDelimitedSpreadsheetImportFile(file)) return buffer.toString('utf8')
   if (isExcelImportFile(file)) return extractExcelImportText(buffer)
   return buffer.toString('utf8')
 }

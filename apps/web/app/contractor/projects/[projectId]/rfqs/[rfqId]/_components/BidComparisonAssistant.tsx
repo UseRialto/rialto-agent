@@ -202,6 +202,15 @@ export function BidComparisonAssistant({
   }, [])
 
   useEffect(() => {
+    function onAssistantEvent(event: Event) {
+      const detail = (event as CustomEvent<{ open?: boolean; prompt?: string }>).detail
+      if (detail?.open && typeof detail.prompt === 'string') setDraft(detail.prompt)
+    }
+    window.addEventListener('rialto:bid-comparison-assistant', onAssistantEvent)
+    return () => window.removeEventListener('rialto:bid-comparison-assistant', onAssistantEvent)
+  }, [])
+
+  useEffect(() => {
     if (!isOpen || isClosing) return
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
   }, [debugSteps, error, isClosing, isOpen, isSending, messages, proposal, summary])

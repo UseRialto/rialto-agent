@@ -1,4 +1,5 @@
 import type { ContractorBid, ContractorRFQ } from '../types/contractor'
+import { needsMoreProductDetail } from './product-specificity'
 
 export interface VendorQuoteResponseLine {
   lineItemId: string
@@ -39,6 +40,9 @@ export function vendorQuoteResponseFromBid(quoteRequest: ContractorRFQ, bid: Con
     if (requested && quotedQuantity !== requested.quantity) reviewIssues.push('quantity_mismatch')
     if (requested && quotedUnit !== requested.unit) reviewIssues.push('unit_mismatch')
     if (line.is_alternate) reviewIssues.push('vendor_alternate')
+    if (requested && needsMoreProductDetail(requested, line)) {
+      reviewIssues.push('needs_more_product_detail')
+    }
 
     return {
       lineItemId: line.line_item_id,

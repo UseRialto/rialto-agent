@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { randomBytes, randomUUID } from 'crypto'
-import { and, desc, eq, inArray, or, sql } from 'drizzle-orm'
+import { and, desc, eq, or, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import {
   bids,
@@ -22,7 +22,10 @@ import {
 import { createUser, findUserByEmail, findUserById } from '@/lib/auth/users'
 import { appendMagicFormLink, buildRFQEmailDraft, buildRFQEmailBody, buildRFQEmailSubject, renderVendorEmailTemplate } from '@/lib/mail/rfq-email-draft'
 import { createMagicFormLink } from '@/lib/magic-rfq/service'
+import { extractEmailQuoteIntake } from '@/lib/modules/vendor-response-intake/email-quote-intake'
+import { ingestExternalQuoteFile } from '@/lib/procurement/external-quote-file-ingestion'
 import { runBidSpecCompliance } from '@/lib/spec-compliance'
+import { getRFQById } from '@/lib/store/contractor-store'
 import type {
   ContractorBid,
   ContractorMailboxSummary,
@@ -63,7 +66,6 @@ const MATCH_WINDOW_DAYS = 30
 const MAIL_ROOT = path.join(process.cwd(), '.local', 'uploads', 'mail')
 
 type MailboxRow = typeof contractorMailboxes.$inferSelect
-type VendorRequestRow = typeof rfqVendorRequests.$inferSelect
 
 type ProviderApiParams = {
   query?: Record<string, string | number | boolean | string[]>
@@ -79,16 +81,6 @@ type OAuthSettings = {
   scopes: string[]
   tokenUrl: string
   authUrl: string
-}
-
-type ParsedQuoteLine = {
-  sourceName: string
-  quantity: string
-  unit: string
-  unitPrice: string
-  totalPrice: string
-  leadTimeText: string
-  notes: string
 }
 
 type Participant = {
@@ -298,7 +290,7 @@ function extractTextFromCsv(raw: Buffer) {
   const rows = text
     .split(/\r?\n/)
     .slice(0, 300)
-    .map((line) => line.split(',').map((cell) => cell.trim()).filter(Boolean).join(' | '))
+    .map((line) => line.trim())
     .filter(Boolean)
   return {
     text: rows.join('\n'),
@@ -331,62 +323,6 @@ function parseLeadTimeDays(value: string) {
   if (!Number.isFinite(qty)) return undefined
   const unit = match[2].toLowerCase()
   return unit.startsWith('week') ? qty * 7 : qty
-}
-
-function parseQuoteLines(text: string): ParsedQuoteLine[] {
-  const results: ParsedQuoteLine[] = []
-  const lines = text.split(/\r?\n/).map((line) => line.replace(/\s+/g, ' ').trim().replace(/^[-\s]+|[-\s]+$/g, ''))
-  for (const line of lines) {
-    if (line.length < 4) continue
-    const lower = line.toLowerCase()
-    if (['quote', 'rfq', 'thank you', 'best,', 'regards'].some((marker) => lower.includes(marker)) && !line.includes('$')) {
-      continue
-    }
-    const prices = [...line.matchAll(/\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})|\d+(?:\.\d{1,2})?)/g)].map((match) => match[1] ?? '')
-    const qtyMatch = line.match(/\b(\d+(?:\.\d+)?)\b/)
-    const unitMatch = line.match(/\b(ea|each|pcs|pc|ft|lf|sf|yd|bag|box|roll|sheet|lb|lbs|ton|tons|gal|gallon)\b/i)
-    const leadMatch = line.match(/(\d+\s*(?:day|days|week|weeks|business days))/i)
-    if (prices.length === 0 && !leadMatch && tokenize(line).size < 3) continue
-    let sourceName = line
-      .replace(/\$?\s*\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?/g, '')
-      .replace(/\b\d+(?:\.\d+)?\b/g, '')
-      .replace(/\b(?:ea|each|pcs|pc|ft|lf|sf|yd|bag|box|roll|sheet|lb|lbs|ton|tons|gal|gallon)\b/gi, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .replace(/^[,:-]+|[,:-]+$/g, '')
-    if (!sourceName) sourceName = line.slice(0, 120)
-    results.push({
-      sourceName,
-      quantity: qtyMatch?.[1] ?? '',
-      unit: unitMatch?.[1] ?? '',
-      unitPrice: prices.at(-1)?.replaceAll('$', '').trim() ?? '',
-      totalPrice: '',
-      leadTimeText: leadMatch?.[1] ?? '',
-      notes: line,
-    })
-  }
-  return results.slice(0, 100)
-}
-
-function matchQuoteLineItem(
-  rfqItems: Array<{ id: string; requestedText: string; normalizedName: string }>,
-  sourceName: string,
-) {
-  const sourceTokens = tokenize(sourceName)
-  let bestId: string | undefined
-  let bestScore = 0
-  for (const item of rfqItems) {
-    const itemTokens = tokenize(item.normalizedName || item.requestedText)
-    if (sourceTokens.size === 0 || itemTokens.size === 0) continue
-    const overlap = [...sourceTokens].filter((token) => itemTokens.has(token)).length
-    if (overlap === 0) continue
-    const score = overlap / Math.max(itemTokens.size, 1)
-    if (score > bestScore) {
-      bestId = item.id
-      bestScore = score
-    }
-  }
-  return { rfqLineItemId: bestId, confidence: bestScore }
 }
 
 function getGoogleOAuthSettings(): OAuthSettings {
@@ -1262,7 +1198,23 @@ async function replaceEmailAttachments(
     const safeName = attachment.filename.replace(/[^a-zA-Z0-9._-]/g, '_') || `attachment-${randomUUID()}.bin`
     const filePath = path.join(targetDir, safeName)
     fs.writeFileSync(filePath, attachment.raw)
-    const extracted = extractTextFromAttachment(safeName, attachment.mimeType, attachment.raw)
+    let extracted: { text: string; confidence: number; sourceKind: string }
+    try {
+      const ingested = await ingestExternalQuoteFile({
+        file: {
+          name: safeName,
+          type: attachment.mimeType,
+          buffer: attachment.raw,
+        },
+      })
+      extracted = {
+        text: ingested.text,
+        confidence: ingested.text.trim() ? 0.85 : 0,
+        sourceKind: ingested.sourceKind,
+      }
+    } catch {
+      extracted = extractTextFromAttachment(safeName, attachment.mimeType, attachment.raw)
+    }
     await db.insert(rfqEmailAttachments).values({
       email_message_id: emailMessageId,
       filename: safeName,
@@ -1455,25 +1407,6 @@ async function bestVendorRequestMatch(
   return { row: bestRow, score: bestScore, reason: bestReason }
 }
 
-async function getRfqLineItemLookup(rfqId: string) {
-  const rows = await db
-    .select({
-      id: rfqLineItems.id,
-      requestedText: rfqLineItems.description,
-      normalizedName: rfqLineItems.specs,
-      quantity: rfqLineItems.quantity,
-      unit: rfqLineItems.unit,
-      sku: rfqLineItems.sku,
-      description: rfqLineItems.description,
-    })
-    .from(rfqLineItems)
-    .where(eq(rfqLineItems.rfq_id, rfqId))
-  return rows.map((row) => ({
-    ...row,
-    normalizedName: row.normalizedName || row.description,
-  }))
-}
-
 async function projectQuoteResponseToBid(rfqId: string, vendorRequestId: number, vendorName: string, vendorEmail: string, status: ContractorBid['status']) {
   const quoteLineRows = await db
     .select()
@@ -1601,19 +1534,29 @@ async function parseQuoteResponseForEmail(params: {
   const emailRow = (await db.select().from(rfqEmailMessages).where(eq(rfqEmailMessages.id, params.emailMessageId)))[0]
   if (!emailRow) return
 
-  const rfqItems = await getRfqLineItemLookup(params.rfqId)
+  const rfq = await getRFQById(params.rfqId)
+  if (!rfq) return
   const attachmentRows = await db
     .select({
+      filename: rfqEmailAttachments.filename,
       extractedText: rfqEmailAttachments.extracted_text,
       sourceKind: rfqEmailAttachments.source_kind,
     })
     .from(rfqEmailAttachments)
     .where(eq(rfqEmailAttachments.email_message_id, params.emailMessageId))
 
-  const bodyLines = parseQuoteLines(emailRow.text_body)
-  const attachmentLines = attachmentRows.flatMap((row) => parseQuoteLines(row.extractedText))
-  const allLines = attachmentLines.length > 0 ? attachmentLines : bodyLines
-  if (allLines.length === 0) {
+  const extracted = extractEmailQuoteIntake({
+    rfq,
+    vendorName: params.vendorName,
+    emailBody: emailRow.text_body,
+    attachments: attachmentRows.map((row) => ({
+      filename: row.filename,
+      sourceKind: row.sourceKind,
+      text: row.extractedText,
+    })),
+  })
+
+  if (extracted.lineItemResponses.length === 0) {
     await upsertReviewTask({
       contractorUserId: params.contractorUserId,
       rfqId: params.rfqId,
@@ -1621,14 +1564,19 @@ async function parseQuoteResponseForEmail(params: {
       emailMessageId: params.emailMessageId,
       taskType: 'quote_parse',
       title: 'Review quote response that could not be parsed automatically',
-      details: { reason: 'No quote line items were extracted from the email or its attachments.' },
+      details: {
+        reason: 'No quote line items were extracted from the email or its attachments.',
+        warnings: extracted.warnings.map((warning) => warning.message),
+      },
     })
     return
   }
 
-  const leadTime = emailRow.text_body.match(/(\d+\s*(?:day|days|week|weeks|business days))/i)?.[1] ?? ''
+  const leadTime = extracted.lineItemResponses
+    .map((line) => line.lead_time_days)
+    .filter((days) => days > 0)
+    .sort((a, b) => b - a)[0]
   const stamp = nowIso()
-  const sourceKind = attachmentRows[0]?.sourceKind ?? 'email'
   const existing = (await db
     .select()
     .from(rfqQuoteResponses)
@@ -1641,10 +1589,11 @@ async function parseQuoteResponseForEmail(params: {
       .set({
         rfq_id: params.rfqId,
         vendor_request_id: params.vendorRequestId,
-        source_kind: sourceKind,
+        source_kind: extracted.sourceKind,
         status: 'parsed',
-        confidence: 0.6,
-        lead_time_text: leadTime,
+        confidence: extracted.confidence,
+        lead_time_text: leadTime ? `${leadTime} days` : '',
+        notes: extracted.warnings.map((warning) => warning.message).join('\n'),
         updated_at: stamp,
       })
       .where(eq(rfqQuoteResponses.id, quoteResponseId))
@@ -1654,12 +1603,12 @@ async function parseQuoteResponseForEmail(params: {
       rfq_id: params.rfqId,
       vendor_request_id: params.vendorRequestId,
       email_message_id: params.emailMessageId,
-      source_kind: sourceKind,
+      source_kind: extracted.sourceKind,
       status: 'parsed',
-      confidence: 0.6,
+      confidence: extracted.confidence,
       currency: 'USD',
-      lead_time_text: leadTime,
-      notes: '',
+      lead_time_text: leadTime ? `${leadTime} days` : '',
+      notes: extracted.warnings.map((warning) => warning.message).join('\n'),
       created_at: stamp,
       updated_at: stamp,
     })
@@ -1669,25 +1618,20 @@ async function parseQuoteResponseForEmail(params: {
       .where(eq(rfqQuoteResponses.email_message_id, params.emailMessageId)))[0]!.id
   }
 
-  let lowConfidence = Boolean(params.forceNeedsReview)
-  for (const line of allLines) {
-    const matched = matchQuoteLineItem(rfqItems, line.sourceName)
-    const confidence = Math.min(0.95, 0.42 + matched.confidence * 0.45 + (line.unitPrice ? 0.08 : 0))
-    if (!matched.rfqLineItemId || confidence < 0.6) {
-      lowConfidence = true
-    }
+  const lowConfidence = Boolean(params.forceNeedsReview) || extracted.needsReview
+  for (const line of extracted.lineItemResponses) {
     await db.insert(rfqQuoteLineItems).values({
       quote_response_id: quoteResponseId,
-      rfq_line_item_id: matched.rfqLineItemId ?? null,
-      source_name: line.sourceName,
-      normalized_name: line.sourceName,
-      quantity: line.quantity,
+      rfq_line_item_id: line.line_item_id,
+      source_name: line.description || line.sku || line.line_item_id,
+      normalized_name: line.description || line.sku || line.line_item_id,
+      quantity: String(line.quoted_quantity ?? line.quantity),
       unit: line.unit,
-      unit_price: line.unitPrice,
-      total_price: line.totalPrice,
-      lead_time_text: line.leadTimeText,
-      notes: line.notes,
-      confidence,
+      unit_price: String(line.unit_price || ''),
+      total_price: String(line.total_price || ''),
+      lead_time_text: line.lead_time_days ? `${line.lead_time_days} days` : '',
+      notes: [line.quoted_product_details, line.notes].filter(Boolean).join(' '),
+      confidence: extracted.confidence,
       created_at: stamp,
       updated_at: stamp,
     })
@@ -1705,12 +1649,15 @@ async function parseQuoteResponseForEmail(params: {
       quoteResponseId,
       taskType: 'quote_line_match',
       title: 'Review low-confidence quote line item matches',
-      details: { reason: 'At least one parsed quote line item could not be confidently matched to an RFQ material.' },
+      details: {
+        reason: 'At least one parsed quote line item could not be confidently matched to an RFQ material.',
+        warnings: extracted.warnings.map((warning) => warning.message),
+      },
     })
     await projectQuoteResponseToBid(params.rfqId, params.vendorRequestId, params.vendorName, params.vendorEmail, 'under_review')
   } else {
     await db.update(rfqQuoteResponses)
-      .set({ status: 'compared', confidence: 0.82, updated_at: stamp })
+      .set({ status: 'compared', confidence: extracted.confidence, updated_at: stamp })
       .where(eq(rfqQuoteResponses.id, quoteResponseId))
     await closeRelatedReviewTasks({ emailMessageId: params.emailMessageId, quoteResponseId })
     await projectQuoteResponseToBid(params.rfqId, params.vendorRequestId, params.vendorName, params.vendorEmail, 'pending')

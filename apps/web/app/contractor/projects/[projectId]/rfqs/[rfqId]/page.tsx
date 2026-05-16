@@ -37,10 +37,10 @@ export default async function RFQDetailPage({
   searchParams,
 }: {
   params: Promise<{ projectId: string; rfqId: string }>
-  searchParams?: Promise<{ section?: string }>
+  searchParams?: Promise<{ section?: string; importStatus?: string; importMessage?: string }>
 }) {
   const { projectId, rfqId } = await params
-  const { section } = (await searchParams) ?? {}
+  const { section, importStatus, importMessage } = (await searchParams) ?? {}
   const activeSection =
     section === 'message-center'
         ? 'message-center'
@@ -151,6 +151,15 @@ export default async function RFQDetailPage({
               </Link>
             ))}
           </nav>
+          {importMessage && (
+            <div className="mb-3 rounded-lg border px-3 py-2 text-xs font-semibold" style={{
+              borderColor: importStatus === 'fallback' ? '#fdc89a' : '#a8d5ba',
+              background: importStatus === 'fallback' ? '#fff7ed' : '#eef7f1',
+              color: importStatus === 'fallback' ? '#a85c2a' : '#2d6a4f',
+            }}>
+              {importMessage}
+            </div>
+          )}
           <div className="grid gap-2 border-t py-3 sm:grid-cols-4" style={{ borderColor: '#d9e0dc' }}>
             {[
               { label: 'Quote deadline', value: rfq.bid_deadline ?? 'Not set' },

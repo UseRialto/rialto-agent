@@ -19,6 +19,7 @@ import {
   proposeQuoteComparisonLowestTotalPriceColumn,
   proposeQuoteComparisonSelectionState,
   proposeQuoteComparisonSheetStructureEdits,
+  proposeQuoteComparisonSort,
 } from '../tools/quote-comparison-agent-tools.js'
 import {
   analyzeWorkbookAnomalies,
@@ -92,6 +93,7 @@ export class OpenAIAgentsProductRuntime implements ProductAgentRuntime {
         'Use quoteComparison_proposeLowestTotalPriceColumn for requests that ask for the lowest total price data to be added, filled, copied, or placed into the sheet.',
         'Use quoteComparison_proposeDerivedColumns for requests to add calculated columns such as normalized price, unit price per 1k, recommendation, or summary columns.',
         'Use quoteComparison_proposeHighlights with lowest-price-per-row for cheapest-valid quote highlighting and missing-lead-times for missing lead time review.',
+        'Use quoteComparison_proposeSort for Excel-like row sorting requests. It maps text sort to Sort A to Z / Sort Z to A and numeric sort to Sort Smallest to Largest / Sort Largest to Smallest.',
         'Use workbook tools for uploaded or spreadsheet-shaped Quote Comparison work that needs workbook overview, range reads, query-like filtering, missing quote detection, partial-vs-total quote reasoning, recommendations, or JSON patch preview metadata.',
         'When the user wants to add, import, merge, or place an attached Excel vendor response into the current comparison, call quoteComparison_mergeAttachedVendorWorkbook. The user may phrase this vaguely, such as "add in this vendor"; use the attached workbook and current sheet context.',
         'If there is exactly one Excel attachment in Quote Comparison context and the user says to bring, add, import, merge, fill, place, or use "this" quote/vendor/bid/response/spreadsheet/file in the comparison, call quoteComparison_mergeAttachedVendorWorkbook instead of asking what they mean.',
@@ -477,6 +479,19 @@ function quoteComparisonTools(operationRuntime: SpreadsheetOperationRuntime) {
       }),
       execute(input, context, details) {
         return recordPatchFragmentTool(rialtoContext(context), details, 'quoteComparison.proposeCellEdits', input, proposeQuoteComparisonCellEdits(input))
+      },
+    }),
+    tool({
+      name: 'quoteComparison_proposeSort',
+      description: 'Return a patch fragment for Excel-like row sorting by one visible column. Use text labels Sort A to Z / Sort Z to A and numeric labels Sort Smallest to Largest / Sort Largest to Smallest. Does not commit changes.',
+      parameters: z.object({
+        colKey: z.string(),
+        direction: z.enum(['asc', 'desc']),
+        valueKind: z.enum(['text', 'number', 'date', 'auto']).optional(),
+        summary: z.string().optional(),
+      }),
+      execute(input, context, details) {
+        return recordPatchFragmentTool(rialtoContext(context), details, 'quoteComparison.proposeSort', input, proposeQuoteComparisonSort(input))
       },
     }),
     tool({

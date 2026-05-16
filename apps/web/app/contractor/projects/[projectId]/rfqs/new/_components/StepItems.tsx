@@ -234,6 +234,7 @@ export function StepItems({
   const [selectedRowKeys, setSelectedRowKeys] = useState<Set<string>>(new Set())
   const [editingColKey, setEditingColKey] = useState<string | null>(null)
   const [editingColValue, setEditingColValue] = useState('')
+  const [materialColumnWidths, setMaterialColumnWidths] = useState<Record<string, number>>({})
   const spreadsheetViewportRef = useRef<HTMLDivElement>(null)
   const spreadsheetScrollbarRef = useRef<HTMLDivElement>(null)
   const [spreadsheetScrollWidth, setSpreadsheetScrollWidth] = useState(1)
@@ -496,12 +497,14 @@ export function StepItems({
   const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0]
   const spreadsheetAttributes = items[0]?.attributes ?? (fieldTemplate.length ? fieldsToAttributes(fieldTemplate) : buildLineItemAttributes(category))
   const vendorResponseColumns = [...CORE_VENDOR_RESPONSE_COLUMNS, ...vendorResponseFields.map((field) => field.label)]
+  const longestItemText = Math.max(0, ...items.map((item) => `${item.sku} ${item.description}`.trim().length))
+  const smartDescriptionWidth = Math.max(360, Math.min(620, Math.round(longestItemText * 7.2 + 44)))
   const spreadsheetColumnWidths = [
-    40,
-    54,
-    360,
-    108,
-    132,
+    materialColumnWidths.__select ?? 40,
+    materialColumnWidths.__row ?? 54,
+    materialColumnWidths.__item ?? smartDescriptionWidth,
+    materialColumnWidths.__qty ?? 108,
+    materialColumnWidths.__unit ?? 132,
     ...spreadsheetAttributes.map(() => 184),
     ...(isCustomizingFields ? [128] : []),
     ...(requestType === 'rfp' && isVisible('specifications') ? [240, 260] : []),
@@ -514,6 +517,24 @@ export function StepItems({
   ]
   const spreadsheetWidth = spreadsheetColumnWidths.reduce((sum, width) => sum + width, 0)
   const spreadsheetColumns = spreadsheetColumnWidths.map((width) => `${width}px`).join(' ')
+
+  function startMaterialColumnResize(key: string, startWidth: number, event: React.MouseEvent) {
+    event.preventDefault()
+    event.stopPropagation()
+    const startX = event.clientX
+    function onMove(moveEvent: MouseEvent) {
+      setMaterialColumnWidths((prev) => ({
+        ...prev,
+        [key]: Math.max(64, startWidth + (moveEvent.clientX - startX)),
+      }))
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   useEffect(() => {
     function updateSpreadsheetScrollWidth() {
@@ -873,16 +894,28 @@ export function StepItems({
                   className="h-4 w-4 cursor-pointer rounded accent-[#1e3a2f]"
                 />
               </div>
-              {['#', 'Item Description or SKU', 'Qty', 'Units'].map((heading, index) => (
+              {[
+                { key: '__row', heading: '#', width: materialColumnWidths.__row ?? 54 },
+                { key: '__item', heading: 'Item Description or SKU', width: materialColumnWidths.__item ?? smartDescriptionWidth },
+                { key: '__qty', heading: 'Qty', width: materialColumnWidths.__qty ?? 108 },
+                { key: '__unit', heading: 'Units', width: materialColumnWidths.__unit ?? 132 },
+              ].map(({ key, heading, width }, index) => (
                 <div
                   key={heading}
                   className={cn(
-                    'truncate whitespace-nowrap border-r px-3 py-3',
+                    'relative truncate whitespace-nowrap border-r px-3 py-3',
                     index <= 1 && 'sticky z-30 shadow-[8px_0_14px_-16px_rgba(15,23,42,0.5)]',
                   )}
                   style={{ borderColor: '#e2d9cf', background: '#ede8e2', left: index === 0 ? 40 : index === 1 ? 94 : undefined }}
                 >
                   {heading}
+                  <span
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label={`Resize ${heading} column`}
+                    onMouseDown={(event) => startMaterialColumnResize(key, width, event)}
+                    className="absolute right-0 top-0 h-full w-2 cursor-col-resize"
+                  />
                 </div>
               ))}
               {spreadsheetAttributes.map((attribute) => (

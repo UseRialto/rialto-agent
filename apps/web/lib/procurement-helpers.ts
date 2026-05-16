@@ -1,5 +1,6 @@
 import type { ContractorBid, ContractorRFQ } from '@/lib/types/contractor'
 import type { BidFulfillmentSummary, ComplianceDeclaration, ProcurementRequirement, RequestRiskFlag } from '@/lib/types/procurement'
+import { needsMoreProductDetail } from './procurement/product-specificity'
 
 export function computeFulfillmentSummary(
   rfq: ContractorRFQ,
@@ -51,6 +52,13 @@ export function deriveBidRiskFlags(rfq: ContractorRFQ, bid: ContractorBid): Requ
     if (missing.length > 0) {
       flags.push({ code: 'missing_requirements', label: 'Missing procurement requirements', severity: 'high' })
     }
+  }
+  const requestedById = new Map(rfq.line_items.map((item) => [item.id, item]))
+  if (bid.line_item_responses.some((response) => {
+    const requested = requestedById.get(response.line_item_id)
+    return requested ? needsMoreProductDetail(requested, response) : false
+  })) {
+    flags.push({ code: 'needs_product_detail', label: 'Needs detailed product ID', severity: 'high' })
   }
   return flags
 }

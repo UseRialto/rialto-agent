@@ -1,16 +1,16 @@
 'use client'
 
-import { Fragment, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { Clock3, Columns3, Eraser, FileSpreadsheet, Lightbulb, Redo2, RefreshCw, Rows3, Undo2 } from 'lucide-react'
+import { Clock3, Columns3, Eraser, FileSpreadsheet, Lightbulb, Loader2, Plus, Redo2, RefreshCw, Rows3, Trash2, Undo2, UploadCloud } from 'lucide-react'
 import type { ContractorBid, ContractorRFQ } from '@/lib/types/contractor'
 import type { BidSpecComplianceEvidence, BidSpecComplianceItem, ProjectSpecDocumentSummary } from '@/lib/types/procurement'
 import { buildLiveQuoteComparisonSummary } from '@/lib/procurement/quote-comparison'
 import { submitComparisonExport, type ComparisonExportFormat } from '@/lib/procurement/comparison-export-client'
 import { workbookVersionMetadataFromApprovedComparisonPatch } from '@/lib/procurement/comparison-agent-tools'
 import { buildComparisonSheetSnapshot } from '@/lib/procurement/comparison-sheet-snapshot'
-import { PRICING_MISTAKE_HIGHLIGHT } from '@/lib/procurement/comparison-analytics'
+import { buildQuoteImportAnalyticsHighlights, DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT, PRICING_MISTAKE_HIGHLIGHT } from '@/lib/procurement/comparison-analytics'
 import {
   addNegotiationMessageAction,
   createRemainderRFQAction,
@@ -1332,6 +1332,31 @@ function moneyShort(value: number | null | undefined) {
   return `$${Math.round(value).toLocaleString()}`
 }
 
+function parseSheetNumber(value: string | undefined) {
+  const normalized = String(value ?? '').replace(/[$,\sA-Za-z]/g, '')
+  const number = Number(normalized)
+  return Number.isFinite(number) ? number : undefined
+}
+
+function formatSheetMoney(value: number) {
+  return value.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+    maximumFractionDigits: 2,
+  })
+}
+
+function formatUploadBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function uploadFileKey(file: File) {
+  return `${file.name}:${file.size}:${file.lastModified}`
+}
+
 interface SheetColumn {
   key: string
   label: string
@@ -1614,10 +1639,17 @@ function BidExcelSheet({
   userKey: string
   specDocuments: ProjectSpecDocumentSummary[]
 }) {
+  const router = useRouter()
   const baseItems = rfq.line_items
 
   const { view, versions, canUndo, canRedo, replaceView, deleteColumns, hideColumns, showColumns, deleteLineItems, hideLineItems, showLineItems, addHighlights, removeHighlights, clearHighlights, addDerivedColumns, removeDerivedColumns, setColumnWidth, addManualColumns, addManualLineItems, setCellOverride, setCellOverrides, setColumnLabel, setLineItemOrder, restoreVersion, undo, redo } = useComparisonSheetView(userKey, rfq.id)
   const [previewPatch, setPreviewPatch] = useState<ComparisonViewPatch | null>(null)
+  const [priceDifferenceThresholdPct, setPriceDifferenceThresholdPct] = useState(DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT)
+  const quoteImportInputRef = useRef<HTMLInputElement | null>(null)
+  const [quoteImportOpen, setQuoteImportOpen] = useState(false)
+  const [quoteImportFiles, setQuoteImportFiles] = useState<File[]>([])
+  const [quoteImportBusy, setQuoteImportBusy] = useState(false)
+  const [quoteImportError, setQuoteImportError] = useState('')
 
   const items = useMemo(() => {
     let next = [...baseItems]
@@ -1658,6 +1690,10 @@ function BidExcelSheet({
     return ordered.filter((it) => !(view.deletedLineItemIds ?? []).includes(it.id) && !view.hiddenLineItemIds.includes(it.id))
   }, [items, view.deletedLineItemIds, view.hiddenLineItemIds, view.lineItemOrder])
   const comparisonSummary = useMemo(() => buildLiveQuoteComparisonSummary(rfq, bids), [rfq, bids])
+  const visibleHighlights = useMemo(() => [
+    ...view.highlights.filter((highlight) => highlight.color.toLowerCase() !== PRICING_MISTAKE_HIGHLIGHT),
+    ...buildQuoteImportAnalyticsHighlights(rfq, bids, { majorUnitPriceDifferencePct: priceDifferenceThresholdPct }),
+  ], [bids, priceDifferenceThresholdPct, rfq, view.highlights])
   const fullQuoteCount = comparisonSummary.fullQuoteCount
   const lowestBid = comparisonSummary.lowestCompleteBid
   const fastestBid = comparisonSummary.fastestBid
@@ -1674,7 +1710,7 @@ function BidExcelSheet({
   // Highlight resolution: build a map of (rowKey, colKey) -> color
   const highlightMap = useMemo(() => {
     const map = new Map<string, string>()
-    for (const h of view.highlights) {
+    for (const h of visibleHighlights) {
       if (h.selector.kind === 'cell') {
         map.set(`${h.selector.rowKey}|${h.selector.colKey}`, h.color)
       } else {
@@ -1720,14 +1756,14 @@ function BidExcelSheet({
       }
     }
     return map
-  }, [view.highlights, visibleItems, bids])
+  }, [visibleHighlights, visibleItems, bids])
   const highlightNoteMap = useMemo(() => {
     const map = new Map<string, string>()
-    for (const h of view.highlights) {
+    for (const h of visibleHighlights) {
       if (h.selector.kind === 'cell' && h.note) map.set(`${h.selector.rowKey}|${h.selector.colKey}`, h.note)
     }
     return map
-  }, [view.highlights])
+  }, [visibleHighlights])
 
   const previewCellMap = useMemo(() => {
     const map = new Map<string, string>()
@@ -1816,7 +1852,29 @@ function BidExcelSheet({
     return map
   }, [visibleItems, bids])
 
-  const getCellText = (item: typeof items[number], col: SheetColumn): string => view.cellOverrides?.[`${item.id}|${col.key}`] ?? valueForCol(item, col, bids)
+  const getCellText = useCallback((item: typeof items[number], col: SheetColumn): string => (
+    view.cellOverrides?.[`${item.id}|${col.key}`] ?? valueForCol(item, col, bids)
+  ), [bids, view.cellOverrides])
+
+  function formulaAwareCellUpdates(rowKey: string, colKey: string, value: string) {
+    const updates = [{ rowKey, colKey, value }]
+    const col = allCols.find((entry) => entry.key === colKey)
+    const item = items.find((entry) => entry.id === rowKey)
+    if (col?.kind !== 'vendor' || col.vendorMetric !== 'unit_price' || !col.vendorId || !item) return updates
+    const totalCol = allCols.find((entry) =>
+      entry.kind === 'vendor' &&
+      entry.vendorId === col.vendorId &&
+      entry.vendorMetric === 'total'
+    )
+    const unitPrice = parseSheetNumber(value)
+    if (!totalCol || unitPrice == null || !Number.isFinite(item.quantity)) return updates
+    updates.push({
+      rowKey,
+      colKey: totalCol.key,
+      value: formatSheetMoney(unitPrice * item.quantity),
+    })
+    return updates
+  }
 
   const [editingCell, setEditingCell] = useState<{ rowKey: string; colKey: string } | null>(null)
   const [editingHeader, setEditingHeader] = useState<{ colKey: string } | null>(null)
@@ -1828,6 +1886,7 @@ function BidExcelSheet({
   const [historyMenuOpen, setHistoryMenuOpen] = useState(false)
   const [rangeStart, setRangeStart] = useState<{ r: number; c: number } | null>(null)
   const [isDraggingRange, setIsDraggingRange] = useState(false)
+  const manualInsertCounterRef = useRef(0)
 
   function startCellEdit(item: typeof items[number], col: SheetColumn) {
     setEditingCell({ rowKey: item.id, colKey: col.key })
@@ -1836,7 +1895,7 @@ function BidExcelSheet({
 
   function commitCellEdit() {
     if (!editingCell) return
-    setCellOverride(editingCell.rowKey, editingCell.colKey, draftValue)
+    setCellOverrides(formulaAwareCellUpdates(editingCell.rowKey, editingCell.colKey, draftValue))
     setEditingCell(null)
   }
 
@@ -1884,7 +1943,7 @@ function BidExcelSheet({
         ? visibleCols[anchorIndex - 1]?.key
         : '__before_first__'
     const col: ManualColumn = {
-      key: `col-${Date.now()}`,
+      key: `col-${manualInsertCounterRef.current += 1}`,
       label: 'New Column',
       insertAfterColKey,
     }
@@ -1900,7 +1959,7 @@ function BidExcelSheet({
         ? visibleItems[rowIndex - 1]?.id
         : '__before_first__'
     const row: ManualLineItem = {
-      id: `manual-row-${Date.now()}`,
+      id: `manual-row-${manualInsertCounterRef.current += 1}`,
       sku: '',
       description: '',
       quantity: 0,
@@ -1950,7 +2009,7 @@ function BidExcelSheet({
       return
     }
     const item = visibleItems[sel.r - dataStartRow]
-    if (col && item) setCellOverride(item.id, col.key, value)
+    if (col && item) setCellOverrides(formulaAwareCellUpdates(item.id, col.key, value))
   }
 
   function selectedDataCells() {
@@ -2015,7 +2074,7 @@ function BidExcelSheet({
           return
         }
         const item = visibleItems[r - dataStartRow]
-        if (item) cellUpdates.push({ rowKey: item.id, colKey: col.key, value })
+      if (item) cellUpdates.push(...formulaAwareCellUpdates(item.id, col.key, value))
       })
     })
     if (cellUpdates.length > 0) setCellOverrides(cellUpdates)
@@ -2033,6 +2092,28 @@ function BidExcelSheet({
         ? an - bn
         : av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' })
       return direction === 'asc' ? result : -result
+    })
+    setLineItemOrder(sorted.map((item) => item.id))
+    setContextMenu(null)
+  }
+
+  function sortLabelsForColumn(colKey: string | undefined) {
+    const col = colKey ? allCols.find((entry) => entry.key === colKey) : undefined
+    const sample = col ? visibleItems.map((item) => getCellText(item, col)).find((value) => value.trim()) : ''
+    const numeric = col?.align === 'right' || parseSheetNumber(sample) != null
+    return numeric
+      ? { asc: 'Sort Smallest to Largest', desc: 'Sort Largest to Smallest' }
+      : { asc: 'Sort A to Z', desc: 'Sort Z to A' }
+  }
+
+  function sortRowsByCellColor(rowKey: string | undefined, colKey: string | undefined) {
+    if (!rowKey || !colKey) { setContextMenu(null); return }
+    const targetColor = highlightMap.get(`${rowKey}|${colKey}`)
+    if (!targetColor) { setContextMenu(null); return }
+    const sorted = [...items].sort((a, b) => {
+      const ah = highlightMap.get(`${a.id}|${colKey}`) === targetColor ? 0 : 1
+      const bh = highlightMap.get(`${b.id}|${colKey}`) === targetColor ? 0 : 1
+      return ah - bh
     })
     setLineItemOrder(sorted.map((item) => item.id))
     setContextMenu(null)
@@ -2125,17 +2206,15 @@ function BidExcelSheet({
 
   // Cell selection — bounds extend through the empty filler rows + cols.
   const [sel, setSel] = useState<{ r: number; c: number }>({ r: dataStartRow, c: 0 })
-  const [openSpecBubble, setOpenSpecBubble] = useState<{ itemId: string; bidId: string } | null>(null)
-  const [openPricingMistakeBubble, setOpenPricingMistakeBubble] = useState<{ itemId: string; colKey: string } | null>(null)
-  const selectedRange = useMemo(() => {
-    const start = rangeStart ?? sel
-    return {
-      r1: Math.min(start.r, sel.r),
-      r2: Math.max(start.r, sel.r),
-      c1: Math.min(start.c, sel.c),
-      c2: Math.max(start.c, sel.c),
-    }
-  }, [rangeStart, sel])
+  const [openSpecBubble, setOpenSpecBubble] = useState<{ itemId: string; bidId: string; anchor: { top: number; left: number } } | null>(null)
+  const [openPricingMistakeBubble, setOpenPricingMistakeBubble] = useState<{ itemId: string; colKey: string; anchor: { top: number; left: number } } | null>(null)
+  const rangeAnchor = rangeStart ?? sel
+  const selectedRange = {
+    r1: Math.min(rangeAnchor.r, sel.r),
+    r2: Math.max(rangeAnchor.r, sel.r),
+    c1: Math.min(rangeAnchor.c, sel.c),
+    c2: Math.max(rangeAnchor.c, sel.c),
+  }
 
   function isInSelectedRange(r: number, c: number) {
     return r >= selectedRange.r1 && r <= selectedRange.r2 && c >= selectedRange.c1 && c <= selectedRange.c2
@@ -2147,27 +2226,36 @@ function BidExcelSheet({
     const response = bid?.line_item_responses.find((entry) => entry.line_item_id === openSpecBubble.itemId)
     if (!item || !bid || !response?.is_alternate) return undefined
     const finding = lineSpecFinding(bid, item.id)
-    return finding?.review_kind === 'substitution' ? { finding, item, bid, response } : undefined
+    return finding?.review_kind === 'substitution' ? { finding, item, bid, response, anchor: openSpecBubble.anchor } : undefined
   }, [bids, openSpecBubble, visibleItems])
   const activePricingMistakeBubble = useMemo(() => {
     if (!openPricingMistakeBubble) return undefined
     const item = visibleItems.find((entry) => entry.id === openPricingMistakeBubble.itemId)
     const col = visibleCols.find((entry) => entry.key === openPricingMistakeBubble.colKey)
-    const highlight = view.highlights.find((entry) =>
+    const highlight = visibleHighlights.find((entry) =>
       entry.selector.kind === 'cell' &&
       entry.selector.rowKey === openPricingMistakeBubble.itemId &&
       entry.selector.colKey === openPricingMistakeBubble.colKey &&
       entry.color.toLowerCase() === PRICING_MISTAKE_HIGHLIGHT,
     )
     if (!item || !col || !highlight) return undefined
-    return { item, col, highlight }
-  }, [openPricingMistakeBubble, view.highlights, visibleCols, visibleItems])
+    return { item, col, highlight, anchor: openPricingMistakeBubble.anchor }
+  }, [openPricingMistakeBubble, visibleHighlights, visibleCols, visibleItems])
 
   useEffect(() => {
     setSel((s) => ({ r: Math.min(s.r, lastEmptyRow), c: Math.min(s.c, Math.max(0, totalGridCols - 1)) }))
   }, [lastEmptyRow, totalGridCols])
 
   const containerRef = useRef<HTMLDivElement>(null)
+
+  function bubbleAnchor(target: HTMLElement) {
+    const rect = target.getBoundingClientRect()
+    const width = Math.min(460, window.innerWidth - 24)
+    return {
+      top: Math.min(Math.max(12, rect.bottom + 8), window.innerHeight - 220),
+      left: Math.min(Math.max(12, rect.left), window.innerWidth - width - 12),
+    }
+  }
 
   useEffect(() => {
     if (!contextMenu) return
@@ -2318,6 +2406,11 @@ function BidExcelSheet({
     if (!item) return ''
     const previewValue = previewCellMap.get(`${item.id}|${col.key}`)
     if (previewValue !== undefined) return previewValue
+    if (col.kind === 'vendor' && col.vendorMetric === 'total' && col.vendorId) {
+      const unitCol = allCols.find((entry) => entry.kind === 'vendor' && entry.vendorId === col.vendorId && entry.vendorMetric === 'unit_price')
+      const unitValue = unitCol ? getCellText(item, unitCol) : ''
+      if (unitValue) return `=${unitValue}*${item.quantity}`
+    }
     return getCellText(item, col)
   }
 
@@ -2431,7 +2524,7 @@ function BidExcelSheet({
       if (!anyValue) set.add(col.key)
     }
     return set
-  }, [activeCols, visibleItems, view.cellOverrides, bids])
+  }, [activeCols, visibleItems, getCellText])
 
   const sheetSchema = useMemo(() => ({
     columns: activeCols.map((c) => ({
@@ -2449,7 +2542,7 @@ function BidExcelSheet({
       values: Object.fromEntries(activeCols.map((col) => [col.key, getCellText(i, col)])),
     })),
     vendors: bids.map((b) => ({ id: b.id, name: b.vendor_name })),
-  }), [activeCols, items, bids, emptyColumnKeys])
+  }), [activeCols, items, bids, emptyColumnKeys, getCellText])
 
   const comparisonSheetSnapshot = useMemo(() => buildComparisonSheetSnapshot({
     sheetId: `sheet:${rfq.id}`,
@@ -2482,6 +2575,47 @@ function BidExcelSheet({
   const hiddenColEntries = view.hiddenColumnKeys
     .map((key) => activeCols.find((c) => c.key === key))
     .filter((c): c is SheetColumn => Boolean(c))
+
+  function addQuoteImportFiles(fileList: FileList | null) {
+    if (!fileList) return
+    const incoming = Array.from(fileList)
+    setQuoteImportFiles((current) => {
+      const existing = new Set(current.map(uploadFileKey))
+      return [
+        ...current,
+        ...incoming.filter((file) => {
+          const key = uploadFileKey(file)
+          if (existing.has(key)) return false
+          existing.add(key)
+          return true
+        }),
+      ]
+    })
+  }
+
+  async function submitAdditionalQuoteImport() {
+    if (quoteImportFiles.length === 0 || quoteImportBusy) return
+    setQuoteImportBusy(true)
+    setQuoteImportError('')
+    try {
+      const formData = new FormData()
+      quoteImportFiles.forEach((file) => formData.append('files', file))
+      const response = await fetch(`/api/rfqs/${rfq.id}/external-quote-import`, {
+        method: 'POST',
+        body: formData,
+      })
+      const json = await response.json() as { redirectTo?: string; error?: string }
+      if (!response.ok || !json.redirectTo) throw new Error(json.error ?? 'Import failed.')
+      setQuoteImportFiles([])
+      setQuoteImportOpen(false)
+      router.push(json.redirectTo)
+      router.refresh()
+    } catch (error) {
+      setQuoteImportError(error instanceof Error ? error.message : 'Import failed.')
+    } finally {
+      setQuoteImportBusy(false)
+    }
+  }
 
   return (
     <div className="relative flex h-full min-h-0 flex-col" style={{ background: '#eef3f0' }}>
@@ -2563,6 +2697,15 @@ function BidExcelSheet({
                 </div>
               )}
             </div>
+            <button
+              type="button"
+              onClick={() => setQuoteImportOpen(true)}
+              className="flex h-8 items-center gap-1.5 rounded-md border bg-white px-2.5 text-xs font-bold transition"
+              style={{ borderColor: '#d9e0dc', color: '#4a6358' }}
+            >
+              <UploadCloud className="h-4 w-4" aria-hidden="true" />
+              Add Quote
+            </button>
             <div className="relative" onClick={(event) => event.stopPropagation()}>
               <button
                 type="button"
@@ -2587,6 +2730,109 @@ function BidExcelSheet({
             )}
           </div>
         </div>
+
+        {quoteImportOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
+            <button
+              type="button"
+              aria-label="Close quote import"
+              className="absolute inset-0 bg-black/45"
+              onClick={() => {
+                if (!quoteImportBusy) setQuoteImportOpen(false)
+              }}
+            />
+            <div className="relative flex max-h-[86vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl" style={{ border: '1px solid #d9e0dc' }}>
+              <div className="flex items-start justify-between gap-4 border-b px-5 py-4" style={{ borderColor: '#d9e0dc' }}>
+                <div>
+                  <p className="text-xs font-semibold uppercase" style={{ color: '#587067' }}>Quote Import</p>
+                  <h3 className="mt-1 text-lg font-bold" style={{ color: '#1e3a2f' }}>Add quotes to this comparison</h3>
+                </div>
+                <button
+                  type="button"
+                  disabled={quoteImportBusy}
+                  onClick={() => setQuoteImportOpen(false)}
+                  className="rounded-md border px-3 py-1.5 text-xs font-bold disabled:opacity-60"
+                  style={{ borderColor: '#d9e0dc', color: '#4a6358' }}
+                >
+                  Close
+                </button>
+              </div>
+              <div className="overflow-y-auto p-5">
+                <input
+                  ref={quoteImportInputRef}
+                  type="file"
+                  multiple
+                  accept=".pdf,.csv,.tsv,.xlsx,.xls,.xsl,.xml,.txt,application/pdf,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/xml,application/xml,text/plain"
+                  className="sr-only"
+                  onChange={(event) => {
+                    addQuoteImportFiles(event.currentTarget.files)
+                    event.currentTarget.value = ''
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => quoteImportInputRef.current?.click()}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault()
+                    addQuoteImportFiles(event.dataTransfer.files)
+                  }}
+                  className="flex min-h-40 w-full flex-col items-center justify-center rounded-xl border-2 border-dashed px-5 py-7 text-center"
+                  style={{ borderColor: '#d6c9bd', background: '#fbfaf8', color: '#4a6358' }}
+                >
+                  <UploadCloud className="h-8 w-8" style={{ color: '#2d6a4f' }} />
+                  <span className="mt-3 text-sm font-bold">Drop additional quote files here</span>
+                  <span className="mt-1 text-xs" style={{ color: '#8a9e96' }}>New vendor quote files will be imported into the current comparison.</span>
+                </button>
+                {quoteImportFiles.length > 0 && (
+                  <div className="mt-4 grid gap-2">
+                    {quoteImportFiles.map((file) => {
+                      const key = uploadFileKey(file)
+                      return (
+                        <div key={key} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2" style={{ borderColor: '#e2d9cf' }}>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold" style={{ color: '#1e3a2f' }}>{file.name}</p>
+                            <p className="text-xs" style={{ color: '#8a9e96' }}>{formatUploadBytes(file.size)}</p>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={quoteImportBusy}
+                            onClick={() => setQuoteImportFiles((current) => current.filter((entry) => uploadFileKey(entry) !== key))}
+                            className="grid h-8 w-8 shrink-0 place-items-center rounded-md disabled:opacity-60"
+                            style={{ color: '#b84a3a' }}
+                            aria-label={`Remove ${file.name}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+                {quoteImportError && (
+                  <div className="mt-4 rounded-lg border px-3 py-2 text-sm" style={{ borderColor: '#f5c6c6', background: '#fff7f7', color: '#9b2c2c' }}>
+                    {quoteImportError}
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center justify-between gap-3 border-t px-5 py-4" style={{ borderColor: '#d9e0dc' }}>
+                <span className="text-xs font-semibold" style={{ color: '#587067' }}>
+                  {quoteImportFiles.length} file{quoteImportFiles.length === 1 ? '' : 's'} selected
+                </span>
+                <button
+                  type="button"
+                  disabled={quoteImportFiles.length === 0 || quoteImportBusy}
+                  onClick={() => void submitAdditionalQuoteImport()}
+                  className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  style={{ background: '#fa6b04' }}
+                >
+                  {quoteImportBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                  {quoteImportBusy ? 'Importing...' : 'Add to Comparison'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="flex min-h-9 items-stretch border-t" style={{ borderColor: '#d9e0dc', background: '#ffffff' }}>
           <div className="flex items-center justify-center" style={{ width: 94, borderRight: baseBorder, fontSize: 12, fontWeight: 700, color: '#2563eb', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
@@ -2639,6 +2885,20 @@ function BidExcelSheet({
             <span className="inline-block h-3 w-6 rounded-sm" style={{ background: PRICING_MISTAKE_HIGHLIGHT, border: '1px solid #c084fc' }} />
             Pricing mistake
           </span>
+          <label className="inline-flex items-center gap-1.5">
+            <span>Threshold</span>
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={priceDifferenceThresholdPct}
+              onChange={(event) => setPriceDifferenceThresholdPct(Math.max(1, Number(event.target.value) || DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT))}
+              className="h-6 w-16 rounded border bg-white px-1.5 text-[11px] font-semibold outline-none"
+              style={{ borderColor: '#d9e0dc', color: '#1e3a2f' }}
+              aria-label="Pricing mistake unit price difference threshold percent"
+            />
+            <span>% unit price difference</span>
+          </label>
         </div>
 
         {(hiddenColEntries.length > 0 || view.hiddenLineItemIds.length > 0) && (
@@ -2660,8 +2920,10 @@ function BidExcelSheet({
 
       {activeSpecBubble && (
         <div
-          className="absolute right-4 top-28 z-30 max-h-[calc(100%-8rem)] w-[min(460px,calc(100%-2rem))] overflow-auto rounded-xl border bg-white p-3 shadow-2xl"
+          className="fixed z-30 max-h-[min(420px,calc(100vh-2rem))] w-[min(460px,calc(100vw-2rem))] overflow-auto rounded-xl border bg-white p-3 shadow-2xl"
           style={{
+            top: activeSpecBubble.anchor.top,
+            left: activeSpecBubble.anchor.left,
             borderColor: activeSpecBubble.finding.substitution_verdict === 'not_up_to_spec' ? '#f5c6c6' : '#fdc89a',
             boxShadow: '0 18px 45px rgba(30,58,47,0.18)',
           }}
@@ -2719,8 +2981,8 @@ function BidExcelSheet({
       )}
       {activePricingMistakeBubble && (
         <div
-          className="absolute right-4 top-28 z-30 w-[min(420px,calc(100%-2rem))] rounded-xl border bg-white p-3 shadow-2xl"
-          style={{ borderColor: '#c084fc', boxShadow: '0 18px 45px rgba(30,58,47,0.18)' }}
+          className="fixed z-30 w-[min(420px,calc(100vw-2rem))] rounded-xl border bg-white p-3 shadow-2xl"
+          style={{ top: activePricingMistakeBubble.anchor.top, left: activePricingMistakeBubble.anchor.left, borderColor: '#c084fc', boxShadow: '0 18px 45px rgba(30,58,47,0.18)' }}
         >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -2813,26 +3075,37 @@ function BidExcelSheet({
             {groupHeaderRowIdx + 1}
           </div>
           {(() => {
-            const cells: React.ReactNode[] = []
-            let i = 0
-            while (i < visibleCols.length) {
-              const col = visibleCols[i]
+            const groups = []
+            let cursor = 0
+            while (cursor < visibleCols.length) {
+              const col = visibleCols[cursor]
               if (col.kind === 'vendor' && col.vendorId) {
-                const vendorId = col.vendorId
-                const groupKey = groupKeyForColumn(col, i)
-                const groupLabel = groupLabelForColumn(col, i)
-                const accent = vendorColors[vendorId] ?? '#1e3a2f'
                 let span = 0
-                while (i + span < visibleCols.length && visibleCols[i + span].vendorId === vendorId) span++
-                cells.push(
+                while (cursor + span < visibleCols.length && visibleCols[cursor + span].vendorId === col.vendorId) span++
+                groups.push({ col, start: cursor, span, kind: 'vendor' as const })
+                cursor += span
+              } else {
+                let span = 0
+                while (cursor + span < visibleCols.length && visibleCols[cursor + span].kind !== 'vendor') span++
+                groups.push({ col, start: cursor, span, kind: 'requested' as const })
+                cursor += span
+              }
+            }
+            return groups.flatMap(({ col, start, span, kind }) => {
+              if (kind === 'vendor' && col.kind === 'vendor' && col.vendorId) {
+                const vendorId = col.vendorId
+                const groupKey = groupKeyForColumn(col, start)
+                const groupLabel = groupLabelForColumn(col, start)
+                const accent = vendorColors[vendorId] ?? '#1e3a2f'
+                return [
                   <div
-                    key={`gh-vendor-${vendorId}-${i}`}
-                    onClick={() => setSel((s) => ({ ...s, r: groupHeaderRowIdx, c: i }))}
-                    onDoubleClick={() => startGroupHeaderEdit(col, i)}
+                    key={`gh-vendor-${vendorId}-${start}`}
+                    onClick={() => setSel((s) => ({ ...s, r: groupHeaderRowIdx, c: start }))}
+                    onDoubleClick={() => startGroupHeaderEdit(col, start)}
                     style={{
                       ...groupHeaderBase,
                       gridRow: groupHeaderRowIdx + 1,
-                      gridColumn: `${i + 2} / span ${span}`,
+                      gridColumn: `${start + 2} / span ${span}`,
                       position: 'sticky',
                       top: GROUP_HEADER_TOP,
                       zIndex: 4,
@@ -2856,56 +3129,50 @@ function BidExcelSheet({
                       <span style={cellTextStyle}>{groupLabel}</span>
                     )}
                   </div>,
-                )
-                i += span
-              } else {
-                let span = 0
-                while (i + span < visibleCols.length && visibleCols[i + span].kind !== 'vendor') span++
-                const groupKey = groupKeyForColumn(col, i)
-                const groupLabel = groupLabelForColumn(col, i)
-                const renderRequestedGroupCell = (start: number, cellSpan: number, stickyFrozen = false) => (
-                  <div
-                    key={`gh-mr-${start}-${stickyFrozen ? 'frozen' : 'scroll'}`}
-                    onClick={() => setSel((s) => ({ ...s, r: groupHeaderRowIdx, c: start }))}
-                    onDoubleClick={() => startGroupHeaderEdit(col, i)}
-                    style={{
-                      ...groupHeaderBase,
-                      gridRow: groupHeaderRowIdx + 1,
-                      gridColumn: `${start + 2} / span ${cellSpan}`,
-                      position: 'sticky',
-                      top: GROUP_HEADER_TOP,
-                      zIndex: stickyFrozen ? 7 : 4,
-                      ...(stickyFrozen ? { left: GUTTER_W, borderRight: strongBorder } : {}),
-                    }}
-                    title={groupLabel}
-                  >
-                    {editingGroupHeader?.groupKey === groupKey ? (
-                      <input
-                        autoFocus
-                        value={draftValue}
-                        onChange={(event) => setDraftValue(event.target.value)}
-                        onBlur={commitGroupHeaderEdit}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') { event.preventDefault(); commitGroupHeaderEdit() }
-                          if (event.key === 'Escape') { event.preventDefault(); setEditingGroupHeader(null) }
-                        }}
-                        style={{ width: '100%', height: ROW_H - 6, border: '1px solid #2563eb', borderRadius: 3, padding: '0 6px', fontSize: 12, outline: 'none', background: '#ffffff', color: '#111827', fontWeight: 800, textAlign: 'center', textTransform: 'none' }}
-                      />
-                    ) : (
-                      <span style={cellTextStyle}>{stickyFrozen ? '' : groupLabel}</span>
-                    )}
-                  </div>
-                )
-                if (col.key === frozenColumnKey) {
-                  cells.push(renderRequestedGroupCell(i, 1, true))
-                  if (span > 1) cells.push(renderRequestedGroupCell(i + 1, span - 1))
-                } else {
-                  cells.push(renderRequestedGroupCell(i, span))
-                }
-                i += span
+                ]
               }
-            }
-            return cells
+              const groupKey = groupKeyForColumn(col, start)
+              const groupLabel = groupLabelForColumn(col, start)
+              const renderRequestedGroupCell = (cellStart: number, cellSpan: number, stickyFrozen = false) => (
+                <div
+                  key={`gh-mr-${cellStart}-${stickyFrozen ? 'frozen' : 'scroll'}`}
+                  onClick={() => setSel((s) => ({ ...s, r: groupHeaderRowIdx, c: cellStart }))}
+                  onDoubleClick={() => startGroupHeaderEdit(col, start)}
+                  style={{
+                    ...groupHeaderBase,
+                    gridRow: groupHeaderRowIdx + 1,
+                    gridColumn: `${cellStart + 2} / span ${cellSpan}`,
+                    position: 'sticky',
+                    top: GROUP_HEADER_TOP,
+                    zIndex: stickyFrozen ? 7 : 4,
+                    ...(stickyFrozen ? { left: GUTTER_W, borderRight: strongBorder } : {}),
+                  }}
+                  title={groupLabel}
+                >
+                  {editingGroupHeader?.groupKey === groupKey ? (
+                    <input
+                      autoFocus
+                      value={draftValue}
+                      onChange={(event) => setDraftValue(event.target.value)}
+                      onBlur={commitGroupHeaderEdit}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') { event.preventDefault(); commitGroupHeaderEdit() }
+                        if (event.key === 'Escape') { event.preventDefault(); setEditingGroupHeader(null) }
+                      }}
+                      style={{ width: '100%', height: ROW_H - 6, border: '1px solid #2563eb', borderRadius: 3, padding: '0 6px', fontSize: 12, outline: 'none', background: '#ffffff', color: '#111827', fontWeight: 800, textAlign: 'center', textTransform: 'none' }}
+                    />
+                  ) : (
+                    <span style={cellTextStyle}>{stickyFrozen ? '' : groupLabel}</span>
+                  )}
+                </div>
+              )
+              if (col.key === frozenColumnKey) {
+                return span > 1
+                  ? [renderRequestedGroupCell(start, 1, true), renderRequestedGroupCell(start + 1, span - 1)]
+                  : [renderRequestedGroupCell(start, 1, true)]
+              }
+              return [renderRequestedGroupCell(start, span)]
+            })
           })()}
           {/* Group header — empty cap covering the EXTRA_COLS gutter on the right */}
           <div
@@ -3093,7 +3360,7 @@ function BidExcelSheet({
                           onClick={(event) => {
                             event.preventDefault()
                             event.stopPropagation()
-                            setOpenSpecBubble({ itemId: item.id, bidId: bid.id })
+                            setOpenSpecBubble({ itemId: item.id, bidId: bid.id, anchor: bubbleAnchor(event.currentTarget) })
                           }}
                           className="absolute right-1 top-1/2 z-10 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full border opacity-0 shadow-sm transition group-hover:opacity-100 focus:opacity-100"
                           style={{
@@ -3117,7 +3384,7 @@ function BidExcelSheet({
                           onClick={(event) => {
                             event.preventDefault()
                             event.stopPropagation()
-                            setOpenPricingMistakeBubble({ itemId: item.id, colKey: col.key })
+                            setOpenPricingMistakeBubble({ itemId: item.id, colKey: col.key, anchor: bubbleAnchor(event.currentTarget) })
                           }}
                           className="absolute right-1 top-1/2 z-10 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full border opacity-0 shadow-sm transition group-hover:opacity-100 focus:opacity-100"
                           style={{
@@ -3246,6 +3513,11 @@ function BidExcelSheet({
             fontSize: 12,
           }}
         >
+          {(() => {
+            const sortLabels = sortLabelsForColumn(contextMenu.colKey)
+            const hasCellColor = Boolean(contextMenu.rowKey && contextMenu.colKey && highlightMap.get(`${contextMenu.rowKey}|${contextMenu.colKey}`))
+            return (
+              <>
           <button type="button" role="menuitem" onClick={() => makeManualColumn(contextMenu.colKey, 'left')} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
             Insert column left
           </button>
@@ -3280,10 +3552,16 @@ function BidExcelSheet({
           </button>
           <div style={{ margin: '4px 0', borderTop: '1px solid #edf3f0' }} />
           <button type="button" role="menuitem" onClick={() => sortRowsByColumn(contextMenu.colKey, 'asc')} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
-            Sort A to Z
+            {sortLabels.asc}
           </button>
           <button type="button" role="menuitem" onClick={() => sortRowsByColumn(contextMenu.colKey, 'desc')} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
-            Sort Z to A
+            {sortLabels.desc}
+          </button>
+          <button type="button" role="menuitem" disabled={!hasCellColor} onClick={() => sortRowsByCellColor(contextMenu.rowKey, contextMenu.colKey)} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0] disabled:cursor-not-allowed disabled:opacity-45">
+            Sort by Color
+          </button>
+          <button type="button" role="menuitem" onClick={() => sortRowsByColumn(contextMenu.colKey, 'asc')} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
+            Custom Sort...
           </button>
           <button type="button" role="menuitem" onClick={() => hideBlankRowsForColumn(contextMenu.colKey)} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#edf3f0]">
             Filter blanks in column
@@ -3291,6 +3569,9 @@ function BidExcelSheet({
           <button type="button" role="menuitem" onClick={() => clearCell(contextMenu.rowKey, contextMenu.colKey)} className="block w-full rounded px-3 py-2 text-left font-medium hover:bg-[#fff7ed]" style={{ color: '#a85c2a' }}>
             Clear cell edit
           </button>
+              </>
+            )
+          })()}
         </div>,
         document.body,
       )}

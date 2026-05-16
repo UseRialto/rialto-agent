@@ -23,6 +23,23 @@ const rfq: ContractorRFQ = {
 }
 
 function bid(id: string, vendorName: string, unitPrices: Record<string, number>): ContractorBid {
+  const itemById = new Map(rfq.line_items.map((item) => [item.id, item]))
+  const responses = Object.entries(unitPrices).map(([lineItemId, unitPrice]) => {
+    const item = itemById.get(lineItemId)!
+    return {
+      line_item_id: lineItemId,
+      sku: lineItemId,
+      description: lineItemId,
+      quantity: item.quantity,
+      quoted_quantity: item.quantity,
+      unit: item.unit,
+      unit_price: unitPrice,
+      total_price: Number((unitPrice * item.quantity).toFixed(2)),
+      lead_time_days: 0,
+      availability: 'can_source' as const,
+      is_alternate: false,
+    }
+  })
   return {
     id,
     rfq_id: rfq.id,
@@ -30,22 +47,10 @@ function bid(id: string, vendorName: string, unitPrices: Record<string, number>)
     is_invited: true,
     is_on_platform: false,
     submitted_at: '2026-05-14T12:00:00.000Z',
-    total_price: Object.values(unitPrices).reduce((sum, value) => sum + value, 0),
+    total_price: responses.reduce((sum, response) => sum + response.total_price, 0),
     currency: 'USD',
     lead_time_days: 0,
-    line_item_responses: Object.entries(unitPrices).map(([lineItemId, unitPrice]) => ({
-      line_item_id: lineItemId,
-      sku: lineItemId,
-      description: lineItemId,
-      quantity: 1,
-      quoted_quantity: 1,
-      unit: lineItemId === 'line-drywall' ? 'sheet' : 'box',
-      unit_price: unitPrice,
-      total_price: unitPrice,
-      lead_time_days: 0,
-      availability: 'can_source',
-      is_alternate: false,
-    })),
+    line_item_responses: responses,
     status: 'pending',
     source: 'external_workbook',
   }
@@ -63,11 +68,32 @@ describe('comparison analytics', () => {
       expect.objectContaining({
         selector: { kind: 'cell', rowKey: 'line-drywall', colKey: 'vendor:vendor-c:unit_price' },
         color: PRICING_MISTAKE_HIGHLIGHT,
-        note: expect.stringContaining('wrong unit of measure'),
+        note: expect.stringContaining('default major-difference threshold is 30%'),
       }),
       expect.objectContaining({
         selector: { kind: 'cell', rowKey: 'line-drywall', colKey: 'vendor:vendor-c:total' },
         color: PRICING_MISTAKE_HIGHLIGHT,
+      }),
+    ]))
+    expect(highlights.some((highlight) => highlight.selector.kind === 'cell' && highlight.selector.rowKey === 'line-screws')).toBe(false)
+  })
+
+  it('flags major vendor differences on large quantity or high dollar line items', () => {
+    const highlights = buildQuoteImportAnalyticsHighlights(rfq, [
+      bid('vendor-a', 'A Supply', { 'line-drywall': 18, 'line-screws': 40 }),
+      bid('vendor-b', 'B Supply', { 'line-drywall': 26, 'line-screws': 42 }),
+    ])
+
+    expect(highlights).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        selector: { kind: 'cell', rowKey: 'line-drywall', colKey: 'vendor:vendor-a:total' },
+        color: PRICING_MISTAKE_HIGHLIGHT,
+        note: expect.stringContaining('major vendor price difference'),
+      }),
+      expect.objectContaining({
+        selector: { kind: 'cell', rowKey: 'line-drywall', colKey: 'vendor:vendor-b:total' },
+        color: PRICING_MISTAKE_HIGHLIGHT,
+        note: expect.stringContaining('major vendor price difference'),
       }),
     ]))
     expect(highlights.some((highlight) => highlight.selector.kind === 'cell' && highlight.selector.rowKey === 'line-screws')).toBe(false)

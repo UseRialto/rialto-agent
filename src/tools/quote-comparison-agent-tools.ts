@@ -16,6 +16,13 @@ export interface SheetStructureEditInput {
   summary?: string
 }
 
+export interface SortRowsInput {
+  colKey: string
+  direction: 'asc' | 'desc'
+  valueKind?: 'text' | 'number' | 'date' | 'auto'
+  summary?: string
+}
+
 export interface BulkNumericEditInput {
   colKey: string
   amount: number
@@ -302,6 +309,16 @@ export function proposeQuoteComparisonSheetStructureEdits(input: SheetStructureE
   return {
     summary: input.summary ?? `Prepared ${input.operations.length} sheet structure edit${input.operations.length === 1 ? '' : 's'}.`,
     operations: input.operations,
+  }
+}
+
+export function proposeQuoteComparisonSort(input: SortRowsInput): ComparisonPatchFragment {
+  const label = input.direction === 'asc'
+    ? input.valueKind === 'text' ? 'Sort A to Z' : input.valueKind === 'number' ? 'Sort Smallest to Largest' : 'Sort ascending'
+    : input.valueKind === 'text' ? 'Sort Z to A' : input.valueKind === 'number' ? 'Sort Largest to Smallest' : 'Sort descending'
+  return {
+    summary: input.summary ?? `${label} by ${input.colKey}.`,
+    operations: [{ kind: 'sort-rows', colKey: input.colKey, direction: input.direction }],
   }
 }
 

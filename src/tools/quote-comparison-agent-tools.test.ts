@@ -11,6 +11,7 @@ import {
   proposeQuoteComparisonLowestTotalPriceColumn,
   proposeQuoteComparisonSelectionState,
   proposeQuoteComparisonSheetStructureEdits,
+  proposeQuoteComparisonSort,
 } from './quote-comparison-agent-tools.js'
 
 const snapshot = {
@@ -213,6 +214,15 @@ describe('Quote Comparison agent tools', () => {
   })
 
   it('proposes structure, derived-column, and selection-state fragments', () => {
+    expect(proposeQuoteComparisonSort({
+      colKey: 'acme-total',
+      direction: 'desc',
+      valueKind: 'number',
+    })).toMatchObject({
+      summary: 'Sort Largest to Smallest by acme-total.',
+      operations: [{ kind: 'sort-rows', colKey: 'acme-total', direction: 'desc' }],
+    })
+
     expect(proposeQuoteComparisonSheetStructureEdits({
       operations: [
         { kind: 'sort-rows', colKey: 'acme-total', direction: 'desc' },

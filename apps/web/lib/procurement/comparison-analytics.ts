@@ -3,6 +3,7 @@ import type { ComparisonHighlight } from './comparison-sheet-state'
 import type { ComparisonSheetSnapshot } from './comparison-sheet-snapshot'
 
 export const PRICING_MISTAKE_HIGHLIGHT = '#e9d5ff'
+export const DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT = 30
 
 interface PricePoint {
   bid: ContractorBid
@@ -48,7 +49,12 @@ function highlight(point: PricePoint, metric: 'unit_price' | 'total', note: stri
   }
 }
 
-export function buildQuoteImportAnalyticsHighlights(rfq: ContractorRFQ, bids: ContractorBid[]): ComparisonHighlight[] {
+export function buildQuoteImportAnalyticsHighlights(
+  rfq: ContractorRFQ,
+  bids: ContractorBid[],
+  options: { majorUnitPriceDifferencePct?: number } = {},
+): ComparisonHighlight[] {
+  const majorDifferenceRatio = Math.max(0, (options.majorUnitPriceDifferencePct ?? DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT) / 100)
   const highlights = new Map<string, ComparisonHighlight>()
   for (const item of rfq.line_items) {
     const points: PricePoint[] = bids.flatMap((bid) => {
@@ -63,15 +69,16 @@ export function buildQuoteImportAnalyticsHighlights(rfq: ContractorRFQ, bids: Co
     })
 
     const rowMedian = median(points.map((point) => point.unitPrice))
-    const rowHasSevereSpread = points.length >= 2 && rowMedian > 0 && (
-      Math.max(...points.map((point) => point.unitPrice)) / Math.min(...points.map((point) => point.unitPrice)) >= 3
+    const rowHasMajorSpread = points.length >= 2 && rowMedian > 0 && (
+      Math.max(...points.map((point) => point.unitPrice)) / Math.min(...points.map((point) => point.unitPrice)) >= (1 + majorDifferenceRatio)
     )
 
     for (const point of points) {
-      const highOutlier = rowMedian > 0 && point.unitPrice / rowMedian >= 3
-      const lowOutlier = rowMedian > 0 && rowMedian / point.unitPrice >= 3
-      if (rowHasSevereSpread && (highOutlier || lowOutlier)) {
-        const note = `Pricing mistake candidate: ${point.bid.vendor_name} unit price ${point.unitPrice.toLocaleString()} is a ${highOutlier ? 'high' : 'low'} outlier against the row median ${rowMedian.toLocaleString()}.${sourceRow(point)} Check whether this was quoted in the wrong unit of measure.`
+      const differenceFromMedian = rowMedian > 0 ? Math.abs(point.unitPrice - rowMedian) / rowMedian : 0
+      const highOutlier = rowMedian > 0 && point.unitPrice > rowMedian && differenceFromMedian >= majorDifferenceRatio
+      const lowOutlier = rowMedian > 0 && point.unitPrice < rowMedian && differenceFromMedian >= majorDifferenceRatio
+      if (rowHasMajorSpread && (highOutlier || lowOutlier)) {
+        const note = `Pricing mistake candidate: ${point.bid.vendor_name} unit price ${point.unitPrice.toLocaleString()} is ${(differenceFromMedian * 100).toFixed(0)}% ${highOutlier ? 'above' : 'below'} the row median ${rowMedian.toLocaleString()}. The default major-difference threshold is ${Math.round(majorDifferenceRatio * 100)}%.${sourceRow(point)} Check quantity, price basis, and product equivalency before ranking.`
         for (const metric of ['unit_price', 'total'] as const) {
           const next = highlight(point, metric, note)
           highlights.set(next.id, next)
@@ -82,6 +89,28 @@ export function buildQuoteImportAnalyticsHighlights(rfq: ContractorRFQ, bids: Co
         const note = `Pricing mistake candidate: imported price basis uses a different unit than the comparison row.${sourceRow(point)} Confirm whether the quote is per package, sheet, square foot, or another unit before comparing.`
         const next = highlight(point, 'unit_price', note)
         highlights.set(next.id, next)
+      }
+    }
+
+    if (points.length >= 2) {
+      const sortedByTotal = points
+        .filter((point) => Number.isFinite(point.totalPrice) && point.totalPrice > 0)
+        .sort((a, b) => a.totalPrice - b.totalPrice)
+      const low = sortedByTotal[0]
+      const high = sortedByTotal[sortedByTotal.length - 1]
+      if (low && high && high.totalPrice > low.totalPrice) {
+        const spread = high.totalPrice - low.totalPrice
+        const spreadRatio = high.totalPrice / low.totalPrice
+        const medianTotal = median(sortedByTotal.map((point) => point.totalPrice))
+        const bigQuantitySpread = item.quantity >= 100 && spread >= 500 && spreadRatio >= (1 + majorDifferenceRatio)
+        const bigDollarSpread = medianTotal >= 1000 && spread >= 1000 && spreadRatio >= (1 + majorDifferenceRatio)
+        if (bigQuantitySpread || bigDollarSpread) {
+          const note = `Pricing mistake candidate: major vendor price difference on ${item.description}; ${high.bid.vendor_name} is ${spread.toLocaleString(undefined, { style: 'currency', currency: 'USD' })} above ${low.bid.vendor_name} for a ${item.quantity.toLocaleString()} ${item.unit} line. Confirm quantity, package basis, and product equivalency before ranking.`
+          for (const point of [low, high]) {
+            const next = highlight(point, 'total', note)
+            if (!highlights.has(next.id)) highlights.set(next.id, next)
+          }
+        }
       }
     }
   }

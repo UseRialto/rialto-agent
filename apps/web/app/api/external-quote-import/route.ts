@@ -3,10 +3,8 @@ import { revalidatePath } from 'next/cache'
 import { getSession } from '@/lib/auth/session'
 import { getProject, saveRFQ, appendBidToRFQ } from '@/lib/store/contractor-store'
 import { saveComparisonSheetView } from '@/lib/store/comparison-sheet-view-store'
-import { buildQuoteImportAnalyticsHighlights } from '@/lib/procurement/comparison-analytics'
 import { DEFAULT_COMPARISON_SHEET_VIEW } from '@/lib/procurement/comparison-sheet-state'
-import { createExternalQuoteImport, createExternalQuoteImportFromFiles, type ExternalQuoteImportFileInput } from '@/lib/procurement/external-quote-import'
-import { extractExternalQuoteImportText, isExcelImportFile, isPdfImportFile } from '@/lib/procurement/external-quote-file-text'
+import { buildImportedQuoteComparison, type QuoteComparisonImportUpload } from '@/lib/modules/quote-comparison/imported-quote-comparison'
 
 export const runtime = 'nodejs'
 
@@ -27,22 +25,23 @@ export async function POST(request: NextRequest) {
     const files = formData.getAll('files').filter((value): value is File => value instanceof File)
     const legacyFile = formData.get('file')
     if (legacyFile instanceof File) files.push(legacyFile)
+    const allFiles = files
 
-    if (!projectId || files.length === 0) {
-      return NextResponse.json({ error: 'Upload a PDF or Excel quote file for a project.' }, { status: 400 })
+    if (!projectId || allFiles.length === 0) {
+      return NextResponse.json({ error: 'Upload a PDF, CSV, or Excel quote file for a project.' }, { status: 400 })
     }
-    if (files.length > MAX_IMPORT_FILES) {
+    if (allFiles.length > MAX_IMPORT_FILES) {
       return NextResponse.json({ error: `Upload ${MAX_IMPORT_FILES} quote files or fewer at a time.` }, { status: 400 })
     }
-    const totalBytes = files.reduce((sum, file) => sum + file.size, 0)
+    const totalBytes = allFiles.reduce((sum, file) => sum + file.size, 0)
     if (totalBytes > MAX_TOTAL_IMPORT_BYTES) {
       return NextResponse.json({ error: 'Import files are too large. Use a combined upload under 32 MB.' }, { status: 400 })
     }
-    const emptyFile = files.find((file) => file.size <= 0)
+    const emptyFile = allFiles.find((file) => file.size <= 0)
     if (emptyFile) {
       return NextResponse.json({ error: `${emptyFile.name} is empty.` }, { status: 400 })
     }
-    const oversizedFile = files.find((file) => file.size > MAX_IMPORT_BYTES)
+    const oversizedFile = allFiles.find((file) => file.size > MAX_IMPORT_BYTES)
     if (oversizedFile) {
       return NextResponse.json({ error: `${oversizedFile.name} is too large. Use files under 8 MB.` }, { status: 400 })
     }
@@ -53,46 +52,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Not authorized.' }, { status: 403 })
     }
 
-    const extractedFiles: ExternalQuoteImportFileInput[] = []
+    const uploadFiles: QuoteComparisonImportUpload[] = []
     for (const file of files) {
       const buffer = Buffer.from(await file.arrayBuffer())
-      const isPdf = isPdfImportFile(file)
-      const isExcel = isExcelImportFile(file)
-      if (!isPdf && !isExcel) {
-        return NextResponse.json({ error: 'Only PDF and Excel quote comparison imports are supported.' }, { status: 400 })
-      }
-
-      const text = await extractExternalQuoteImportText(file, buffer)
-      if (!text.trim()) {
-        return NextResponse.json({ error: `No readable text or worksheet rows were found in ${file.name}.` }, { status: 400 })
-      }
-      extractedFiles.push({
-        filename: file.name,
-        sourceKind: isPdf ? 'pdf' : 'spreadsheet',
-        text,
+      uploadFiles.push({
+        name: file.name,
+        type: file.type,
+        buffer,
       })
     }
-
-    const imported = files.length === 1 && !rfqName
-      ? createExternalQuoteImport({
-          projectId,
-          projectName: project.name,
-          filename: extractedFiles[0].filename,
-          sourceKind: extractedFiles[0].sourceKind,
-          text: extractedFiles[0].text,
-        })
-      : createExternalQuoteImportFromFiles({
-          projectId,
-          projectName: project.name,
-          title: rfqName || project.name,
-          files: extractedFiles,
-        })
+    const built = await buildImportedQuoteComparison({
+      projectId,
+      projectName: project.name,
+      title: rfqName,
+      files: uploadFiles,
+    })
+    const { imported, analyticsHighlights } = built
 
     await saveRFQ(imported.rfq)
     for (const bid of imported.bids) {
       await appendBidToRFQ(imported.rfq.id, bid)
     }
-    const analyticsHighlights = buildQuoteImportAnalyticsHighlights(imported.rfq, imported.bids)
     if (analyticsHighlights.length > 0) {
       await saveComparisonSheetView(imported.rfq.id, {
         ...DEFAULT_COMPARISON_SHEET_VIEW,
@@ -107,18 +87,18 @@ export async function POST(request: NextRequest) {
     revalidatePath(`/contractor/projects/${projectId}`)
     revalidatePath(`/contractor/projects/${projectId}/rfqs/${imported.rfq.id}`)
 
+    const importMessage = built.diagnostics.usedAgentFallback
+      ? `GPT-5.5 fallback used after normal import failed: ${built.diagnostics.fallbackReasons[0] ?? 'normal parser could not finish'}.`
+      : 'Processed correctly through the normal importer.'
+
     return NextResponse.json({
       rfqId: imported.rfq.id,
       lineItemCount: imported.rfq.line_items.length,
       vendorName: imported.bid.vendor_name,
       vendorCount: imported.bids.length,
-      warnings: [
-        ...imported.warnings,
-        ...(analyticsHighlights.length > 0 ? [{
-          message: `Flagged ${analyticsHighlights.length} pricing mistake candidate${analyticsHighlights.length === 1 ? '' : 's'} in purple for estimator review.`,
-        }] : []),
-      ],
-      redirectTo: `/contractor/projects/${projectId}/rfqs/${imported.rfq.id}`,
+      warnings: built.warnings,
+      importDiagnostics: built.diagnostics,
+      redirectTo: `/contractor/projects/${projectId}/rfqs/${imported.rfq.id}?importStatus=${built.diagnostics.usedAgentFallback ? 'fallback' : 'normal'}&importMessage=${encodeURIComponent(importMessage)}`,
     })
   } catch (error) {
     console.error('External quote import failed:', error)

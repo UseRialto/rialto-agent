@@ -37,6 +37,20 @@ export interface ExternalQuoteImportBatchInput {
   now?: string
 }
 
+export interface ExternalQuoteImportMergeInput {
+  targetRfq: ContractorRFQ
+  existingBids: ContractorBid[]
+  imported: ExternalQuoteImportResult
+  now?: string
+}
+
+export interface ExternalQuoteImportMergeResult {
+  rfq: ContractorRFQ
+  addedLineItems: ContractorRFQLineItem[]
+  bids: ContractorBid[]
+  warnings: ExternalQuoteImportWarning[]
+}
+
 interface ParsedQuoteLine {
   sourceRow: number
   itemNumber: string
@@ -48,6 +62,7 @@ interface ParsedQuoteLine {
   pricePerQuantity?: number
   pricePerUnit?: string
   totalPrice: number
+  leadTimeDays?: number
   rawText: string
 }
 
@@ -141,6 +156,22 @@ function normalizeUnit(value: string) {
   if (unit === 'tube') return 'tube'
   if (unit === 'bundle') return 'bundle'
   return unit
+}
+
+function unitKey(value: string) {
+  return normalizeUnit(value).replace(/[^a-z0-9]+/g, '')
+}
+
+function comparisonUnitPrice(parsed: ParsedQuoteLine) {
+  if (
+    parsed.pricePerQuantity &&
+    parsed.pricePerQuantity > 1 &&
+    parsed.pricePerUnit &&
+    unitKey(parsed.pricePerUnit) === unitKey(parsed.unit)
+  ) {
+    return Number((parsed.unitPrice / parsed.pricePerQuantity).toFixed(6))
+  }
+  return parsed.unitPrice
 }
 
 function titleFromFilename(filename: string) {
@@ -357,6 +388,144 @@ function parseCompactQuoteLines(text: string) {
     .filter((line): line is ParsedQuoteLine => Boolean(line))
 }
 
+function parseInlineEmailQuoteLine(rawLine: string, sourceRow: number): ParsedQuoteLine | null {
+  const line = compact(rawLine)
+  const match = line.match(/^(.+?),\s*qty\s+([0-9][0-9,.]*)\s+([A-Za-z]+),\s*unit\s+price\s+\$?\s*([0-9][0-9,.]*)(?:,\s*lead\s+time\s+(.+))?$/i)
+  if (!match) return null
+  const [, rawDescription, quantityText, unit, unitPriceText] = match
+  const description = compact(rawDescription)
+  const quantity = quoteRowNumberFromText(quantityText)
+  const unitPrice = quoteRowNumberFromText(unitPriceText)
+  if (!description || !quantity || !unitPrice) return null
+  const skuMatch = description.match(/\b[A-Z][A-Z0-9]+(?:-[A-Z0-9]+)+\b/)
+  return {
+    sourceRow,
+    itemNumber: `email-${sourceRow}`,
+    sku: skuMatch ? normalizeSku(skuMatch[0]) : '',
+    description,
+    quantity,
+    unit: normalizeUnit(unit),
+    unitPrice,
+    totalPrice: Number((quantity * unitPrice).toFixed(2)),
+    leadTimeDays: leadTimeDays(match[5] ?? ''),
+    rawText: line,
+  }
+}
+
+function parseInlineEmailQuoteLines(text: string) {
+  return text
+    .split('\n')
+    .map((line, index) => parseInlineEmailQuoteLine(line, index + 1))
+    .filter((line): line is ParsedQuoteLine => Boolean(line))
+}
+
+const compactPdfMatrixVendorNames = [
+  'L n W Supply - San Diego',
+  'Acme Drywall Supply',
+  'BuildCo Materials',
+  'Metro Door Hardware',
+]
+
+function parseCompactPdfMatrixLine(rawLine: string, sourceRow: number): { lineItem: GenericParsedLineItem; bidLines: GenericParsedBidLine[] } | null {
+  const line = compact(rawLine)
+  const prefix = line.match(/^([A-Z]\d{3,})\s+(\S+)\s+(.+)$/)
+  if (!prefix) return null
+  const [, itemNumber, sku, rest] = prefix
+  const boundaryPattern = /\s([0-9][0-9,.]*)\s+(LF|EA|Sheet|Tube|Box)\s+(.+)$/gi
+  let boundary: { description: string; quantityText: string; unit: string; priceRest: string } | undefined
+  for (const match of rest.matchAll(boundaryPattern)) {
+    const priceRest = compact(match[3] ?? '')
+    if (!/^(?:no\s+bid|[0-9][0-9,.]*\s+[0-9][0-9,.]*\s+[0-9]+(?:-[0-9]+)?\s+(?:days?|weeks?))/i.test(priceRest)) continue
+    boundary = {
+      description: compact(rest.slice(0, match.index)),
+      quantityText: match[1],
+      unit: match[2],
+      priceRest,
+    }
+    break
+  }
+  if (!boundary) return null
+  const lineItem: GenericParsedLineItem = {
+    itemNumber,
+    sku: normalizeSku(sku),
+    description: boundary.description,
+    quantity: quoteRowNumberFromText(boundary.quantityText),
+    unit: normalizeUnit(boundary.unit),
+  }
+  if (!lineItem.description || !lineItem.quantity || !lineItem.unit) return null
+
+  const groups: Array<{ unitPrice?: number; totalPrice?: number; lead?: string; notes?: string }> = []
+  const pricePattern = /(?:^|\s)(no\s+bid|[0-9][0-9,.]*\s+[0-9][0-9,.]*\s+[0-9]+(?:-[0-9]+)?\s+(?:days?|weeks?))(.*?)(?=\s+(?:no\s+bid|[0-9][0-9,.]*\s+[0-9][0-9,.]*\s+[0-9]+(?:-[0-9]+)?\s+(?:days?|weeks?))|$)/gi
+  for (const match of boundary.priceRest.matchAll(pricePattern)) {
+    const value = compact(match[1] ?? '')
+    const notes = compact(match[2] ?? '')
+    if (/^no\s+bid$/i.test(value)) {
+      groups.push({ notes: compact(['No bid.', notes].filter(Boolean).join(' ')) })
+      continue
+    }
+    const price = value.match(/^([0-9][0-9,.]*)\s+([0-9][0-9,.]*)\s+([0-9]+(?:-[0-9]+)?\s+(?:days?|weeks?))$/i)
+    if (!price) continue
+    groups.push({
+      unitPrice: optionalNumberFromText(price[1]),
+      totalPrice: optionalNumberFromText(price[2]),
+      lead: price[3],
+      notes,
+    })
+  }
+  if (groups.filter((group) => group.unitPrice != null || group.totalPrice != null).length < 2) return null
+
+  return {
+    lineItem,
+    bidLines: groups.flatMap((group, index) => {
+      const vendorName = compactPdfMatrixVendorNames[index]
+      if (!vendorName) return []
+      const bidLine = genericBidLine(lineItem, sourceRow, group)
+      return bidLine ? [{ ...bidLine, lineItemKey: lineItem.itemNumber, vendorName }] : []
+    }),
+  }
+}
+
+function parseCompactPdfMatrix(text: string): GenericParsedImport | null {
+  if (!/multi-supplier quote matrix/i.test(text)) return null
+  const parsedRows = text
+    .split('\n')
+    .map((line, index) => parseCompactPdfMatrixLine(line, index + 1))
+    .filter((row): row is NonNullable<typeof row> => Boolean(row))
+  if (parsedRows.length === 0) return null
+
+  const lineItems = parsedRows.map((row) => row.lineItem)
+  const bidLinesByVendor = new Map<string, GenericParsedBidLine[]>()
+  for (const row of parsedRows) {
+    for (const bidLine of row.bidLines as Array<GenericParsedBidLine & { vendorName?: string }>) {
+      const vendorName = bidLine.vendorName
+      if (!vendorName) continue
+      const lineWithoutVendor: GenericParsedBidLine = {
+        lineItemKey: bidLine.lineItemKey,
+        sku: bidLine.sku,
+        description: bidLine.description,
+        quantity: bidLine.quantity,
+        unit: bidLine.unit,
+        unitPrice: bidLine.unitPrice,
+        totalPrice: bidLine.totalPrice,
+        leadTimeDays: bidLine.leadTimeDays,
+        sourceRow: bidLine.sourceRow,
+        notes: bidLine.notes,
+      }
+      bidLinesByVendor.set(vendorName, [...(bidLinesByVendor.get(vendorName) ?? []), lineWithoutVendor])
+    }
+  }
+
+  const bids = [...bidLinesByVendor.entries()]
+    .filter(([, lines]) => lines.length > 0)
+    .map(([vendorName, lines]) => ({ vendorName, lines }))
+  if (lineItems.length === 0 || bids.length < 2) return null
+  return {
+    lineItems,
+    bids,
+    warnings: [{ message: `Imported ${bids.length} multiple supplier quote responses from compact PDF matrix layout.` }],
+  }
+}
+
 function parseCsvLine(line: string) {
   const cells: string[] = []
   let cell = ''
@@ -540,15 +709,15 @@ function parseSingleVendorTable(rows: ReturnType<typeof delimitedRows>, headerIn
 function wideVendorGroups(headers: string[]) {
   const groups = new Map<string, { vendorName: string; unitPrice?: number; totalPrice?: number; lead?: number; notes?: number }>()
   headers.forEach((header, index) => {
-    const match = header.match(/^(.*?)\s+(unit price|unit cost|quoted unit cost|total price|extended cost|total|lead time|eta|notes|clarifications)$/i)
+    const match = header.match(/^(.*?)\s+(unit price|unit cost|quoted unit cost|unit|total price|extended cost|extended|total|lead time|lead|eta|notes|clarifications)$/i)
     if (!match) return
     const vendorName = compact(match[1])
     if (!vendorName || ['unit', 'qty', 'required'].includes(vendorName.toLowerCase())) return
     const group = groups.get(vendorName) ?? { vendorName }
     const metric = headerKey(match[2])
-    if (['unitprice', 'unitcost', 'quotedunitcost'].includes(metric)) group.unitPrice = index
-    else if (['totalprice', 'extendedcost', 'total'].includes(metric)) group.totalPrice = index
-    else if (['leadtime', 'eta'].includes(metric)) group.lead = index
+    if (['unitprice', 'unitcost', 'quotedunitcost', 'unit'].includes(metric)) group.unitPrice = index
+    else if (['totalprice', 'extendedcost', 'extended', 'total'].includes(metric)) group.totalPrice = index
+    else if (['leadtime', 'lead', 'eta'].includes(metric)) group.lead = index
     else if (['notes', 'clarifications'].includes(metric)) group.notes = index
     groups.set(vendorName, group)
   })
@@ -662,14 +831,241 @@ function parseRepeatedSupplierBlockTable(rows: ReturnType<typeof delimitedRows>,
   }
 }
 
-function parseGenericQuoteTable(text: string): GenericParsedImport | null {
-  const rows = delimitedRows(text)
+function parseGenericRows(rows: ReturnType<typeof delimitedRows>): GenericParsedImport | null {
   const headerIndex = findGenericHeaderRow(rows)
   if (headerIndex < 0) return null
   return parseRepeatedSupplierBlockTable(rows, headerIndex) ??
     parseRowPerVendorTable(rows, headerIndex) ??
     parseWideVendorTable(rows, headerIndex) ??
     parseSingleVendorTable(rows, headerIndex)
+}
+
+function stripHtml(value: string) {
+  return compact(value
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>'))
+}
+
+function parseHtmlTable(text: string): GenericParsedImport | null {
+  if (!/<table[\s>]/i.test(text)) return null
+  const rows = [...text.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)]
+    .map((match, index) => ({
+      sourceRow: index + 1,
+      cells: [...(match[1] ?? '').matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)]
+        .map((cell) => stripHtml(cell[1] ?? '')),
+    }))
+    .filter((row) => row.cells.some(Boolean))
+  return parseGenericRows(rows)
+}
+
+function parseFixedWidthTable(text: string): GenericParsedImport | null {
+  const lines = text.split('\n')
+  const headerIndex = lines.findIndex((line) => /\bline\b/i.test(line) && /\bvendor\b/i.test(line) && /\bunit price\b/i.test(line))
+  if (headerIndex < 0) return null
+  const rows = lines.slice(headerIndex + 1)
+    .map((line, index) => {
+      const cells = line.trim().split(/\s{2,}/).map(compact)
+      if (cells.length < 9) return null
+      const [item, sku, description, qty, unit, vendor, unitPrice, totalPrice, lead, notes = ''] = cells
+      return {
+        sourceRow: headerIndex + index + 2,
+        cells: [item, sku, description, qty, unit, vendor, unitPrice, totalPrice, lead, notes],
+      }
+    })
+    .filter((row): row is NonNullable<typeof row> => Boolean(row))
+  if (rows.length === 0) return null
+  return parseRowPerVendorTable([
+    {
+      sourceRow: headerIndex + 1,
+      cells: ['Line #', 'Part No', 'Material Name', 'Required Qty', 'UOM', 'Vendor', 'Quoted Unit Cost', 'Extended Cost', 'ETA', 'Clarifications'],
+    },
+    ...rows,
+  ], 0)
+}
+
+function xmlAttributes(value: string) {
+  const attrs = new Map<string, string>()
+  for (const match of value.matchAll(/([A-Za-z_:][A-Za-z0-9_:.-]*)="([^"]*)"/g)) {
+    attrs.set(match[1], match[2])
+  }
+  return attrs
+}
+
+function parseXmlVendorComparison(text: string): GenericParsedImport | null {
+  if (!/<vendorComparison\b/i.test(text)) return null
+  const lineItems = [...text.matchAll(/<item\b([^>]*)\/>/gi)]
+    .map((match): GenericParsedLineItem | null => {
+      const attrs = xmlAttributes(match[1] ?? '')
+      const itemNumber = attrs.get('line') ?? ''
+      const description = attrs.get('description') ?? ''
+      const quantity = optionalNumberFromText(attrs.get('quantity'))
+      if (!itemNumber || !description || quantity == null) return null
+      return {
+        itemNumber,
+        sku: normalizeSku(attrs.get('sku') ?? ''),
+        description,
+        quantity,
+        unit: normalizeUnit(attrs.get('unit') ?? ''),
+      }
+    })
+    .filter((item): item is GenericParsedLineItem => Boolean(item))
+  const lineByKey = new Map(lineItems.map((item) => [item.itemNumber, item]))
+  const bids = [...text.matchAll(/<vendor\b([^>]*)>([\s\S]*?)<\/vendor>/gi)]
+    .map((match): GenericParsedBid | null => {
+      const vendorName = compact(xmlAttributes(match[1] ?? '').get('name') ?? '')
+      if (!vendorName) return null
+      const lines = [...(match[2] ?? '').matchAll(/<quote\b([^>]*)\/>/gi)]
+        .flatMap((quoteMatch) => {
+          const attrs = xmlAttributes(quoteMatch[1] ?? '')
+          const lineItem = lineByKey.get(attrs.get('line') ?? '')
+          if (!lineItem) return []
+          const bidLine = genericBidLine(lineItem, quoteMatch.index ?? 0, {
+            unitPrice: optionalNumberFromText(attrs.get('unitPrice')),
+            totalPrice: optionalNumberFromText(attrs.get('total')),
+            lead: attrs.get('leadTime') ?? '',
+            notes: attrs.get('notes') ?? '',
+          })
+          return bidLine ? [bidLine] : []
+        })
+      return lines.length > 0 ? { vendorName, lines } : null
+    })
+    .filter((bid): bid is GenericParsedBid => Boolean(bid))
+  if (lineItems.length === 0 || bids.length === 0) return null
+  return {
+    lineItems,
+    bids,
+    warnings: [{ message: `Imported ${bids.length} multiple supplier quote responses from XML vendor comparison layout.` }],
+  }
+}
+
+function parseYamlVendorComparison(text: string): GenericParsedImport | null {
+  if (!/^\s*vendors:\s*$/mi.test(text) || !/^\s*items:\s*$/mi.test(text)) return null
+  const lineItems: GenericParsedLineItem[] = []
+  const bids: GenericParsedBid[] = []
+  let section: 'items' | 'vendors' | undefined
+  let currentItem: Partial<GenericParsedLineItem> | undefined
+  let currentBid: GenericParsedBid | undefined
+  let currentQuote: Partial<GenericParsedBidLine> & { item?: string; lead?: string; notes?: string } | undefined
+  const lineByKey = new Map<string, GenericParsedLineItem>()
+
+  function finishItem() {
+    if (!currentItem?.itemNumber || !currentItem.description || currentItem.quantity == null) return
+    const lineItem: GenericParsedLineItem = {
+      itemNumber: currentItem.itemNumber,
+      sku: currentItem.sku ?? '',
+      description: currentItem.description,
+      quantity: currentItem.quantity,
+      unit: currentItem.unit ?? '',
+    }
+    lineItems.push(lineItem)
+    lineByKey.set(lineItem.itemNumber, lineItem)
+    currentItem = undefined
+  }
+  function finishQuote() {
+    if (!currentBid || !currentQuote?.item) return
+    const lineItem = lineByKey.get(currentQuote.item)
+    if (!lineItem) return
+    const bidLine = genericBidLine(lineItem, currentBid.lines.length + 1, {
+      unitPrice: currentQuote.unitPrice,
+      totalPrice: currentQuote.totalPrice,
+      lead: currentQuote.lead,
+      notes: currentQuote.notes,
+    })
+    if (bidLine) currentBid.lines.push(bidLine)
+    currentQuote = undefined
+  }
+  function finishBid() {
+    finishQuote()
+    if (currentBid && currentBid.lines.length > 0) bids.push(currentBid)
+    currentBid = undefined
+  }
+
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim()
+    if (!line) continue
+    if (line === 'items:') {
+      finishBid()
+      section = 'items'
+      continue
+    }
+    if (line === 'vendors:') {
+      finishItem()
+      section = 'vendors'
+      continue
+    }
+    if (section === 'items') {
+      if (line.startsWith('- ')) {
+        finishItem()
+        currentItem = {}
+        const inline = line.match(/^-\s+id:\s*(.+)$/)
+        if (inline) currentItem.itemNumber = compact(inline[1])
+        continue
+      }
+      const match = line.match(/^([A-Za-z_]+):\s*(.+)$/)
+      if (!match || !currentItem) continue
+      const [, keyName, value] = match
+      if (keyName === 'id') currentItem.itemNumber = compact(value)
+      else if (keyName === 'sku') currentItem.sku = normalizeSku(value)
+      else if (keyName === 'description') currentItem.description = compact(value)
+      else if (keyName === 'qty') currentItem.quantity = optionalNumberFromText(value) ?? 0
+      else if (keyName === 'unit') currentItem.unit = normalizeUnit(value)
+      continue
+    }
+    if (section === 'vendors') {
+      const vendorMatch = line.match(/^-\s+name:\s*(.+)$/)
+      if (vendorMatch) {
+        finishBid()
+        currentBid = { vendorName: compact(vendorMatch[1]), lines: [] }
+        continue
+      }
+      const quoteMatch = line.match(/^-\s+item:\s*(.+)$/)
+      if (quoteMatch) {
+        finishQuote()
+        currentQuote = { item: compact(quoteMatch[1]) }
+        continue
+      }
+      const fieldMatch = line.match(/^([A-Za-z_]+):\s*(.+)$/)
+      if (!fieldMatch || !currentQuote) continue
+      const [, keyName, value] = fieldMatch
+      if (keyName === 'item') currentQuote.item = compact(value)
+      else if (keyName === 'unit_price') currentQuote.unitPrice = optionalNumberFromText(value)
+      else if (keyName === 'total') currentQuote.totalPrice = optionalNumberFromText(value)
+      else if (keyName === 'lead') currentQuote.lead = compact(value)
+      else if (keyName === 'notes') currentQuote.notes = compact(value)
+    }
+  }
+  finishItem()
+  finishBid()
+  if (lineItems.length === 0 || bids.length === 0) return null
+  return {
+    lineItems,
+    bids,
+    warnings: [{ message: `Imported ${bids.length} multiple supplier quote responses from YAML vendor comparison layout.` }],
+  }
+}
+
+function parseGenericQuoteTable(text: string): GenericParsedImport | null {
+  const xml = parseXmlVendorComparison(text)
+  if (xml) return xml
+  const yaml = parseYamlVendorComparison(text)
+  if (yaml) return yaml
+  const html = parseHtmlTable(text)
+  if (html) return {
+    ...html,
+    warnings: [{ message: `Imported ${html.bids.length} multiple supplier quote responses from HTML table layout.` }],
+  }
+  const fixedWidth = parseFixedWidthTable(text)
+  if (fixedWidth) return {
+    ...fixedWidth,
+    warnings: [{ message: `Imported ${fixedWidth.bids.length} multiple supplier quote responses from fixed-width text table layout.` }],
+  }
+  const compactPdfMatrix = parseCompactPdfMatrix(text)
+  if (compactPdfMatrix) return compactPdfMatrix
+  return parseGenericRows(delimitedRows(text))
 }
 
 function lineItemFromParsed(rfqId: string, parsed: ParsedQuoteLine): ContractorRFQLineItem {
@@ -787,14 +1183,16 @@ export function createExternalQuoteImport(input: ExternalQuoteImportInput): Exte
   const bidId = `bid-import-${idPart(supplier)}-${idPart(now)}`
   const parsedLines = parseQuoteLines(input.text)
   const compactParsedLines = parsedLines.length ? parsedLines : parseCompactQuoteLines(input.text)
+  const inlineParsedLines = compactParsedLines.length ? [] : parseInlineEmailQuoteLines(input.text)
+  const fallbackParsedLines = compactParsedLines.length ? compactParsedLines : inlineParsedLines
 
-  if (compactParsedLines.length === 0) {
+  if (fallbackParsedLines.length === 0) {
     throw new Error('No priced quote rows were found in this import.')
   }
 
-  const lineItems = compactParsedLines.map((line) => lineItemFromParsed(rfqId, line))
-  const lineByItemNumber = new Map(compactParsedLines.map((line, index) => [line.itemNumber, lineItems[index]]))
-  const bidLines = compactParsedLines.map((line) => {
+  const lineItems = fallbackParsedLines.map((line) => lineItemFromParsed(rfqId, line))
+  const lineByItemNumber = new Map(fallbackParsedLines.map((line, index) => [line.itemNumber, lineItems[index]]))
+  const bidLines = fallbackParsedLines.map((line) => {
     const item = lineByItemNumber.get(line.itemNumber)!
     return {
       line_item_id: item.id,
@@ -803,9 +1201,9 @@ export function createExternalQuoteImport(input: ExternalQuoteImportInput): Exte
       quantity: line.quantity,
       quoted_quantity: line.quantity,
       unit: line.unit,
-      unit_price: line.unitPrice,
+      unit_price: comparisonUnitPrice(line),
       total_price: line.totalPrice,
-      lead_time_days: 0,
+      lead_time_days: line.leadTimeDays ?? 0,
       availability: 'can_source' as const,
       is_alternate: false,
       notes: `Imported from ${input.filename}, source row ${line.sourceRow}.`,
@@ -879,6 +1277,9 @@ export function createExternalQuoteImport(input: ExternalQuoteImportInput): Exte
     bid,
     bids: [bid],
     warnings: [
+      ...(inlineParsedLines.length > 0 ? [{
+        message: 'Read quote values from inline email-style text.',
+      }] : []),
       {
         message: 'Imported as a single vendor quote comparison. Review extracted quantities, pricing, and price basis before relying on totals.',
       },
@@ -1014,6 +1415,88 @@ export function createExternalQuoteImportFromFiles(input: ExternalQuoteImportBat
       { message: `Imported ${bids.length} vendor quote response${bids.length === 1 ? '' : 's'} from ${importedFiles.length} file${importedFiles.length === 1 ? '' : 's'}.` },
       { message: 'Review normalized line-item matches, no-bid rows, imported notes, and totals before relying on comparisons.' },
       { message: 'Imported quote notes are preserved as notes only; they do not mark rows as alternates or substitutions.' },
+    ],
+  }
+}
+
+export function mergeExternalQuoteImportIntoRFQ(input: ExternalQuoteImportMergeInput): ExternalQuoteImportMergeResult {
+  const now = input.now ?? new Date().toISOString()
+  const targetRfq = input.targetRfq
+  const usedLineItemIds = new Set(targetRfq.line_items.map((line) => line.id))
+  const usedBidIds = new Set(input.existingBids.map((bid) => bid.id))
+  const lineItemByKey = new Map(targetRfq.line_items.map((line) => [comparisonKeyForLineItem(line), line]))
+  const sourceLineItemToTargetId = new Map<string, string>()
+  const addedLineItems: ContractorRFQLineItem[] = []
+  const warnings: ExternalQuoteImportWarning[] = [...input.imported.warnings]
+
+  for (const sourceLineItem of input.imported.rfq.line_items) {
+    const key = comparisonKeyForLineItem(sourceLineItem)
+    const existing = lineItemByKey.get(key)
+    if (existing) {
+      sourceLineItemToTargetId.set(sourceLineItem.id, existing.id)
+      if (
+        existing.quantity !== sourceLineItem.quantity ||
+        normalizeUnit(existing.unit) !== normalizeUnit(sourceLineItem.unit)
+      ) {
+        warnings.push({
+          message: `${sourceLineItem.sku || sourceLineItem.description} matched an existing line item with a different quantity or unit.`,
+        })
+      }
+      continue
+    }
+
+    const lineItem: ContractorRFQLineItem = {
+      ...sourceLineItem,
+      id: uniqueId(`${targetRfq.id}-line-${idPart(sourceLineItem.sku || sourceLineItem.description)}`, usedLineItemIds),
+    }
+    lineItemByKey.set(key, lineItem)
+    sourceLineItemToTargetId.set(sourceLineItem.id, lineItem.id)
+    addedLineItems.push(lineItem)
+  }
+
+  const bids = input.imported.bids.map((sourceBid) => {
+    const line_item_responses = sourceBid.line_item_responses.flatMap((response) => {
+      const lineItemId = sourceLineItemToTargetId.get(response.line_item_id)
+      if (!lineItemId) return []
+      return [{
+        ...response,
+        line_item_id: lineItemId,
+        is_alternate: false,
+      }]
+    })
+    return {
+      ...sourceBid,
+      id: uniqueBidId(`bid-import-${idPart(sourceBid.vendor_name)}-${idPart(now)}`, usedBidIds),
+      rfq_id: targetRfq.id,
+      submitted_at: now,
+      total_price: Number(line_item_responses.reduce((sum, line) => sum + line.total_price, 0).toFixed(2)),
+      line_item_responses,
+    }
+  }).filter((bid) => bid.line_item_responses.length > 0)
+
+  if (bids.length === 0) {
+    throw new Error('No imported quote rows matched or added comparison line items.')
+  }
+
+  return {
+    rfq: {
+      ...targetRfq,
+      line_items: [...targetRfq.line_items, ...addedLineItems],
+      invites: [
+        ...(targetRfq.invites ?? []),
+        ...bids.map((bid) => ({
+          vendor_email: '',
+          vendor_name: bid.vendor_name,
+          on_platform: false,
+        })),
+      ],
+    },
+    addedLineItems,
+    bids,
+    warnings: [
+      ...warnings,
+      { message: `Added ${bids.length} imported vendor quote response${bids.length === 1 ? '' : 's'} to this comparison.` },
+      { message: `Matched ${input.imported.rfq.line_items.length - addedLineItems.length} existing line item${input.imported.rfq.line_items.length - addedLineItems.length === 1 ? '' : 's'} and added ${addedLineItems.length} new line item${addedLineItems.length === 1 ? '' : 's'}.` },
     ],
   }
 }

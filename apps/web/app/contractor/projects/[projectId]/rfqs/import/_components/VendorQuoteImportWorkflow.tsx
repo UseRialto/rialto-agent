@@ -125,7 +125,7 @@ export function VendorQuoteImportWorkflow({ projectId, projectName }: Props) {
               ref={inputRef}
               type="file"
               multiple
-              accept=".pdf,.xlsx,.xls,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+              accept=".pdf,.csv,.tsv,.xlsx,.xls,.xsl,.xml,.txt,application/pdf,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/xml,application/xml,text/plain"
               className="sr-only"
               onChange={(event) => {
                 addFiles(event.currentTarget.files)
@@ -144,7 +144,7 @@ export function VendorQuoteImportWorkflow({ projectId, projectName }: Props) {
               style={{ borderColor: '#d6c9bd', background: '#fbfaf8', color: '#4a6358' }}
             >
               <UploadCloud className="h-9 w-9" style={{ color: '#2d6a4f' }} />
-              <span className="mt-3 text-sm font-semibold">Drop PDF or Excel quotes here</span>
+              <span className="mt-3 text-sm font-semibold">Drop quotes here</span>
               <span className="mt-1 text-xs" style={{ color: '#8a9e96' }}>Multiple vendor files can be imported together.</span>
             </button>
           </div>
