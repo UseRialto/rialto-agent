@@ -1,0 +1,77 @@
+{
+  "scaleAssumption": "Rendered 24x36 sheet at 4896x3168 px; sheet scale 1/8 in = 1 ft; approximate conversion 17 px/ft.",
+  "mechanical": [
+    {
+      "system": "Exhaust air",
+      "size": "Exhaust duct, 6x4 to 10x8",
+      "linearFeet": 83
+    },
+    {
+      "system": "Return air",
+      "size": "Return/transfer duct, 10x10 to 14x12",
+      "linearFeet": 50
+    },
+    {
+      "system": "Supply air",
+      "size": "16 in round fabric duct",
+      "linearFeet": 103
+    },
+    {
+      "system": "Supply air",
+      "size": "6 in round diffuser branches",
+      "linearFeet": 34
+    },
+    {
+      "system": "Supply air",
+      "size": "Main round duct, 22 in",
+      "linearFeet": 86
+    },
+    {
+      "system": "Supply air",
+      "size": "Rectangular branch duct, 8x6 to 12x12",
+      "linearFeet": 71
+    },
+    {
+      "system": "Supply air",
+      "size": "Rectangular duct, 14x10 to 16x12",
+      "linearFeet": 52
+    },
+    {
+      "system": "Supply air",
+      "size": "Rectangular duct, 16x12 to 24x16",
+      "linearFeet": 61
+    }
+  ],
+  "plumbing": [
+    {
+      "system": "Domestic cold water",
+      "size": "1-1/4 to 2-1/2 in CW",
+      "linearFeet": 153
+    },
+    {
+      "system": "Domestic cold water",
+      "size": "3/4 to 1-1/2 in CW branches",
+      "linearFeet": 68
+    },
+    {
+      "system": "Domestic hot water",
+      "size": "3/4 to 1-1/2 in HW/HWR",
+      "linearFeet": 81
+    },
+    {
+      "system": "Sanitary waste",
+      "size": "3 in SAN",
+      "linearFeet": 80
+    },
+    {
+      "system": "Sanitary waste",
+      "size": "4 in SAN",
+      "linearFeet": 122
+    },
+    {
+      "system": "Vent",
+      "size": "2 in VTR / vent",
+      "linearFeet": 50
+    }
+  ]
+}
