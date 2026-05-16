@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import path from 'node:path'
 import { QuoteComparisonAnalyticsDemo } from './quote-comparison-analytics-demo'
 import { createExternalQuoteImport } from '@/lib/procurement/external-quote-import'
 import { DEFAULT_COMPARISON_SHEET_VIEW, type ComparisonSheetView } from '@/lib/procurement/comparison-sheet-state'
@@ -14,7 +15,7 @@ import type {
 
 export const metadata = { title: 'Building 14 Quote Comparison Demo - Rialto' }
 
-const fixturePath = '/Users/tomasz/Desktop/rialto/data/test_files/07-120-line-multi-supplier-wide.csv'
+const fixturePath = path.join(process.cwd(), 'app/demo/quote-comparison-analytics/fixtures/07-120-line-multi-supplier-wide.csv')
 const now = '2026-05-14T12:00:00.000Z'
 
 export default async function QuoteComparisonAnalyticsDemoPage() {
@@ -34,7 +35,7 @@ export default async function QuoteComparisonAnalyticsDemoPage() {
     rfp_details: {
       ...imported.rfq.rfp_details,
       scope_summary: 'Imported 120-line multi-supplier drywall comparison from test_files.',
-      attachments_summary: 'Seeded from ~/Desktop/rialto/data/test_files/07-120-line-multi-supplier-wide.csv.',
+      attachments_summary: 'Seeded from the bundled quote comparison analytics demo fixture.',
     },
   }
   const lineIdBySource = new Map(imported.rfq.line_items.map((item, index) => [item.id, rfq.line_items[index]?.id ?? item.id]))
