@@ -34,7 +34,8 @@ function viewsEqual(a: ComparisonSheetView, b: ComparisonSheetView) {
   return JSON.stringify(normalizeComparisonSheetView(a)) === JSON.stringify(normalizeComparisonSheetView(b))
 }
 
-export function useComparisonSheetView(userKey: string, rfqId: string) {
+export function useComparisonSheetView(userKey: string, rfqId: string, options: { persistToServer?: boolean } = {}) {
+  const persistToServer = options.persistToServer ?? true
   const [view, setView] = useState<ComparisonSheetView>(DEFAULT_VIEW)
   const [versions, setVersions] = useState<WorkbookVersionSummary[]>([])
   const [currentVersionId, setCurrentVersionId] = useState<number | undefined>(undefined)
@@ -51,6 +52,7 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
     } catch {
       // localStorage may be full or disabled; server persistence is still attempted.
     }
+    if (!persistToServer) return
     const response = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/comparison-sheet-view`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -63,7 +65,7 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
     if (createdVersions.length) {
       setVersions((prev) => mergeWorkbookVersionSummaries(prev, createdVersions))
     }
-  }, [rfqId, userKey])
+  }, [persistToServer, rfqId, userKey])
 
   const pushLocalEdit = useCallback((previous: ComparisonSheetView, next: ComparisonSheetView) => {
     const history = applyLocalWorkbookEdit({
@@ -102,6 +104,12 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
         }
       }
 
+      if (!persistToServer) {
+        if (!cancelled) setView(localView)
+        if (!cancelled) setHydrated(true)
+        return
+      }
+
       try {
         const response = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/comparison-sheet-view`, { cache: 'no-store' })
         if (response.ok) {
@@ -122,7 +130,7 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
     return () => {
       cancelled = true
     }
-  }, [userKey, rfqId])
+  }, [persistToServer, userKey, rfqId])
 
   useEffect(() => {
     if (!hydrated) return
@@ -155,6 +163,7 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
   }, [pushLocalEdit, saveView])
 
   const restoreVersion = useCallback(async (versionId: number, restoreKind: 'undo' | 'redo' | 'history' = 'history') => {
+    if (!persistToServer) return
     const response = await fetch(`/api/rfqs/${encodeURIComponent(rfqId)}/comparison-sheet-view`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -170,7 +179,7 @@ export function useComparisonSheetView(userKey: string, rfqId: string) {
     if (createdVersions.length) {
       setVersions((prev) => mergeWorkbookVersionSummaries(prev, createdVersions))
     }
-  }, [pushLocalEdit, rfqId])
+  }, [persistToServer, pushLocalEdit, rfqId])
 
   const { undoVersionId, redoVersionId } = getWorkbookUndoRedoTargets({ versions, currentVersionId })
 

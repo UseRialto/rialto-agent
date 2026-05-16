@@ -1632,17 +1632,19 @@ function BidExcelSheet({
   vendorColors,
   userKey,
   specDocuments,
+  persistViewToServer = true,
 }: {
   rfq: ContractorRFQ
   bids: ContractorBid[]
   vendorColors: Record<string, string>
   userKey: string
   specDocuments: ProjectSpecDocumentSummary[]
+  persistViewToServer?: boolean
 }) {
   const router = useRouter()
   const baseItems = rfq.line_items
 
-  const { view, versions, canUndo, canRedo, replaceView, deleteColumns, hideColumns, showColumns, deleteLineItems, hideLineItems, showLineItems, addHighlights, removeHighlights, clearHighlights, addDerivedColumns, removeDerivedColumns, setColumnWidth, addManualColumns, addManualLineItems, setCellOverride, setCellOverrides, setColumnLabel, setLineItemOrder, restoreVersion, undo, redo } = useComparisonSheetView(userKey, rfq.id)
+  const { view, versions, canUndo, canRedo, replaceView, deleteColumns, hideColumns, showColumns, deleteLineItems, hideLineItems, showLineItems, addHighlights, removeHighlights, clearHighlights, addDerivedColumns, removeDerivedColumns, setColumnWidth, addManualColumns, addManualLineItems, setCellOverride, setCellOverrides, setColumnLabel, setLineItemOrder, restoreVersion, undo, redo } = useComparisonSheetView(userKey, rfq.id, { persistToServer: persistViewToServer })
   const [previewPatch, setPreviewPatch] = useState<ComparisonViewPatch | null>(null)
   const [priceDifferenceThresholdPct, setPriceDifferenceThresholdPct] = useState(DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT)
   const quoteImportInputRef = useRef<HTMLInputElement | null>(null)
@@ -3806,7 +3808,7 @@ export function BidDashboard({
   return (
     <div className={section === 'comparison' ? 'flex h-full min-h-0 flex-col' : section === 'all' ? 'mt-8' : ''}>
       {showComparison && (
-        <BidExcelSheet rfq={rfq} bids={bids} vendorColors={vendorColors} userKey={userKey} specDocuments={specDocuments} />
+        <BidExcelSheet rfq={rfq} bids={bids} vendorColors={vendorColors} userKey={userKey} specDocuments={specDocuments} persistViewToServer={!demoMode} />
       )}
 
       {showDecision && (
