@@ -2261,6 +2261,7 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
                         {row.totalPrice ? <span>Total: ${row.totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> : null}
                         {row.leadTimeDays ? <span>Lead: {row.leadTimeDays} days</span> : null}
                       </div>
+                      {row.matchReviewReason ? <p className="mt-2 rounded-md px-2 py-1 text-xs font-medium" style={{ background: '#fff3eb', color: '#a85c2a' }}>{row.matchReviewReason}</p> : null}
                       {row.notes ? <p className="mt-1 line-clamp-2 text-xs" style={{ color: '#8a9e96' }}>{row.notes}</p> : null}
                     </div>
                     <label className="grid gap-1">

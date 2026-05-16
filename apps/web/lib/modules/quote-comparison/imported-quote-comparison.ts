@@ -27,7 +27,7 @@ export interface ImportedQuoteComparisonResult {
   diagnostics: {
     usedAgentFallback: boolean
     fallbackReasons: string[]
-    processedFiles: Array<{ filename: string; mode: 'normal' | 'agent-fallback' | 'agent-forced'; reason?: string }>
+    processedFiles: Array<{ filename: string; mode: 'normal' | 'agent-forced'; reason?: string }>
   }
 }
 
@@ -43,11 +43,9 @@ export async function buildImportedQuoteComparison(input: ImportedQuoteCompariso
   const ingestFile = input.ingestFile ?? ingestExternalQuoteFile
   const extractedFiles: ExternalQuoteImportFileInput[] = []
   const warnings: Array<{ message: string }> = []
-  const normalUploads: QuoteComparisonImportUpload[] = []
   const processedFiles: ImportedQuoteComparisonResult['diagnostics']['processedFiles'] = []
 
   for (const file of input.files) {
-    if (!file.forceAgent) normalUploads.push(file)
     const ingested = await ingestFile({
       file,
       forceAgent: file.forceAgent,
@@ -78,47 +76,7 @@ export async function buildImportedQuoteComparison(input: ImportedQuoteCompariso
         })
   )
 
-  let imported: ExternalQuoteImportResult
-  const fallbackReasons: string[] = []
-  try {
-    imported = createImport(extractedFiles)
-  } catch (error) {
-    const normalFailureReason = error instanceof Error ? error.message : String(error)
-    if (normalUploads.length === 0) throw error
-    const repairedFiles = [...extractedFiles]
-    for (const file of normalUploads) {
-      let repaired: ExternalQuoteFileIngestionResult
-      try {
-        repaired = await ingestFile({
-          file,
-          forceAgent: true,
-        })
-      } catch (fallbackError) {
-        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
-        throw new Error(`${file.name}: normal import failed (${normalFailureReason}) and smart import fallback also failed (${fallbackMessage}).`)
-      }
-      const replacement = asImportFile(repaired)
-      const index = repairedFiles.findIndex((candidate) => candidate.filename === file.name)
-      if (index >= 0) repairedFiles[index] = replacement
-      else repairedFiles.push(replacement)
-      fallbackReasons.push(`${file.name}: ${normalFailureReason}`)
-      const processed = processedFiles.find((entry) => entry.filename === file.name)
-      if (processed) {
-        processed.mode = 'agent-fallback'
-        processed.reason = normalFailureReason
-      }
-      warnings.push(
-        { message: `${file.name}: normal quote parsing failed (${normalFailureReason}); retried with the smart import agent.` },
-        ...repaired.warnings,
-      )
-    }
-    try {
-      imported = createImport(repairedFiles)
-    } catch (fallbackImportError) {
-      const fallbackImportMessage = fallbackImportError instanceof Error ? fallbackImportError.message : String(fallbackImportError)
-      throw new Error(`Normal quote import failed (${normalFailureReason}); GPT-5.5 fallback ran but still could not create priced quote rows (${fallbackImportMessage}).`)
-    }
-  }
+  const imported = createImport(extractedFiles)
 
   const analyticsHighlights = buildQuoteImportAnalyticsHighlights(imported.rfq, imported.bids)
   return {
@@ -132,8 +90,8 @@ export async function buildImportedQuoteComparison(input: ImportedQuoteCompariso
       }] : []),
     ],
     diagnostics: {
-      usedAgentFallback: processedFiles.some((file) => file.mode === 'agent-fallback' || file.mode === 'agent-forced'),
-      fallbackReasons,
+      usedAgentFallback: processedFiles.some((file) => file.mode === 'agent-forced'),
+      fallbackReasons: [],
       processedFiles,
     },
   }

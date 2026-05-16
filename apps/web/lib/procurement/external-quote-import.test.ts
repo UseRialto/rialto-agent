@@ -88,6 +88,27 @@ A002,250JR-33,2 1/2 in 20ga J Track 12 ft,458,LF,TRUE,Foundation - San Diego,92.
 A003,250JS-33,2 1/2 in 20ga Jamb Strut 10 ft,1094,LF,TRUE,Foundation - San Diego,205.000,224270,+0%,TRUE,L n W Supply - San Diego,230.000,251620,+12%,TRUE,Action Gypsum Supply,195.000,213330,-5%,TRUE,J n B Materials - Perris,193.000,211142,-6%
 `
 
+const customVendorMatrixText = `
+Multi-supplier quote matrix
+Vendors: Northstar Supply 001 | Pinnacle Materials 001 | Harbor Drywall 001
+Item SKU Description Qty Unit Vendor1 Unit Total Lead Vendor2 Unit Total Lead Vendor3 Unit Total Lead
+M00101 MATRIX-001-01 Rated drywall board 5/8 in 4x12 matrix 1-1 24 EA 1.05 25.20 4 days 1.28 30.72 7 days 1.51 36.24 10 days
+M00102 MATRIX-001-02 Metal stud 362S125-30 10 ft matrix 1-2 41 LF 1.16 47.56 5 days 1.39 56.99 8 days 1.62 66.42 11 days
+M00103 MATRIX-001-03 Acoustic sealant 29 oz cartridge matrix 1-3 58 SF 1.27 73.66 6 days 1.50 87.00 9 days 1.73 100.34 12 days
+`
+
+function customVendorMatrixTextFor(index: number) {
+  const vendorSuffix = String(index).padStart(3, '0')
+  return `
+Multi-supplier quote matrix
+Vendors: Northstar Supply ${vendorSuffix} | Pinnacle Materials ${vendorSuffix} | Harbor Drywall ${vendorSuffix}
+Item SKU Description Qty Unit Vendor1 Unit Total Lead Vendor2 Unit Total Lead Vendor3 Unit Total Lead
+M${vendorSuffix}01 MATRIX-${vendorSuffix}-01 Rated drywall board matrix ${index}-1 24 EA 1.05 25.20 4 days 1.28 30.72 7 days 1.51 36.24 10 days
+M${vendorSuffix}02 MATRIX-${vendorSuffix}-02 Metal stud matrix ${index}-2 41 LF 1.16 47.56 5 days 1.39 56.99 8 days 1.62 66.42 11 days
+M${vendorSuffix}03 MATRIX-${vendorSuffix}-03 Acoustic sealant matrix ${index}-3 58 SF 1.27 73.66 6 days 1.50 87.00 9 days 1.73 100.34 12 days
+`
+}
+
 const generatedFixtureDir = [
   path.resolve(process.cwd(), 'data/test_files'),
   path.resolve(process.cwd(), '../data/test_files'),
@@ -251,6 +272,201 @@ Flange Stud LF
     expect(result.rfq.line_items).not.toContainEqual(expect.objectContaining({ unit: 'multi' }))
   })
 
+  it('imports compact PDF text columns without leaking generated row ids into item descriptions', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'MCRD P-314',
+      filename: '9 - MCRD P-314 - 1.0 - Base Bid.pdf',
+      sourceKind: 'pdf',
+      text: `
+9 - MCRD P-314 - 1.0 - Base Bid
+Item Description Qty L n W Supply - San Diego Unit Pr L n W Supply - San Diego Total P L n W Supply - San Diego Lead Ti L n W Supply - San Diego Alt
+250CH-33 250CH-33 2 1/2" X 22ga. C-H Stud 2,420 lf $1,100 $2,662 0d
+250JS-33 10' 0" 1,094 lf $1,250 $1,368 0d
+400S162-54 4" X 16ga. 1 5/8" 16,827 multi $1,190 $20,024 0d
+EXPBLT 3/8" X 2 3/4" 63 ea $2 $126 0d
+EXPBLT 1/2" X 3 3/4" 84 ea $2 $185 0d
+`,
+      now: '2026-05-16T16:41:14.856Z',
+    })
+
+    expect(result.rfq.line_items).toHaveLength(5)
+    expect(result.bid.vendor_name).toBe('L n W Supply - San Diego')
+    expect(result.rfq.line_items.map((line) => line.description).some((description) => description.includes('rfq-import'))).toBe(false)
+    expect(result.rfq.line_items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sku: '250CH-33',
+        description: '2 1/2" X 22ga. C-H Stud',
+        quantity: 2420,
+        unit: 'lf',
+      }),
+      expect.objectContaining({
+        sku: '250JS-33',
+        description: '2 1/2" X 20ga. Jamb Strut 10\' 0"',
+        quantity: 1094,
+        unit: 'lf',
+      }),
+      expect.objectContaining({
+        sku: '400S162-54',
+        description: '4" X 16ga. 1 5/8" Flange Stud',
+        quantity: 16827,
+        unit: 'lf',
+      }),
+    ]))
+    expect(result.bid.line_item_responses.find((line) => line.sku === '400S162-54')).toMatchObject({
+      unit_price: 1.19,
+      total_price: 20024,
+    })
+    expect(result.rfq.line_items.filter((line) => line.sku === 'EXPBLT')).toHaveLength(2)
+    expect(result.bid.line_item_responses.filter((line) => line.sku === 'EXPBLT').map((line) => line.line_item_id)).toEqual(
+      result.rfq.line_items.filter((line) => line.sku === 'EXPBLT').map((line) => line.id),
+    )
+    expect(result.warnings).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('compact PDF text columns'),
+    }))
+  })
+
+  it('imports compact PDF rows whose descriptions contain quantities, units, and lead times', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'PDF Batch Verification',
+      filename: 'batch-pdf-vendor-001.pdf',
+      sourceKind: 'pdf',
+      text: `
+Imported Vendor Quote
+Supplier : Batch PDF Vendor 001 Expected Delivery Date : 06 / 01 / 2026
+Item Description Qty Batch PDF Vendor 001 Unit Pr Total Lead
+A00101 B001-01 Type X gypsum board 4x12 package 1-1 11 EA 2.15 23.65 3 days
+B00102 B001-02 Cold formed metal stud 20ga 10 ft package 1-2 18 LF 2.34 42.12 4 days
+C00103 B001-03 Acoustic sealant cartridge 29oz package 1-3 25 SF 2.53 63.25 5 days
+`,
+      now: '2026-05-16T16:41:14.856Z',
+    })
+
+    expect(result.bid.vendor_name).toBe('Batch PDF Vendor 001')
+    expect(result.rfq.line_items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sku: 'B001-02',
+        description: 'Cold formed metal stud 20ga 10 ft package 1-2',
+        quantity: 18,
+        unit: 'lf',
+      }),
+    ]))
+    expect(result.bid.line_item_responses.find((line) => line.sku === 'B001-02')).toMatchObject({
+      unit_price: 2.34,
+      total_price: 42.12,
+      lead_time_days: 4,
+    })
+  })
+
+  it('preserves compact PDF credit rows formatted with a leading negative dollar sign', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'PDF Credit Verification',
+      filename: 'adversarial-columnar-001.pdf',
+      sourceKind: 'pdf',
+      text: `
+Supplier : Adversarial PDF Supply 001 Expected Delivery Date : 07 / 15 / 2026
+Line SKU Description Qty Unit Unit Price Total Lead
+Q00110 ADV-001-10 Access panel 24 x 24 fire rated batch 1.10 118 EA -$4.06 -$479.08 20 d
+`,
+      now: '2026-05-16T16:41:14.856Z',
+    })
+
+    expect(result.rfq.line_items).toHaveLength(1)
+    expect(result.bid.line_item_responses[0]).toMatchObject({
+      sku: 'ADV-001-10',
+      unit_price: -4.06,
+      total_price: -479.08,
+      lead_time_days: 20,
+    })
+    expect(result.bid.total_price).toBe(-479.08)
+  })
+
+  it('preserves compact PDF accounting-style parenthetical credit rows', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'PDF Ledger Credit Verification',
+      filename: 'ledger-credit-corpus-001.pdf',
+      sourceKind: 'pdf',
+      text: `
+Supplier : Ledger Credit Vendor 001 Expected Delivery Date : 08 / 10 / 2026
+Line SKU Material Description Qty Unit Unit Price Ext Total Lead
+L00104 LED-001-04 Fire caulk CP-25WB plus 10.1 oz tube ledger 1-4 63 Bundle ($2.04) ($128.52) 10 days
+`,
+      now: '2026-05-16T16:41:14.856Z',
+    })
+
+    expect(result.rfq.line_items).toHaveLength(1)
+    expect(result.bid.line_item_responses[0]).toMatchObject({
+      sku: 'LED-001-04',
+      unit_price: -2.04,
+      total_price: -128.52,
+      lead_time_days: 10,
+    })
+    expect(result.bid.total_price).toBe(-128.52)
+  })
+
+  it('combines wrapped PDF descriptions before parsing priced continuation lines', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'PDF Wrapped Description Verification',
+      filename: 'wrapped-description-corpus-001.pdf',
+      sourceKind: 'pdf',
+      text: `
+Supplier : Wrapped PDF Vendor 001 Expected Delivery Date : 09 / 06 / 2026
+Line SKU Description Qty Unit Unit Price Ext Total Lead
+W00101 WRAP-001-01 Fire-rated gypsum shaftliner panel assembly
+ASTM C645 20ga 10 ft lengths for corridor level 2 8 EA $1.11 $8.88 2 days
+`,
+      now: '2026-05-16T16:41:14.856Z',
+    })
+
+    expect(result.rfq.line_items).toHaveLength(1)
+    expect(result.rfq.line_items[0]).toMatchObject({
+      sku: 'WRAP-001-01',
+      description: 'Fire-rated gypsum shaftliner panel assembly ASTM C645 20ga 10 ft lengths for corridor level 2',
+      quantity: 8,
+      unit: 'ea',
+    })
+    expect(result.bid.line_item_responses[0]).toMatchObject({
+      sku: 'WRAP-001-01',
+      unit_price: 1.11,
+      total_price: 8.88,
+      lead_time_days: 2,
+    })
+  })
+
+  it('combines preceding PDF description lines before parsing priced item rows', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'PDF Preceding Description Verification',
+      filename: 'preceding-description-corpus-001.pdf',
+      sourceKind: 'pdf',
+      text: `
+Supplier : Preceding Description Vendor 001 Expected Delivery Date : 10 / 07 / 2026
+Description / Line SKU Qty Unit Unit Price Total Lead
+UL design U419 partition assembly with resilient channel
+P00101 PRE-001-01 5/8 in Type X gypsum board 4x12 sheets 15 EA $1.20 $18.00 3 days
+`,
+      now: '2026-05-16T16:41:14.856Z',
+    })
+
+    expect(result.rfq.line_items).toHaveLength(1)
+    expect(result.rfq.line_items[0]).toMatchObject({
+      sku: 'PRE-001-01',
+      description: 'UL design U419 partition assembly with resilient channel 5/8 in Type X gypsum board 4x12 sheets',
+      quantity: 15,
+      unit: 'ea',
+    })
+    expect(result.bid.line_item_responses[0]).toMatchObject({
+      sku: 'PRE-001-01',
+      unit_price: 1.2,
+      total_price: 18,
+      lead_time_days: 3,
+    })
+  })
+
   it('creates one imported bid per supplier from a wide multi-supplier comparison file', () => {
     const result = createExternalQuoteImport({
       projectId: 'project-1',
@@ -278,6 +494,38 @@ Flange Stud LF
     expect(result.warnings).toContainEqual(expect.objectContaining({
       message: expect.stringContaining('multiple supplier'),
     }))
+  })
+
+  it('imports compact PDF matrix text with source vendor names and SF rows', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'Multi Vendor Matrix Verification',
+      filename: 'multi-vendor-matrix-corpus-001.pdf',
+      sourceKind: 'pdf',
+      text: customVendorMatrixText,
+      now: '2026-05-16T16:41:14.856Z',
+    })
+
+    expect(result.rfq.line_items.map((line) => line.sku)).toEqual([
+      'MATRIX-001-01',
+      'MATRIX-001-02',
+      'MATRIX-001-03',
+    ])
+    expect(result.rfq.line_items.find((line) => line.sku === 'MATRIX-001-03')).toMatchObject({
+      description: 'Acoustic sealant 29 oz cartridge matrix 1-3',
+      quantity: 58,
+      unit: 'sf',
+    })
+    expect(result.bids.map((bid) => bid.vendor_name)).toEqual([
+      'Northstar Supply 001',
+      'Pinnacle Materials 001',
+      'Harbor Drywall 001',
+    ])
+    expect(result.bids.find((bid) => bid.vendor_name === 'Harbor Drywall 001')?.line_item_responses.find((line) => line.sku === 'MATRIX-001-03')).toMatchObject({
+      unit_price: 1.73,
+      total_price: 100.34,
+      lead_time_days: 12,
+    })
   })
 
   it('imports row-per-vendor files even when clients use different column names', () => {
@@ -341,6 +589,87 @@ Flange Stud LF
     expect(result.rfq.invites?.map((invite) => invite.vendor_name)).toEqual(['Acme Drywall Supply', 'BuildCo Materials'])
     expect(result.warnings).toContainEqual(expect.objectContaining({
       message: expect.stringContaining('Imported 2 vendor quote responses from 2 files'),
+    }))
+  })
+
+  it('matches multi-file vendor rows by SKU and unit while preserving each vendor description', () => {
+    const result = createExternalQuoteImportFromFiles({
+      projectId: 'project-1',
+      projectName: 'Library TI',
+      title: 'Library TI Metal Framing',
+      now: '2026-05-16T12:00:00.000Z',
+      files: [
+        {
+          filename: 'alpha.csv',
+          sourceKind: 'spreadsheet',
+          text: [
+            'Line #,Part No,Material Name,Required Qty,UOM,Vendor,Quoted Unit Cost,Extended Cost,ETA,Clarifications',
+            'A001,362S125-30,3 5/8 in 20ga metal stud 10 ft,606,LF,Alpha Supply,1.31,793.86,14 days,',
+          ].join('\n'),
+        },
+        {
+          filename: 'beta.csv',
+          sourceKind: 'spreadsheet',
+          text: [
+            'Line #,Part No,Material Name,Required Qty,UOM,Vendor,Quoted Unit Cost,Extended Cost,ETA,Clarifications',
+            'A001,362S125-30,362S125-30 3-5/8 inch 20 gauge stud,606,LF,Beta Supply,1.27,769.62,9 days,',
+          ].join('\n'),
+        },
+      ],
+    })
+
+    expect(result.rfq.line_items).toHaveLength(1)
+    expect(result.bids.map((bid) => bid.vendor_name)).toEqual(['Alpha Supply', 'Beta Supply'])
+    expect(result.bids.find((bid) => bid.vendor_name === 'Alpha Supply')?.line_item_responses[0]).toMatchObject({
+      line_item_id: result.rfq.line_items[0].id,
+      description: '3 5/8 in 20ga metal stud 10 ft',
+    })
+    expect(result.bids.find((bid) => bid.vendor_name === 'Beta Supply')?.line_item_responses[0]).toMatchObject({
+      line_item_id: result.rfq.line_items[0].id,
+      description: '362S125-30 3-5/8 inch 20 gauge stud',
+    })
+    expect(result.warnings).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('matched an existing SKU with a different description'),
+    }))
+  })
+
+  it('creates one RFQ comparison from multiple custom matrix quote files', () => {
+    const result = createExternalQuoteImportFromFiles({
+      projectId: 'project-1',
+      projectName: 'Multi Vendor Matrix Verification',
+      title: 'Batch Matrix Import',
+      now: '2026-05-16T16:41:14.856Z',
+      files: [
+        {
+          filename: 'multi-vendor-matrix-corpus-001.pdf',
+          sourceKind: 'pdf',
+          text: customVendorMatrixTextFor(1),
+        },
+        {
+          filename: 'multi-vendor-matrix-corpus-002.pdf',
+          sourceKind: 'pdf',
+          text: customVendorMatrixTextFor(2),
+        },
+      ],
+    })
+
+    expect(result.rfq.line_items).toHaveLength(6)
+    expect(result.bids.map((bid) => bid.vendor_name)).toEqual([
+      'Northstar Supply 001',
+      'Pinnacle Materials 001',
+      'Harbor Drywall 001',
+      'Northstar Supply 002',
+      'Pinnacle Materials 002',
+      'Harbor Drywall 002',
+    ])
+    expect(result.bids.every((bid) => bid.line_item_responses.length === 3)).toBe(true)
+    expect(result.bids.find((bid) => bid.vendor_name === 'Harbor Drywall 002')?.line_item_responses.map((line) => line.sku)).toEqual([
+      'MATRIX-002-01',
+      'MATRIX-002-02',
+      'MATRIX-002-03',
+    ])
+    expect(result.warnings).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('Imported 6 vendor quote responses from 2 files'),
     }))
   })
 
@@ -446,6 +775,112 @@ Flange Stud LF
     expect(merged.bids[0].line_item_responses.some((line) => line.is_alternate)).toBe(false)
     expect(merged.warnings).toContainEqual(expect.objectContaining({
       message: expect.stringContaining('Added 1 imported vendor quote response'),
+    }))
+  })
+
+  it('appends vendor rows to existing comparison by SKU and unit even when descriptions differ', () => {
+    const initial = createExternalQuoteImportFromFiles({
+      projectId: 'project-1',
+      projectName: 'Library TI',
+      title: 'Library TI Metal Framing',
+      now: '2026-05-16T12:00:00.000Z',
+      files: [{
+        filename: 'alpha.csv',
+        sourceKind: 'spreadsheet',
+        text: [
+          'Line #,Part No,Material Name,Required Qty,UOM,Vendor,Quoted Unit Cost,Extended Cost,ETA,Clarifications',
+          'A001,362S125-30,3 5/8 in 20ga metal stud 10 ft,606,LF,Alpha Supply,1.31,793.86,14 days,',
+        ].join('\n'),
+      }],
+    })
+    const additional = createExternalQuoteImportFromFiles({
+      projectId: 'project-1',
+      projectName: 'Library TI',
+      title: 'Library TI Metal Framing',
+      now: '2026-05-16T12:01:00.000Z',
+      files: [{
+        filename: 'beta.csv',
+        sourceKind: 'spreadsheet',
+        text: [
+          'Line #,Part No,Material Name,Required Qty,UOM,Vendor,Quoted Unit Cost,Extended Cost,ETA,Clarifications',
+          'A001,362S125-30,362S125-30 3-5/8 inch 20 gauge stud,606,LF,Beta Supply,1.27,769.62,9 days,',
+        ].join('\n'),
+      }],
+    })
+
+    const merged = mergeExternalQuoteImportIntoRFQ({
+      targetRfq: initial.rfq,
+      existingBids: initial.bids,
+      imported: additional,
+      now: '2026-05-16T12:02:00.000Z',
+    })
+
+    expect(merged.addedLineItems).toHaveLength(0)
+    expect(merged.rfq.line_items).toHaveLength(1)
+    expect(merged.bids).toHaveLength(1)
+    expect(merged.bids[0].line_item_responses[0]).toMatchObject({
+      line_item_id: initial.rfq.line_items[0].id,
+      description: '362S125-30 3-5/8 inch 20 gauge stud',
+      total_price: 769.62,
+    })
+    expect(merged.warnings).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('matched an existing SKU with a different description'),
+    }))
+  })
+
+  it('merges a custom matrix import into an existing comparison with matched and added lines', () => {
+    const initial = createExternalQuoteImportFromFiles({
+      projectId: 'project-1',
+      projectName: 'Multi Vendor Matrix Verification',
+      title: 'Batch Matrix Import',
+      now: '2026-05-16T16:41:14.856Z',
+      files: [{
+        filename: 'multi-vendor-matrix-corpus-001.pdf',
+        sourceKind: 'pdf',
+        text: customVendorMatrixTextFor(1),
+      }],
+    })
+    const additionalText = [
+      customVendorMatrixTextFor(1).trim()
+        .replace(/Northstar Supply 001/g, 'Northstar Supply 002')
+        .replace(/Pinnacle Materials 001/g, 'Pinnacle Materials 002')
+        .replace(/Harbor Drywall 001/g, 'Harbor Drywall 002'),
+      'M00204 MATRIX-002-04 Corner bead matrix 2-4 75 Tube 1.38 103.50 7 days 1.61 120.75 10 days 1.84 138.00 13 days',
+    ].join('\n')
+    const additional = createExternalQuoteImportFromFiles({
+      projectId: 'project-1',
+      projectName: 'Multi Vendor Matrix Verification',
+      title: 'Batch Matrix Import',
+      now: '2026-05-16T16:42:14.856Z',
+      files: [{
+        filename: 'multi-vendor-matrix-corpus-002.pdf',
+        sourceKind: 'pdf',
+        text: additionalText,
+      }],
+    })
+
+    const merged = mergeExternalQuoteImportIntoRFQ({
+      targetRfq: initial.rfq,
+      existingBids: initial.bids,
+      imported: additional,
+      now: '2026-05-16T16:43:14.856Z',
+    })
+
+    expect(merged.addedLineItems.map((line) => line.sku)).toEqual(['MATRIX-002-04'])
+    expect(merged.rfq.line_items).toHaveLength(4)
+    expect(merged.bids.map((bid) => bid.vendor_name)).toEqual([
+      'Northstar Supply 002',
+      'Pinnacle Materials 002',
+      'Harbor Drywall 002',
+    ])
+    expect(merged.bids.every((bid) => bid.line_item_responses.length === 4)).toBe(true)
+    expect(merged.bids.find((bid) => bid.vendor_name === 'Harbor Drywall 002')?.line_item_responses.find((line) => line.sku === 'MATRIX-002-04')).toMatchObject({
+      unit_price: 1.84,
+      total_price: 138,
+      lead_time_days: 13,
+    })
+    expect(merged.warnings).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('Matched 3 existing line items and added 1 new line item'),
     }))
   })
 

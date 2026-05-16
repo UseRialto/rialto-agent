@@ -88,7 +88,7 @@ export async function POST(request: NextRequest) {
     revalidatePath(`/contractor/projects/${projectId}/rfqs/${imported.rfq.id}`)
 
     const importMessage = built.diagnostics.usedAgentFallback
-      ? `GPT-5.5 fallback used after normal import failed: ${built.diagnostics.fallbackReasons[0] ?? 'normal parser could not finish'}.`
+      ? 'Processed through the explicitly requested smart import agent.'
       : 'Processed correctly through the normal importer.'
 
     return NextResponse.json({

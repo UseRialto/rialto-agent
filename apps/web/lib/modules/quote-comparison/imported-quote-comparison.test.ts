@@ -35,9 +35,9 @@ describe('imported quote comparison', () => {
     ]))
   })
 
-  it('retries failed PDF parsing through the smart agent path inside the module', async () => {
+  it('does not retry failed deterministic parsing through the smart agent path', async () => {
     const calls: Array<{ forceAgent?: boolean }> = []
-    const result = await buildImportedQuoteComparison({
+    await expect(buildImportedQuoteComparison({
       projectId: 'project-1',
       projectName: 'Riverton',
       files: [{
@@ -60,13 +60,8 @@ describe('imported quote comparison', () => {
           diagnostics: { mode: input.forceAgent ? 'agent-forced' : 'normal' },
         }
       },
-    })
+    })).rejects.toThrow('No priced quote rows were found in this import.')
 
-    expect(calls).toEqual([{ forceAgent: undefined }, { forceAgent: true }])
-    expect(result.imported.bids[0].vendor_name).toBe('Acme')
-    expect(result.warnings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ message: expect.stringContaining('retried with the smart import agent') }),
-      expect.objectContaining({ message: 'agent normalized pdf' }),
-    ]))
+    expect(calls).toEqual([{ forceAgent: undefined }])
   })
 })

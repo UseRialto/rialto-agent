@@ -1329,6 +1329,7 @@ function colLetter(index: number) {
 
 function moneyShort(value: number | null | undefined) {
   if (value == null) return ''
+  if (!Number.isInteger(value) && Math.abs(value) < 1000) return formatSheetMoney(value)
   return `$${Math.round(value).toLocaleString()}`
 }
 
@@ -1888,6 +1889,7 @@ function BidExcelSheet({
   const [historyMenuOpen, setHistoryMenuOpen] = useState(false)
   const [rangeStart, setRangeStart] = useState<{ r: number; c: number } | null>(null)
   const [isDraggingRange, setIsDraggingRange] = useState(false)
+  const isDraggingRangeRef = useRef(false)
   const manualInsertCounterRef = useRef(0)
 
   function startCellEdit(item: typeof items[number], col: SheetColumn) {
@@ -2053,6 +2055,46 @@ function BidExcelSheet({
     return rows.map((row) => row.join('\t')).join('\n')
   }
 
+  function writeSelectedRangeToClipboard() {
+    const value = copySelectedRange()
+    if (!value) return
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(value).catch(() => writeTextWithTextareaFallback(value))
+      return
+    }
+    writeTextWithTextareaFallback(value)
+  }
+
+  function writeTextWithTextareaFallback(value: string) {
+    const textarea = document.createElement('textarea')
+    textarea.value = value
+    textarea.setAttribute('readonly', 'true')
+    textarea.style.position = 'fixed'
+    textarea.style.left = '-9999px'
+    textarea.style.top = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+    containerRef.current?.focus()
+  }
+
+  function onCopySelectedRange(event: React.ClipboardEvent<HTMLDivElement>) {
+    if (editingCell || editingHeader || editingGroupHeader) return
+    const value = copySelectedRange()
+    if (!value) return
+    event.preventDefault()
+    event.clipboardData.setData('text/plain', value)
+  }
+
+  function onPasteIntoSelection(event: React.ClipboardEvent<HTMLDivElement>) {
+    if (editingCell || editingHeader || editingGroupHeader) return
+    const text = event.clipboardData.getData('text/plain')
+    if (!text) return
+    event.preventDefault()
+    pasteTextToSelection(text)
+  }
+
   function pasteTextToSelection(text: string) {
     const rows = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').map((row) => row.split('\t'))
     if (rows.length === 1 && rows[0].length === 1) {
@@ -2133,15 +2175,23 @@ function BidExcelSheet({
     setContextMenu({ x: e.clientX, y: e.clientY, rowKey, colKey })
   }
 
-  function startRangeSelect(r: number, c: number) {
+  function startRangeSelect(r: number, c: number, event?: React.MouseEvent) {
     containerRef.current?.focus()
+    if (event?.shiftKey) {
+      isDraggingRangeRef.current = false
+      setRangeStart((start) => start ?? sel)
+      setSel({ r, c })
+      setIsDraggingRange(false)
+      return
+    }
+    isDraggingRangeRef.current = true
     setSel({ r, c })
     setRangeStart({ r, c })
     setIsDraggingRange(true)
   }
 
   function extendRangeSelect(r: number, c: number) {
-    if (!isDraggingRange) return
+    if (!isDraggingRangeRef.current) return
     setSel({ r, c })
   }
 
@@ -2268,7 +2318,10 @@ function BidExcelSheet({
 
   useEffect(() => {
     if (!isDraggingRange) return
-    const stop = () => setIsDraggingRange(false)
+    const stop = () => {
+      isDraggingRangeRef.current = false
+      setIsDraggingRange(false)
+    }
     window.addEventListener('mouseup', stop)
     return () => window.removeEventListener('mouseup', stop)
   }, [isDraggingRange])
@@ -2332,13 +2385,11 @@ function BidExcelSheet({
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); dispatchAssistant(true); return }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
-      const value = copySelectedRange()
-      if (value && navigator.clipboard) void navigator.clipboard.writeText(value)
+      e.preventDefault()
+      writeSelectedRangeToClipboard()
       return
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') {
-      e.preventDefault()
-      if (navigator.clipboard) void navigator.clipboard.readText().then((text) => pasteTextToSelection(text))
       return
     }
     if (e.key === 'Backspace' || e.key === 'Delete') {
@@ -3012,7 +3063,16 @@ function BidExcelSheet({
       )}
 
       {/* Scrollable grid */}
-      <div ref={containerRef} className="flex-1 min-h-0 overflow-auto outline-none" tabIndex={0} onKeyDown={onKeyDown} style={{ background: '#ffffff', userSelect: 'none', WebkitUserSelect: 'none' }}>
+      <div
+        ref={containerRef}
+        data-testid="comparison-grid-container"
+        className="flex-1 min-h-0 overflow-auto outline-none"
+        tabIndex={0}
+        onKeyDown={onKeyDown}
+        onCopy={onCopySelectedRange}
+        onPaste={onPasteIntoSelection}
+        style={{ background: '#ffffff', userSelect: 'none', WebkitUserSelect: 'none' }}
+      >
         <div
           style={{
             display: 'grid',
@@ -3199,7 +3259,7 @@ function BidExcelSheet({
           {visibleCols.map((col, c) => (
             <div
               key={`fh-${col.key}`}
-              onMouseDown={() => startRangeSelect(fieldHeaderRowIdx, c)}
+              onMouseDown={(event) => startRangeSelect(fieldHeaderRowIdx, c, event)}
               onMouseEnter={() => extendRangeSelect(fieldHeaderRowIdx, c)}
               onDoubleClick={() => startHeaderEdit(col)}
               onContextMenu={(e) => openContextMenu(e, undefined, col.key)}
@@ -3309,7 +3369,12 @@ function BidExcelSheet({
                     <div
                       key={`cell-${item.id}-${col.key}`}
                       className="group"
-                      onMouseDown={() => startRangeSelect(r, c)}
+                      data-testid="comparison-grid-cell"
+                      data-row-index={r}
+                      data-col-index={c}
+                      data-col-key={col.key}
+                      data-row-key={item.id}
+                      onMouseDown={(event) => startRangeSelect(r, c, event)}
                       onMouseEnter={() => extendRangeSelect(r, c)}
                       onDoubleClick={() => startCellEdit(item, col)}
                       onContextMenu={(e) => openContextMenu(e, item.id, col.key)}
@@ -3409,7 +3474,7 @@ function BidExcelSheet({
                   return (
                     <div
                       key={`cell-${item.id}-extra-${i}`}
-                      onMouseDown={() => startRangeSelect(r, c)}
+                      onMouseDown={(event) => startRangeSelect(r, c, event)}
                       onMouseEnter={() => extendRangeSelect(r, c)}
                       onContextMenu={(e) => openContextMenu(e, item.id)}
                       style={{ ...cellBase, gridRow: r + 1, gridColumn: visibleCols.length + 2 + i, background: isSelected ? '#dbeafe' : inRange ? '#eff6ff' : stripe, ...(isSelected ? { boxShadow: 'inset 0 0 0 2px #2563eb' } : inRange ? { boxShadow: 'inset 0 0 0 1px #93c5fd' } : {}) }}

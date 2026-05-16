@@ -14,7 +14,7 @@ export interface ExternalQuoteFileIngestionResult {
   text: string
   warnings: Array<{ message: string }>
   diagnostics: {
-    mode: 'normal' | 'agent-fallback' | 'agent-forced'
+    mode: 'normal' | 'agent-forced'
     fallbackReason?: string
     model?: string
   }
@@ -27,11 +27,6 @@ export interface ExternalQuoteFileIngestionInput {
   normalizeUnsupported?: (input: UnsupportedQuoteAgentExtractionInput) => Promise<UnsupportedQuoteAgentExtractionResult>
 }
 
-function supportedExtractionFailureWarning(filename: string, error: unknown) {
-  const detail = error instanceof Error ? error.message : String(error)
-  return `${filename}: deterministic extraction failed (${detail}); trying the smart import agent.`
-}
-
 export async function ingestExternalQuoteFile(input: ExternalQuoteFileIngestionInput): Promise<ExternalQuoteFileIngestionResult> {
   const file = input.file
   const normalizeUnsupported = input.normalizeUnsupported ?? normalizeUnsupportedExternalQuoteFileWithAgent
@@ -39,35 +34,16 @@ export async function ingestExternalQuoteFile(input: ExternalQuoteFileIngestionI
   const sourceKind = detectedSourceKind ?? 'spreadsheet'
 
   if (!input.forceAgent) {
-    try {
-      const text = await (input.extractText ?? extractExternalQuoteImportText)(file, file.buffer)
-      if (!text.trim()) {
-        throw new Error('No readable text or worksheet rows were found.')
-      }
-      return {
-        filename: file.name,
-        sourceKind,
-        text,
-        warnings: [],
-        diagnostics: { mode: 'normal' },
-      }
-    } catch (error) {
-      const normalized = await normalizeUnsupported({
-        filename: file.name,
-        mimeType: file.type,
-        buffer: file.buffer,
-      })
-      const reason = error instanceof Error ? error.message : String(error)
-      return {
-        filename: file.name,
-        sourceKind: 'spreadsheet',
-        text: normalized.text,
-        warnings: [
-          { message: supportedExtractionFailureWarning(file.name, error) },
-          ...normalized.warnings.map((message) => ({ message })),
-        ],
-        diagnostics: { mode: 'agent-fallback', fallbackReason: reason, model: normalized.model },
-      }
+    const text = await (input.extractText ?? extractExternalQuoteImportText)(file, file.buffer)
+    if (!text.trim()) {
+      throw new Error('No readable text or worksheet rows were found.')
+    }
+    return {
+      filename: file.name,
+      sourceKind,
+      text,
+      warnings: [],
+      diagnostics: { mode: 'normal' },
     }
   }
 
