@@ -61,6 +61,7 @@ interface ParsedQuoteLine {
   itemNumber: string
   sku: string
   description: string
+  descriptionFromSourceColumn?: boolean
   quantity: number
   unit: string
   unitPrice: number
@@ -162,6 +163,11 @@ function normalizeSku(value: string) {
     .replace(/\s+/g, '')
 }
 
+function normalizeSourceItemCode(value: string) {
+  return compact(value)
+    .replace(/\s*-\s*/g, '-')
+}
+
 function stripLeadingRepeatedSku(description: string, sku: string) {
   const normalizedSkuValue = normalizeSku(sku).toLowerCase()
   const text = compact(description)
@@ -260,21 +266,28 @@ function normalizeImportedPriceValues(input: {
   let unitPrice = rawComparisonUnitPrice
   let totalPrice = input.totalPrice
 
-  if (
-    input.sourceKind === 'parsed' &&
-    input.pricePerQuantity &&
-    input.pricePerQuantity > 1 &&
-    input.pricePerUnit &&
-    unitKey(input.pricePerUnit) === unitKey(input.unit) &&
-    Math.abs(rawComparisonUnitPrice - input.unitPrice) > 0.000001
-  ) {
-    attributes.push(importReviewAttribute({
-      metric: 'unit_price',
-      category: 'price_basis_conversion',
-      originalValue: `${formatImportedMoney(input.unitPrice)} per ${input.pricePerQuantity.toLocaleString()} ${input.pricePerUnit}`,
-      normalizedValue: `${formatImportedMoney(rawComparisonUnitPrice)} per ${input.unit}`,
-      reason: `Rialto normalized the quoted unit price from per ${input.pricePerQuantity.toLocaleString()} ${input.pricePerUnit} to per ${input.unit} so all comparison rows use the requested unit.`,
-    }))
+  if (input.sourceKind === 'parsed' && input.pricePerQuantity && input.pricePerUnit) {
+    if (
+      input.pricePerQuantity > 1 &&
+      unitKey(input.pricePerUnit) === unitKey(input.unit) &&
+      Math.abs(rawComparisonUnitPrice - input.unitPrice) > 0.000001
+    ) {
+      attributes.push(importReviewAttribute({
+        metric: 'unit_price',
+        category: 'price_basis_conversion',
+        originalValue: `${formatImportedMoney(input.unitPrice)} per ${input.pricePerQuantity.toLocaleString()} ${input.pricePerUnit}`,
+        normalizedValue: `${formatImportedMoney(rawComparisonUnitPrice)} per ${input.unit}`,
+        reason: `Rialto normalized the quoted unit price from per ${input.pricePerQuantity.toLocaleString()} ${input.pricePerUnit} to per ${input.unit} so all comparison rows use the requested unit.`,
+      }))
+    } else if (unitKey(input.pricePerUnit) !== unitKey(input.unit)) {
+      attributes.push(importReviewAttribute({
+        metric: 'unit_price',
+        category: 'price_basis_conversion',
+        originalValue: `${formatImportedMoney(input.unitPrice)} per ${input.pricePerQuantity.toLocaleString()} ${input.pricePerUnit}`,
+        normalizedValue: `${formatImportedMoney(rawComparisonUnitPrice)} per ${input.unit}`,
+        reason: `The imported quote used a different price basis unit (${input.pricePerUnit}) than the comparison row unit (${input.unit}). Rialto preserved the imported comparison value and flagged it for estimator approval.`,
+      }))
+    }
   }
 
   if (unitPrice < 0) {
@@ -583,77 +596,24 @@ function trailingUnit(value: string) {
   return compact(value).match(/\b(LF|EA|SF|SY|CY|Tube|Bundle|Box|Bag|Pail|Pal|Each|Roll|Gallon|Carton|Sausage)$/i)?.[1]
 }
 
+function looksLikeStandaloneUnit(value: string) {
+  return /^(?:LF|EA|SF|SY|CY|Tube|Bundle|Box|Bag|Pail|Pal|Each|Roll|Gallon|Carton|Sausage)$/i.test(compact(value))
+}
+
+function looksLikePriceBasisLine(value: string) {
+  return /^[0-9][0-9,.]*(?:\.[0-9]+)?\s+[A-Za-z]+\s*\/\s*(?:[0-9][0-9,.]*(?:\.[0-9]+)?\s+)?[A-Za-z]+$/i.test(compact(value))
+}
+
 function descriptionLooksIncomplete(value: string) {
   const description = compact(value)
   if (!description) return true
+  if (looksLikeStandaloneUnit(description)) return true
   if (/^(?:multi|varies?|n\/a|na)$/i.test(description)) return true
   if (/^(?:\d+\s*)?'\s*\d+\s*"$/i.test(description)) return true
   if (/^\d+\s*'\s*\d+\s*"$/i.test(description)) return true
   if (/^\d+(?:\s+\d+\/\d+)?\s*(?:"|in|inch|inches)$/i.test(description)) return true
   if (/^[0-9./\s'"-]+$/.test(description)) return true
   return false
-}
-
-function gaugeFromMil(mil: string) {
-  if (mil === '54') return '16ga.'
-  if (mil === '43') return '18ga.'
-  if (mil === '30' || mil === '33') return '20ga.'
-  return `${mil} mil`
-}
-
-function widthFromSkuCode(code: string) {
-  if (code === '250') return '2 1/2"'
-  if (code === '362') return '3 5/8"'
-  if (code === '400') return '4"'
-  if (code === '600') return '6"'
-  return ''
-}
-
-function flangeFromSkuCode(code: string) {
-  if (code === '125') return '1 1/4"'
-  if (code === '150') return '1 1/2"'
-  if (code === '162') return '1 5/8"'
-  if (code === '250') return '2 1/2"'
-  return ''
-}
-
-function metalFramingDescriptionFromSku(sku: string, extractedDescription: string) {
-  const normalizedSku = normalizeSku(sku).toUpperCase()
-  const incomplete = descriptionLooksIncomplete(extractedDescription)
-  const length = incomplete ? compact(extractedDescription) : ''
-  const studOrTrack = normalizedSku.match(/^(\d{3})([ST])(\d{3})-(\d{2})(SL)?$/)
-  if (studOrTrack) {
-    const [, widthCode, member, flangeCode, mil, slip] = studOrTrack
-    const width = widthFromSkuCode(widthCode)
-    const flange = flangeFromSkuCode(flangeCode)
-    const memberName = member === 'S' ? 'Flange Stud' : slip ? 'Slip Track' : 'Leg Track'
-    const description = compact([
-      width ? `${width} X ${gaugeFromMil(mil)}` : gaugeFromMil(mil),
-      flange,
-      memberName,
-      length,
-    ].filter(Boolean).join(' '))
-    return description || extractedDescription
-  }
-
-  const jMember = normalizedSku.match(/^(\d{3})J([RS])-(\d{2})$/)
-  if (jMember) {
-    if (!incomplete) return extractedDescription
-    const [, widthCode, member, mil] = jMember
-    const width = widthFromSkuCode(widthCode)
-    const memberName = member === 'R' ? 'J Track' : 'Jamb Strut'
-    return compact([width ? `${width} X ${gaugeFromMil(mil)}` : gaugeFromMil(mil), memberName, length].filter(Boolean).join(' '))
-  }
-
-  const chMember = normalizedSku.match(/^(\d{3})CH-(\d{2})$/)
-  if (chMember) {
-    if (!incomplete) return extractedDescription
-    const [, widthCode, mil] = chMember
-    const width = widthFromSkuCode(widthCode)
-    return compact([width ? `${width} X ${gaugeFromMil(mil)}` : gaugeFromMil(mil), 'C-H Stud', length].filter(Boolean).join(' '))
-  }
-
-  return extractedDescription
 }
 
 function repairSplitPdfDescription(
@@ -666,7 +626,7 @@ function repairSplitPdfDescription(
 
   const parts = [
     previousDescription,
-    parsed.description,
+    looksLikeStandaloneUnit(parsed.description) ? '' : parsed.description,
     nextContinuation,
   ].filter(Boolean)
   const description = compact(parts.join(' '))
@@ -693,6 +653,182 @@ function repairMultiSizePdfLine(
   }
 }
 
+function isSectionOrPageArtifact(line: string) {
+  if (!line) return true
+  if (/^\d{3}\s+-\s+/.test(line)) return true
+  if (/^L n W Supply/i.test(line)) return true
+  if (/\b\d+\s*\/\s*\d+\s+\d{1,2}\/\d{1,2}\/\d{4}\b/.test(line)) return true
+  if (/\b(?:supplier|expected delivery date|requester|company|job site)\b/i.test(line)) return true
+  if (/\b(?:item description|quantity|price per|total)\b/i.test(line)) return true
+  return false
+}
+
+function parseSourceTablePriceTail(line: string) {
+  const priced = compact(line).match(new RegExp(
+    String.raw`^(\d+)\s+(.+?)\s+(-?\s*[0-9][0-9,]*\.[0-9]+)\s+([A-Za-z]+)\s+([0-9][0-9,]*\.[0-9]+)\s+(.+?)\s+(${signedMoneyTokenPattern})$`,
+    'i',
+  ))
+  if (priced) {
+    const [, itemNumber, leftText, quantityText, unit, unitPriceText, priceBasisText, totalText] = priced
+    const priceBasis = compact(priceBasisText).match(/([0-9][0-9,]*(?:\.[0-9]+)?)\s+([A-Za-z]+)$/)
+    return {
+      itemNumber,
+      leftText: compact(leftText),
+      quantity: quoteRowNumberFromText(quantityText),
+      unit: normalizeUnit(unit),
+      unitPrice: numberFromText(unitPriceText),
+      pricePerQuantity: priceBasis ? quoteRowNumberFromText(priceBasis[1]) : undefined,
+      pricePerUnit: priceBasis ? normalizeUnit(priceBasis[2]) : undefined,
+      totalPrice: numberFromText(totalText),
+    }
+  }
+
+  const noPriceBasis = compact(line).match(new RegExp(
+    String.raw`^(\d+)\s+(.+?)\s+(-?\s*[0-9][0-9,]*\.[0-9]+)\s+([A-Za-z]+)\s+([0-9][0-9,]*\.[0-9]+)\s+(${signedMoneyTokenPattern})$`,
+    'i',
+  ))
+  if (!noPriceBasis) return undefined
+  const [, itemNumber, leftText, quantityText, unit, unitPriceText, totalText] = noPriceBasis
+  return {
+    itemNumber,
+    leftText: compact(leftText),
+    quantity: quoteRowNumberFromText(quantityText),
+    unit: normalizeUnit(unit),
+    unitPrice: numberFromText(unitPriceText),
+    totalPrice: numberFromText(totalText),
+  }
+}
+
+function sourceTableContinuationLines(lines: string[], index: number, direction: -1 | 1) {
+  const continuations: string[] = []
+  const maxLookaround = direction === 1 ? 1 : 3
+  for (let offset = 1; offset <= maxLookaround; offset += 1) {
+    const candidate = lines[index + direction * offset] ?? ''
+    if (!candidate) continue
+    if (isSectionOrPageArtifact(candidate)) break
+    if (/^\d+\s+/.test(candidate)) break
+    if (parseSourceTablePriceTail(candidate) || parseQuoteLine(candidate, 0) || parseCompactQuoteLine(candidate, 0)) break
+    if (looksLikePriceBasisLine(candidate) || looksLikeStandaloneUnit(candidate)) continue
+    continuations.push(candidate)
+  }
+  return direction === -1 ? continuations.reverse() : continuations
+}
+
+function normalizedWordPrefix(value: string, prefix: string) {
+  const words = (input: string) => compact(input).toLowerCase().match(/[a-z0-9.]+/g) ?? []
+  const valueWords = words(value)
+  const prefixWords = words(prefix)
+  if (prefixWords.length === 0 || valueWords.length < prefixWords.length) return false
+  return prefixWords.every((word, index) => valueWords[index] === word)
+}
+
+function sourceTableSkuAndInlineDescription(leftText: string, continuationDescription: string) {
+  const base = leftText.match(/^(\S+(?:\s*-\s*\S+)*)\s*(.*)$/i)
+  if (!base) return { sku: normalizeSourceItemCode(leftText), inlineDescription: '' }
+  let sku = normalizeSourceItemCode(base[1])
+  let inlineDescription = compact(base[2] ?? '')
+  const restTokens = inlineDescription.split(/\s+/).filter(Boolean)
+
+  for (let count = Math.min(3, restTokens.length); count >= 1; count -= 1) {
+    const candidateSku = normalizeSourceItemCode(`${sku} ${restTokens.slice(0, count).join(' ')}`)
+    const candidateDescription = compact(restTokens.slice(count).join(' '))
+    const continuationRepeatsCandidate = continuationDescription && normalizedWordPrefix(continuationDescription, candidateSku)
+    const inlineRepeatsCandidate = candidateDescription && normalizedWordPrefix(candidateDescription, candidateSku)
+    if ((continuationRepeatsCandidate && descriptionLooksIncomplete(candidateDescription)) || inlineRepeatsCandidate) {
+      sku = candidateSku
+      inlineDescription = candidateDescription
+      break
+    }
+  }
+
+  return {
+    sku,
+    inlineDescription: stripLeadingRepeatedSku(inlineDescription, sku),
+  }
+}
+
+function sourceTableDescription(input: {
+  sku: string
+  inlineDescription: string
+  before: string[]
+  after: string[]
+}) {
+  const needsContinuation = descriptionLooksIncomplete(input.inlineDescription)
+  const before = needsContinuation
+    ? input.before.map((line) => (/\d/.test(input.sku) || input.sku.includes('-')) ? stripLeadingRepeatedSku(line, input.sku) : line)
+    : []
+  const after = needsContinuation ? input.after : []
+  const inline = needsContinuation && (/^(?:n\/a|na|multi)$/i.test(input.inlineDescription) || looksLikeStandaloneUnit(input.inlineDescription))
+    ? ''
+    : input.inlineDescription
+  const description = compact([...before, inline, ...after].filter(Boolean).join(' '))
+  return description || input.inlineDescription
+}
+
+function parseSourceTableQuoteLines(text: string) {
+  const lines = text
+    .split('\n')
+    .map(compact)
+    .filter(Boolean)
+
+  return lines
+    .map((line, index): ParsedQuoteLine | null => {
+      const priced = parseSourceTablePriceTail(line)
+      if (!priced) return null
+      const before = sourceTableContinuationLines(lines, index, -1)
+      const after = sourceTableContinuationLines(lines, index, 1)
+      const continuationDescription = compact([...before, ...after].join(' '))
+      const { sku, inlineDescription } = sourceTableSkuAndInlineDescription(priced.leftText, continuationDescription)
+      const description = sourceTableDescription({ sku, inlineDescription, before, after })
+      if (!sku || !description) return null
+      return {
+        sourceRow: index + 1,
+        itemNumber: priced.itemNumber,
+        sku,
+        description,
+        descriptionFromSourceColumn: true,
+        quantity: priced.quantity,
+        unit: priced.unit,
+        unitPrice: priced.unitPrice,
+        pricePerQuantity: priced.pricePerQuantity,
+        pricePerUnit: priced.pricePerUnit,
+        totalPrice: priced.totalPrice,
+        rawText: line,
+      }
+    })
+    .filter((line): line is ParsedQuoteLine => Boolean(line))
+}
+
+function mergeSourceTableQuoteLines(parsedLines: ParsedQuoteLine[], sourceTableLines: ParsedQuoteLine[]) {
+  if (sourceTableLines.length === 0) return parsedLines
+  const sourceByRow = new Map(sourceTableLines.map((line) => [line.sourceRow, line]))
+  const usedRows = new Set<number>()
+  const merged = parsedLines.map((line) => {
+    const sourceLine = sourceByRow.get(line.sourceRow)
+    if (!sourceLine) return line
+    usedRows.add(sourceLine.sourceRow)
+    return sourceLine
+  })
+  for (const line of sourceTableLines) {
+    if (!usedRows.has(line.sourceRow) && !merged.some((existing) => existing.sourceRow === line.sourceRow)) {
+      merged.push(line)
+    }
+  }
+  return merged.sort((a, b) => a.sourceRow - b.sourceRow)
+}
+
+function precedingPdfDescription(lines: string[], index: number, sku: string) {
+  const maxLookback = 4
+  for (let offset = 1; offset <= maxLookback; offset += 1) {
+    const candidate = lines[index - offset] ?? ''
+    if (!candidate) continue
+    const previousPrefix = candidate.match(/^(\S+(?:\s*-\s*\S+)*)\s+(.+)$/i)
+    if (previousPrefix && skuLooksLikeSameItem(previousPrefix[1], sku)) return previousPrefix[2]
+    if (looksLikePrecedingDescriptionLine(candidate)) return candidate
+  }
+  return ''
+}
+
 function parseQuoteLines(text: string) {
   const lines = text
     .split('\n')
@@ -715,8 +851,7 @@ function parseQuoteLines(text: string) {
         ?? next.match(/^(LF|EA|SF|SY|CY|Tube|Bundle|Box|Bag|Pail|Pal|Each|Roll|Gallon|Carton|Sausage)\s+(?:LF|EA|SF|SY|CY|Tube|Bundle|Box|Bag|Pail|Pal|Each|Roll|Gallon|Carton|Sausage)$/i)?.[1]
         ?? previousQuantityUnitBasis?.[2]
         ?? trailingUnit(next)
-      const previousPrefix = previous.match(/^(\S+(?:\s*-\s*\S+)*)\s+(.+)$/i)
-      const previousDescription = previousPrefix && skuLooksLikeSameItem(previousPrefix[1], sku) ? previousPrefix[2] : ''
+      const previousDescription = precedingPdfDescription(lines, index, sku)
       const previousQuantityDescription = !previousQuantityUnitBasis && previousQuantityMatch && previousQuantityMatch.length > 2 && !previousDescription
         ? stripTrailingTableQuantity(previous)
         : ''
@@ -780,6 +915,9 @@ function parseCompactQuoteLine(rawLine: string, sourceRow: number): ParsedQuoteL
 
 function looksLikePrecedingDescriptionLine(line: string) {
   if (!line) return false
+  if (/^\d+\s+/.test(line)) return false
+  if (looksLikePriceBasisLine(line)) return false
+  if (parseQuoteLine(line, 0)) return false
   if (parseCompactQuoteLine(line, 0)) return false
   if (/\b(?:supplier|expected delivery date)\b/i.test(line)) return false
   if (/\b(?:description\s*\/\s*line|sku|qty|unit price|ext total)\b/i.test(line)) return false
@@ -899,12 +1037,11 @@ function parseExtractedPdfQuoteLine(rawLine: string, sourceRow: number): ParsedQ
     leadTimeDays: leadTimeDays(leadText),
   })
   if (!row.success) return null
-  const description = metalFramingDescriptionFromSku(row.data.sku, row.data.description)
   return {
     sourceRow,
     itemNumber: `${row.data.sku}-${sourceRow}`,
     sku: row.data.sku,
-    description,
+    description: row.data.description,
     quantity: row.data.quantity,
     unit: row.data.unit,
     unitPrice: row.data.unitPrice,
@@ -1773,7 +1910,8 @@ export function createExternalQuoteImport(input: ExternalQuoteImportInput): Exte
   const title = extractQuoteTitle(input.text, input.filename)
   const rfqId = `rfq-import-${idPart(title)}-${idPart(now)}`
   const bidId = `bid-import-${idPart(supplier)}-${idPart(now)}`
-  const parsedLines = parseQuoteLines(input.text)
+  const sourceTableParsedLines = parseSourceTableQuoteLines(input.text)
+  const parsedLines = mergeSourceTableQuoteLines(parseQuoteLines(input.text), sourceTableParsedLines)
   const compactParsedLines = parsedLines.length ? parsedLines : parseCompactQuoteLines(input.text)
   const extractedPdfParsedLines = compactParsedLines.length ? [] : parseExtractedPdfQuoteLines(input.text)
   const inlineParsedLines = compactParsedLines.length || extractedPdfParsedLines.length ? [] : parseInlineEmailQuoteLines(input.text)
@@ -1786,7 +1924,7 @@ export function createExternalQuoteImport(input: ExternalQuoteImportInput): Exte
   const usedLineItemIds = new Set<string>()
   const parsedLinesForImport = fallbackParsedLines.map((line) => ({
     ...line,
-    description: stripLeadingRepeatedSku(line.description, line.sku),
+    description: line.descriptionFromSourceColumn ? line.description : stripLeadingRepeatedSku(line.description, line.sku),
   }))
   const lineItems = parsedLinesForImport.map((line) => lineItemFromParsed(rfqId, line, usedLineItemIds))
   const bidLines = parsedLinesForImport.map((line, index) => {

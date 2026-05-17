@@ -84,6 +84,42 @@ describe('comparison analytics', () => {
     })])
   })
 
+  it('does not build purple pricing mistake highlights for different-unit price basis metadata', () => {
+    const reviewedBid = bid('vendor-review', 'Review Supply', { 'line-drywall': 24 })
+    reviewedBid.line_item_responses[0].response_attributes = [
+      {
+        key: 'source_row',
+        label: 'Source Row',
+        value: '337',
+        source: 'spreadsheet',
+      },
+      {
+        key: 'price_basis',
+        label: 'Price Basis',
+        value: '24 per 1 box',
+        source: 'spreadsheet',
+      },
+      {
+        key: 'import_review:unit_price:price_basis_conversion',
+        label: 'Import Review: Price Basis Conversion',
+        value: JSON.stringify({
+          metric: 'unit_price',
+          category: 'price_basis_conversion',
+          originalValue: '$24.00 per 1 box',
+          normalizedValue: '$24.00 per sheet',
+          reason: 'The imported quote used a different price basis unit.',
+        }),
+        source: 'system',
+      },
+    ]
+
+    expect(buildQuoteImportReviewHighlights(rfq, [reviewedBid])).toEqual([expect.objectContaining({
+      color: IMPORT_REVIEW_HIGHLIGHT,
+      note: expect.stringContaining('different price basis unit'),
+    })])
+    expect(buildQuoteImportAnalyticsHighlights(rfq, [reviewedBid])).toEqual([])
+  })
+
   it('builds purple import highlights for severe unit price outliers', () => {
     const highlights = buildQuoteImportAnalyticsHighlights(rfq, [
       bid('vendor-a', 'A Supply', { 'line-drywall': 18, 'line-screws': 40 }),

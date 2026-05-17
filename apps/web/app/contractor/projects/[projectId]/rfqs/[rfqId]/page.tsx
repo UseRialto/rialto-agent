@@ -5,6 +5,7 @@ import {
   getContractorRFQ,
   getContractorRFQBids,
 } from '@/lib/api/contractor'
+import { canAccessContractorProject } from '@/lib/auth/project-access'
 import { getSession } from '@/lib/auth/session'
 import { contractorRFQStatusLabel, contractorRFQStatusStyle } from '@/lib/contractor-display'
 import { getMailboxSummary } from '@/lib/mail/service'
@@ -13,6 +14,7 @@ import { getNegotiationMessagesForVendor } from '@/lib/store/contractor-store'
 import { formatDate } from '@/lib/utils'
 import { BidDashboard } from './_components/BidDashboard'
 import { EditableRFQTitle } from './_components/EditableRFQTitle'
+import { ImportStatusBubble } from './_components/ImportStatusBubble'
 import { MessageCenter } from './_components/MessageCenter'
 import { InviteAdditionalVendorsButton, RFQActions } from './_components/RFQActions'
 
@@ -28,7 +30,12 @@ export async function generateMetadata({
   params: Promise<{ projectId: string; rfqId: string }>
 }) {
   const { projectId, rfqId } = await params
-  const rfq = await getContractorRFQ(projectId, rfqId)
+  const [session, project, rfq] = await Promise.all([
+    getSession(),
+    getContractorProject(projectId),
+    getContractorRFQ(projectId, rfqId),
+  ])
+  if (!project || !rfq || !canAccessContractorProject(session, project)) return { title: 'RFQ - Rialto' }
   return { title: rfq ? `${rfq.title} - Rialto` : 'RFQ - Rialto' }
 }
 
@@ -58,6 +65,7 @@ export default async function RFQDetailPage({
       : Promise.resolve([]),
     getSession(),
   ])
+  if (!canAccessContractorProject(session, project)) notFound()
   const mailbox = session ? await getMailboxSummary(session.userId) : null
   const messageVendors = (rfq.invites ?? [])
     .filter((invite) => invite.vendor_email)
@@ -80,15 +88,6 @@ export default async function RFQDetailPage({
     { label: 'Lowest complete', value: lowestBid ? fmt(lowestBid.total_price) : '-', sub: lowestBid?.vendor_name ?? 'No full quote' },
     { label: 'Fastest lead', value: fastestBid ? `${fastestBid.lead_time_days}d` : '-', sub: fastestBid?.vendor_name ?? 'No quotes' },
   ]
-  const requestedVendorKeys = new Set<string>()
-  for (const invite of rfq.invites ?? []) {
-    if (invite.vendor_id) requestedVendorKeys.add(`id:${invite.vendor_id}`)
-    else if (invite.vendor_email) requestedVendorKeys.add(`email:${invite.vendor_email.toLowerCase()}`)
-  }
-  for (const id of rfq.invited_vendor_ids ?? []) requestedVendorKeys.add(`id:${id}`)
-  for (const email of rfq.invited_vendor_emails ?? []) requestedVendorKeys.add(`email:${email.toLowerCase()}`)
-  const requestedVendorCount = requestedVendorKeys.size
-
   const isFullScreenComparison = activeSection === 'bid-comparison' && rfq.status === 'active'
   const sectionBaseHref = `/contractor/projects/${projectId}/rfqs/${rfqId}`
   const sectionLinks = [
@@ -107,19 +106,20 @@ export default async function RFQDetailPage({
   if (isFullScreenComparison) {
     return (
       <div className="-m-6 min-h-[calc(100vh-4rem)]" style={{ background: '#eef3f0' }}>
-        <div data-testid="rfq-comparison-overview" className="relative z-20 border-b px-5 pt-4" style={{ borderColor: '#d9e0dc', background: '#f8faf9' }}>
-          <nav className="mb-3 text-xs" style={{ color: '#587067' }}>
-            <a href="/contractor/projects" className="hover:underline" style={{ color: '#8a9e96' }}>Projects</a>
+        <ImportStatusBubble status={importStatus} message={importMessage} />
+        <div data-testid="rfq-comparison-overview" className="relative z-20 border-b px-4 pt-3" style={{ borderColor: '#d9e0dc', background: '#f8faf9' }}>
+          <nav className="mb-2 text-xs" style={{ color: '#587067' }}>
+            <Link href="/contractor/projects" className="hover:underline" style={{ color: '#8a9e96' }}>Projects</Link>
             <span className="mx-2">/</span>
-            <a href={`/contractor/projects/${projectId}`} className="hover:underline" style={{ color: '#8a9e96' }}>{project.name}</a>
+            <Link href={`/contractor/projects/${projectId}`} className="hover:underline" style={{ color: '#8a9e96' }}>{project.name}</Link>
             <span className="mx-2">/</span>
             <span className="font-medium" style={{ color: '#4a6358' }}>{rfq.title}</span>
           </nav>
-          <div className="mb-3 flex flex-wrap items-center gap-3">
+          <div className="mb-2 flex flex-wrap items-center gap-3">
             <EditableRFQTitle
               rfqId={rfq.id}
               initialTitle={rfq.title}
-              className="text-xl font-semibold tracking-tight"
+              className="text-lg font-semibold tracking-tight"
               style={{ color: '#1e3a2f', fontFamily: 'var(--font-lora, Georgia, serif)' }}
             />
             <span className={`rounded border px-2 py-0.5 text-xs font-medium ${contractorRFQStatusStyle(rfq.status)}`}>
@@ -130,10 +130,8 @@ export default async function RFQDetailPage({
                 Due {rfq.bid_deadline}
               </span>
             )}
-            <div className="ml-auto flex flex-col items-end gap-2">
-              <div className="flex items-center gap-2">
-                <RFQActions rfqId={rfqId} projectId={projectId} status={rfq.status} />
-              </div>
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              <RFQActions rfqId={rfqId} projectId={projectId} status={rfq.status} />
               <InviteAdditionalVendorsButton projectId={projectId} rfq={rfq} projectName={project.name} />
             </div>
           </div>
@@ -142,7 +140,7 @@ export default async function RFQDetailPage({
               <Link
                 key={item.key}
                 href={item.href}
-                className="shrink-0 px-4 py-3 text-sm font-semibold transition-colors"
+                className="shrink-0 px-3 py-2 text-sm font-semibold transition-colors"
                 style={activeSection === item.key
                   ? { color: '#1e3a2f', borderBottom: '2px solid #fa6b04' }
                   : { color: '#8a9e96', borderBottom: '2px solid transparent' }}
@@ -151,28 +149,6 @@ export default async function RFQDetailPage({
               </Link>
             ))}
           </nav>
-          {importMessage && (
-            <div className="mb-3 rounded-lg border px-3 py-2 text-xs font-semibold" style={{
-              borderColor: importStatus === 'fallback' ? '#fdc89a' : '#a8d5ba',
-              background: importStatus === 'fallback' ? '#fff7ed' : '#eef7f1',
-              color: importStatus === 'fallback' ? '#a85c2a' : '#2d6a4f',
-            }}>
-              {importMessage}
-            </div>
-          )}
-          <div className="grid gap-2 border-t py-3 sm:grid-cols-4" style={{ borderColor: '#d9e0dc' }}>
-            {[
-              { label: 'Quote deadline', value: rfq.bid_deadline ?? 'Not set' },
-              { label: 'Vendors requested', value: requestedVendorCount.toLocaleString() },
-              { label: 'Quotes received', value: `${bids.length.toLocaleString()} / ${Math.max(requestedVendorCount, bids.length).toLocaleString()}` },
-              { label: 'Total items', value: rfq.line_items.length.toLocaleString() },
-            ].map((item) => (
-              <div key={item.label} className="rounded-lg border bg-white px-3 py-2" style={{ borderColor: '#d9e0dc' }}>
-                <p className="text-[10px] font-semibold uppercase" style={{ color: '#587067' }}>{item.label}</p>
-                <p className="mt-0.5 text-sm font-bold" style={{ color: '#1e3a2f' }}>{item.value}</p>
-              </div>
-            ))}
-          </div>
         </div>
         <div data-testid="rfq-comparison-sheet-workspace" className="sticky top-0 z-10 h-[calc(100vh-4rem)] min-h-0 shadow-[0_-1px_0_#d9e0dc,0_12px_28px_rgba(30,58,47,0.12)]">
           <BidDashboard

@@ -2,6 +2,8 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { ArrowLeft, FilePlus2, MapPin, Settings, SlidersHorizontal } from 'lucide-react'
 import { getContractorProject, getContractorProjectRFQCounts, getContractorProjectRFQs } from '@/lib/api/contractor'
+import { canAccessContractorProject } from '@/lib/auth/project-access'
+import { getSession } from '@/lib/auth/session'
 import { RFQCounterCards } from './_components/RFQCounterCards'
 import { ProjectSpecIndexKickoff } from './_components/ProjectSpecIndexKickoff'
 import { ExternalQuoteImportButton } from './_components/ExternalQuoteImportButton'
@@ -10,7 +12,11 @@ import { formatDate } from '@/lib/utils'
 
 export async function generateMetadata({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await params
-  const project = await getContractorProject(projectId)
+  const [session, project] = await Promise.all([
+    getSession(),
+    getContractorProject(projectId),
+  ])
+  if (!canAccessContractorProject(session, project)) return { title: 'Project - Rialto' }
   return { title: project ? `${project.name} - Rialto` : 'Project - Rialto' }
 }
 
@@ -32,13 +38,14 @@ export default async function ProjectDashboardPage({
   const { status } = await searchParams
   const activeTab = status ?? ''
 
-  const [project, counts, rfqs] = await Promise.all([
+  const [session, project, counts, rfqs] = await Promise.all([
+    getSession(),
     getContractorProject(projectId),
     getContractorProjectRFQCounts(projectId),
     getContractorProjectRFQs(projectId, status),
   ])
 
-  if (!project) notFound()
+  if (!project || !canAccessContractorProject(session, project)) notFound()
 
   return (
     <div className="mx-auto max-w-7xl">

@@ -1,6 +1,12 @@
+'use client'
+
 import Link from 'next/link'
+import { useMemo, useState } from 'react'
 import {
   ArrowRight,
+  Check,
+  CheckCircle2,
+  ChevronDown,
   FileSearch,
   FileText,
   Mail,
@@ -70,6 +76,88 @@ function getDarkActivityVisual(type: ContractorActivityNotification['type']): Ac
   }
 }
 
+type ActivityCategoryKey = 'review' | 'messages' | 'quotes' | 'rfqs'
+
+type ActivityCategory = {
+  key: ActivityCategoryKey
+  label: string
+  description: string
+  notifications: ContractorActivityNotification[]
+  visual: ActivityVisual
+}
+
+const ACK_STORAGE_KEY = 'rialto:contractor-activity-acknowledged:v1'
+
+function readAcknowledgedIds() {
+  if (typeof window === 'undefined') return new Set<string>()
+  try {
+    const stored = window.localStorage.getItem(ACK_STORAGE_KEY)
+    if (!stored) return new Set<string>()
+    const parsed = JSON.parse(stored)
+    if (!Array.isArray(parsed)) return new Set<string>()
+    return new Set(parsed.filter((value): value is string => typeof value === 'string'))
+  } catch {
+    return new Set<string>()
+  }
+}
+
+function getCategoryKey(type: ContractorActivityNotification['type']): ActivityCategoryKey {
+  switch (type) {
+    case 'review_task':
+      return 'review'
+    case 'email_received':
+    case 'message_received':
+      return 'messages'
+    case 'bid_received':
+      return 'quotes'
+    case 'rfq_published':
+    default:
+      return 'rfqs'
+  }
+}
+
+function getCategoryCopy(key: ActivityCategoryKey) {
+  switch (key) {
+    case 'review':
+      return { label: 'Review', description: 'Open extraction and comparison tasks' }
+    case 'messages':
+      return { label: 'Messages', description: 'Vendor replies and in-app messages' }
+    case 'quotes':
+      return { label: 'Quotes', description: 'Received vendor pricing' }
+    case 'rfqs':
+    default:
+      return { label: 'RFQs', description: 'Published quote requests' }
+  }
+}
+
+function buildCategories(notifications: ContractorActivityNotification[], isDark: boolean): ActivityCategory[] {
+  const grouped = new Map<ActivityCategoryKey, ContractorActivityNotification[]>()
+  for (const notification of notifications) {
+    const key = getCategoryKey(notification.type)
+    grouped.set(key, [...(grouped.get(key) ?? []), notification])
+  }
+
+  return (['review', 'messages', 'quotes', 'rfqs'] as ActivityCategoryKey[])
+    .map((key) => {
+      const categoryNotifications = grouped.get(key) ?? []
+      const copy = getCategoryCopy(key)
+      const visualType: ContractorActivityNotification['type'] = key === 'review'
+        ? 'review_task'
+        : key === 'messages'
+          ? 'message_received'
+          : key === 'quotes'
+            ? 'bid_received'
+            : 'rfq_published'
+      return {
+        key,
+        ...copy,
+        notifications: categoryNotifications,
+        visual: isDark ? getDarkActivityVisual(visualType) : getActivityVisual(visualType),
+      }
+    })
+    .filter((category) => category.notifications.length > 0)
+}
+
 export function ActivityFeed({
   notifications,
   variant = 'light',
@@ -77,8 +165,34 @@ export function ActivityFeed({
   notifications: ContractorActivityNotification[]
   variant?: 'light' | 'dark'
 }) {
-  const unreadCount = notifications.filter((n) => !n.read).length
   const isDark = variant === 'dark'
+  const [acknowledgedIds, setAcknowledgedIds] = useState<Set<string>>(readAcknowledgedIds)
+  const [expandedKey, setExpandedKey] = useState<ActivityCategoryKey | null>(null)
+  const categories = useMemo(() => buildCategories(notifications, isDark), [notifications, isDark])
+  const unreadCount = notifications.filter((n) => !acknowledgedIds.has(n.id)).length
+
+  function updateAcknowledged(next: Set<string>) {
+    setAcknowledgedIds(next)
+    try {
+      window.localStorage.setItem(ACK_STORAGE_KEY, JSON.stringify([...next]))
+    } catch {
+      // Local acknowledgement is a convenience only; rendering should keep working if storage is blocked.
+    }
+  }
+
+  function markNotificationRead(id: string) {
+    const next = new Set(acknowledgedIds)
+    next.add(id)
+    updateAcknowledged(next)
+  }
+
+  function markCategoryRead(category: ActivityCategory) {
+    const next = new Set(acknowledgedIds)
+    for (const notification of category.notifications) {
+      next.add(notification.id)
+    }
+    updateAcknowledged(next)
+  }
 
   return (
     <section
@@ -95,7 +209,7 @@ export function ActivityFeed({
               </span>
             )}
           </div>
-          <p className="mt-1 text-sm" style={{ color: isDark ? '#4a6358' : '#8a9e96' }}>Quotes, vendor replies, and order milestones across your projects.</p>
+          <p className="mt-1 text-sm" style={{ color: isDark ? '#4a6358' : '#8a9e96' }}>Grouped updates across your projects.</p>
         </div>
       </div>
 
@@ -115,61 +229,138 @@ export function ActivityFeed({
           </div>
         ) : (
           <div className={isDark ? 'space-y-2' : 'divide-y'} style={{ borderColor: '#e2d9cf' }}>
-            {notifications.map((n) => (
-            (() => {
-              const visual = isDark ? getDarkActivityVisual(n.type) : getActivityVisual(n.type)
-              const Icon = visual.Icon
+            {categories.map((category) => {
+              const categoryUnreadCount = category.notifications.filter((n) => !acknowledgedIds.has(n.id)).length
+              const isExpanded = expandedKey === category.key
+              const CategoryIcon = category.visual.Icon
               return (
-                <Link
-                  key={n.id}
-                  href={getHref(n)}
-                  className={`group grid gap-2 px-3.5 py-3 transition-colors sm:grid-cols-[2.25rem_minmax(0,1fr)] ${isDark ? 'rounded-xl hover:bg-[#f3f8f5]' : 'hover:bg-[#faf8f5]'} `}
+                <div
+                  key={category.key}
+                  className={isDark ? 'overflow-hidden rounded-xl' : undefined}
                   style={{
                     background: isDark ? '#ffffff' : undefined,
                     border: isDark ? '1px solid #d9e3dc' : undefined,
-                    borderLeft: `4px solid ${!n.read ? '#fa6b04' : 'transparent'}`,
                     boxShadow: isDark ? '0 8px 20px rgba(30,58,47,0.05)' : undefined,
                   }}
                 >
-                  <div
-                    className="relative mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-                    style={{ background: visual.bg, color: visual.color, outline: isDark ? '1px solid rgba(45,106,79,0.14)' : '1px solid rgba(30,58,47,0.05)' }}
-                    aria-label={visual.label}
-                  >
-                    <Icon className="h-4 w-4" />
-                    {!n.read && (
-                      <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2" style={{ background: '#fa6b04', borderColor: '#ffffff' }} />
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-3 px-3.5 py-3">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedKey(isExpanded ? null : category.key)}
+                      className="grid min-w-0 flex-1 grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-2 text-left"
+                    >
                       <span
-                        className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
-                        style={{
-                          background: visual.bg,
-                          color: visual.color,
-                          outline: isDark ? '1px solid rgba(45,106,79,0.14)' : undefined,
-                        }}
+                        className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+                        style={{ background: category.visual.bg, color: category.visual.color, outline: isDark ? '1px solid rgba(45,106,79,0.14)' : '1px solid rgba(30,58,47,0.05)' }}
+                        aria-label={category.label}
                       >
-                        {visual.label}
+                        <CategoryIcon className="h-4 w-4" />
+                        {categoryUnreadCount > 0 && (
+                          <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white" style={{ background: '#fa6b04' }}>
+                            {categoryUnreadCount}
+                          </span>
+                        )}
                       </span>
-                      <span className="text-xs sm:hidden" style={{ color: isDark ? '#4a6358' : '#8a9e96' }}>{relativeTime(n.created_at)}</span>
+                      <span className="min-w-0">
+                        <span className="flex items-center gap-2">
+                          <span className="truncate text-sm font-semibold" style={{ color: '#1e3a2f' }}>{category.label}</span>
+                          <span className="text-xs" style={{ color: isDark ? '#4a6358' : '#8a9e96' }}>
+                            {category.notifications.length}
+                          </span>
+                        </span>
+                        <span className="mt-0.5 block truncate text-xs" style={{ color: isDark ? '#4a6358' : '#8a9e96' }}>{category.description}</span>
+                      </span>
+                      <span className="flex items-center gap-2">
+                        {categoryUnreadCount > 0 && (
+                          <span className="rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ background: '#fff3eb', color: '#9a4a00', outline: '1px solid #f8caa8' }}>
+                            {categoryUnreadCount} unread
+                          </span>
+                        )}
+                        <ChevronDown className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`} style={{ color: '#4a6358' }} />
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => markCategoryRead(category)}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[#e8f4ee]"
+                      style={{ color: categoryUnreadCount > 0 ? '#2d6a4f' : '#8a9e96' }}
+                      aria-label={`Mark ${category.label} read`}
+                      title={`Mark ${category.label} read`}
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="border-t" style={{ borderColor: '#e2d9cf' }}>
+                      {category.notifications.map((n) => {
+                        const visual = isDark ? getDarkActivityVisual(n.type) : getActivityVisual(n.type)
+                        const Icon = visual.Icon
+                        const isUnread = !acknowledgedIds.has(n.id)
+                        return (
+                          <div
+                            key={n.id}
+                            className="grid gap-2 px-3.5 py-3 sm:grid-cols-[2rem_minmax(0,1fr)]"
+                            style={{
+                              background: isUnread ? '#fffaf5' : '#ffffff',
+                              borderLeft: `4px solid ${isUnread ? '#fa6b04' : 'transparent'}`,
+                            }}
+                          >
+                            <div
+                              className="relative mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
+                              style={{ background: visual.bg, color: visual.color, outline: isDark ? '1px solid rgba(45,106,79,0.14)' : '1px solid rgba(30,58,47,0.05)' }}
+                              aria-label={visual.label}
+                            >
+                              <Icon className="h-3.5 w-3.5" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span
+                                  className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+                                  style={{
+                                    background: visual.bg,
+                                    color: visual.color,
+                                    outline: isDark ? '1px solid rgba(45,106,79,0.14)' : undefined,
+                                  }}
+                                >
+                                  {visual.label}
+                                </span>
+                                <span className="text-xs" style={{ color: isDark ? '#4a6358' : '#8a9e96' }}>{relativeTime(n.created_at)}</span>
+                              </div>
+                              <Link href={getHref(n)} className="group mt-1 block">
+                                <p className="text-sm leading-5 group-hover:underline" style={{ fontWeight: isUnread ? 700 : 600, color: isUnread ? '#1e3a2f' : '#4a6358' }}>
+                                  {n.title}
+                                </p>
+                                <p className="mt-0.5 line-clamp-2 text-xs leading-4" style={{ color: isDark ? '#4a6358' : '#8a9e96' }}>{n.body}</p>
+                              </Link>
+                              <div className="mt-2 flex items-center justify-between gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => markNotificationRead(n.id)}
+                                  className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold transition-colors hover:bg-[#e8f4ee]"
+                                  style={{ color: isUnread ? '#2d6a4f' : '#8a9e96' }}
+                                >
+                                  <Check className="h-3.5 w-3.5" />
+                                  {isUnread ? 'Mark read' : 'Read'}
+                                </button>
+                                <Link
+                                  href={getHref(n)}
+                                  className="flex h-7 items-center gap-1 rounded-lg px-2 text-xs font-semibold transition-colors hover:bg-[#ede8e2]"
+                                  style={{ color: '#4a6358' }}
+                                >
+                                  Open
+                                  <ArrowRight className="h-3.5 w-3.5" />
+                                </Link>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
-                    <p className="mt-1 text-sm leading-5" style={{ fontWeight: !n.read ? 700 : 600, color: !n.read ? '#1e3a2f' : '#4a6358' }}>
-                      {n.title}
-                    </p>
-                    <p className="mt-0.5 line-clamp-1 text-xs leading-4" style={{ color: isDark ? '#4a6358' : '#8a9e96' }}>{n.body}</p>
-                  </div>
-                  <div className="col-span-full flex items-center justify-between pl-11 sm:col-span-full">
-                    <span className="whitespace-nowrap text-xs" style={{ color: isDark ? '#4a6358' : '#8a9e96' }}>{relativeTime(n.created_at)}</span>
-                    <span className={`flex h-6 w-6 items-center justify-center rounded-md transition-colors ${isDark ? 'group-hover:bg-[#e8f4ee]' : 'group-hover:bg-[#ede8e2]'}`} style={{ color: isDark ? '#4a6358' : '#4a6358' }}>
-                      <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-                    </span>
-                  </div>
-                </Link>
+                  )}
+                </div>
               )
-            })()
-            ))}
+            })}
           </div>
         )}
       </div>

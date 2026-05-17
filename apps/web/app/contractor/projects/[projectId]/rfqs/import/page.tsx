@@ -1,6 +1,8 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getContractorProject } from '@/lib/api/contractor'
+import { canAccessContractorProject } from '@/lib/auth/project-access'
+import { getSession } from '@/lib/auth/session'
 import { VendorQuoteImportWorkflow } from './_components/VendorQuoteImportWorkflow'
 
 export const metadata = { title: 'Import Vendor Quotes - Rialto' }
@@ -11,8 +13,11 @@ export default async function ImportVendorQuotesPage({
   params: Promise<{ projectId: string }>
 }) {
   const { projectId } = await params
-  const project = await getContractorProject(projectId)
-  if (!project) notFound()
+  const [session, project] = await Promise.all([
+    getSession(),
+    getContractorProject(projectId),
+  ])
+  if (!project || !canAccessContractorProject(session, project)) notFound()
 
   return (
     <div className="mx-auto w-full max-w-[88rem] px-8 pb-10 sm:px-10 lg:px-14">

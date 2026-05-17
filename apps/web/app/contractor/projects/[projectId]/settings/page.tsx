@@ -1,11 +1,17 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getContractorProject } from '@/lib/api/contractor'
+import { canAccessContractorProject } from '@/lib/auth/project-access'
+import { getSession } from '@/lib/auth/session'
 import { ProjectSettingsClient } from './_components/ProjectSettingsClient'
 
 export async function generateMetadata({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await params
-  const project = await getContractorProject(projectId)
+  const [session, project] = await Promise.all([
+    getSession(),
+    getContractorProject(projectId),
+  ])
+  if (!canAccessContractorProject(session, project)) return { title: 'Settings - Rialto' }
   return { title: project ? `Settings - ${project.name} - Rialto` : 'Settings - Rialto' }
 }
 
@@ -15,8 +21,11 @@ export default async function ProjectSettingsPage({
   params: Promise<{ projectId: string }>
 }) {
   const { projectId } = await params
-  const project = await getContractorProject(projectId)
-  if (!project) notFound()
+  const [session, project] = await Promise.all([
+    getSession(),
+    getContractorProject(projectId),
+  ])
+  if (!project || !canAccessContractorProject(session, project)) notFound()
 
   return (
     <div className="mx-auto max-w-2xl">

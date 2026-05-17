@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { revalidatePath } from 'next/cache'
 import { getSession } from '@/lib/auth/session'
+import { canAccessContractorProject } from '@/lib/auth/project-access'
 import { appendBidToRFQ, appendRFQLineItemsAndInvites, getBidsForRFQ, getProject, getRFQ, updateRFQAttachmentUrls } from '@/lib/store/contractor-store'
 import { mergeExternalQuoteImportIntoRFQ } from '@/lib/procurement/external-quote-import'
 import { buildImportedQuoteComparison, type QuoteComparisonImportUpload } from '@/lib/modules/quote-comparison/imported-quote-comparison'
@@ -77,7 +78,7 @@ export async function POST(
     if (!rfq) return NextResponse.json({ error: 'Quote comparison not found.' }, { status: 404 })
     const project = await getProject(rfq.project_id)
     if (!project) return NextResponse.json({ error: 'Project not found.' }, { status: 404 })
-    if (project.owner_id !== session.userId && !(project.collaborator_ids ?? []).includes(session.userId)) {
+    if (!canAccessContractorProject(session, project)) {
       return NextResponse.json({ error: 'Not authorized.' }, { status: 403 })
     }
 

@@ -20,25 +20,12 @@ function median(values: number[]) {
   return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle]
 }
 
-function normalizeUnit(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '')
-}
-
 function sourceRow(response: PricePoint) {
   const attribute = response.bid.line_item_responses
     .find((line) => line.line_item_id === response.lineItemId)
     ?.response_attributes
     ?.find((item) => item.key === 'source_row')
   return attribute?.value ? ` Source row ${attribute.value}.` : ''
-}
-
-function hasDifferentPriceBasisUnit(point: PricePoint) {
-  const response = point.bid.line_item_responses.find((line) => line.line_item_id === point.lineItemId)
-  const priceBasis = response?.response_attributes?.find((item) => item.key === 'price_basis')?.value
-  if (!priceBasis || !response?.unit) return false
-  const match = String(priceBasis).match(/\bper\s+[0-9,.]+\s+([A-Za-z][A-Za-z ]*)$/i)
-  if (!match) return false
-  return normalizeUnit(match[1]) !== normalizeUnit(response.unit)
 }
 
 function highlight(point: PricePoint, metric: 'unit_price' | 'total', note: string): ComparisonHighlight {
@@ -158,11 +145,6 @@ export function buildQuoteImportAnalyticsHighlights(
         }
       }
 
-      if (hasDifferentPriceBasisUnit(point)) {
-        const note = `Pricing mistake candidate: imported price basis uses a different unit than the comparison row.${sourceRow(point)} Confirm whether the quote is per package, sheet, square foot, or another unit before comparing.`
-        const next = highlight(point, 'unit_price', note)
-        highlights.set(next.id, next)
-      }
     }
 
     if (points.length >= 2) {

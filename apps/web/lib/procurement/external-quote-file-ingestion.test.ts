@@ -158,7 +158,7 @@ describe('External quote file ingestion', () => {
     expect(imported.rfq.line_items.map((line) => line.description)).toEqual([
       '2 1/2" X 22ga. C-H Stud',
       '2 1/2" X 20ga. J Track',
-      '4" X 16ga. 1 5/8" Flange Stud',
+      '4" X 16ga. 1 5/8"',
     ])
     expect(imported.bid.line_item_responses.find((line) => line.sku === '400S162-54')).toMatchObject({
       unit_price: 1.19,

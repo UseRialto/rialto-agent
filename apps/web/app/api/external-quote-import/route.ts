@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { revalidatePath } from 'next/cache'
 import { getSession } from '@/lib/auth/session'
+import { canAccessContractorProject } from '@/lib/auth/project-access'
 import { getProject, saveRFQ, appendBidToRFQ } from '@/lib/store/contractor-store'
 import { saveComparisonSheetView } from '@/lib/store/comparison-sheet-view-store'
 import { DEFAULT_COMPARISON_SHEET_VIEW } from '@/lib/procurement/comparison-sheet-state'
@@ -73,7 +74,7 @@ export async function POST(request: NextRequest) {
 
     const project = await getProject(projectId)
     if (!project) return NextResponse.json({ error: 'Project not found.' }, { status: 404 })
-    if (project.owner_id !== session.userId && !(project.collaborator_ids ?? []).includes(session.userId)) {
+    if (!canAccessContractorProject(session, project)) {
       return NextResponse.json({ error: 'Not authorized.' }, { status: 403 })
     }
 

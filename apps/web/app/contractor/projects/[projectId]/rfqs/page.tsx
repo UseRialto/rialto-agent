@@ -1,6 +1,8 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { getContractorProject, getContractorProjectRFQs } from '@/lib/api/contractor'
+import { canAccessContractorProject } from '@/lib/auth/project-access'
+import { getSession } from '@/lib/auth/session'
 import { RFQListTable } from './_components/RFQListTable'
 import { ExternalQuoteImportButton } from '../_components/ExternalQuoteImportButton'
 
@@ -23,12 +25,13 @@ export default async function RFQListPage({
   const { projectId } = await params
   const { status } = await searchParams
 
-  const [project, rfqs] = await Promise.all([
+  const [session, project, rfqs] = await Promise.all([
+    getSession(),
     getContractorProject(projectId),
     getContractorProjectRFQs(projectId, status),
   ])
 
-  if (!project) notFound()
+  if (!project || !canAccessContractorProject(session, project)) notFound()
 
   return (
     <div className="mx-auto max-w-4xl">

@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation'
 import { getContractorProject, getContractorRFQById } from '@/lib/api/contractor'
+import { canAccessContractorProject } from '@/lib/auth/project-access'
 import { getSession } from '@/lib/auth/session'
 import { findUserById } from '@/lib/auth/users'
 import { buildRFQEmailDraft } from '@/lib/mail/rfq-email-draft'
@@ -17,11 +18,14 @@ export default async function CreateRFQPage({
 }) {
   const { projectId } = await params
   const { rfqId, step } = await searchParams
-  const project = await getContractorProject(projectId)
-  if (!project) notFound()
+  const [session, project] = await Promise.all([
+    getSession(),
+    getContractorProject(projectId),
+  ])
+  if (!project || !canAccessContractorProject(session, project)) notFound()
   const existingRFQ = rfqId ? await getContractorRFQById(rfqId) : null
+  if (existingRFQ && existingRFQ.project_id !== projectId) notFound()
   if (existingRFQ?.request_type === 'rfp') notFound()
-  const session = await getSession()
   const user = session ? await findUserById(session.userId) : null
   const contractorName = user?.company_info?.company_name ?? user?.name ?? session?.name ?? 'General Contractor'
   const contractorUserName = user?.name ?? session?.name ?? contractorName

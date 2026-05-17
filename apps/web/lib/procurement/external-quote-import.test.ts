@@ -350,6 +350,113 @@ Flange Stud LF
     expect(result.rfq.line_items).not.toContainEqual(expect.objectContaining({ unit: 'multi' }))
   })
 
+  it('uses the preceding PDF description when the priced row only contains a unit word', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'MCRD P-314',
+      filename: 'firecaulking-rated-walls.pdf',
+      sourceKind: 'pdf',
+      text: `
+Supplier : Firestop Supply Expected Delivery Date : 08 / 01 / 2026
+No . Item Description Quantity Unit Price Per Total
+Firecaulking at Rated Walls
+17 FC-100 Sausage 84.00 Sausage 14.250 1.00 Sausage $ 1,197.00
+`,
+      now: '2026-05-16T12:00:00.000Z',
+    })
+
+    expect(result.rfq.line_items).toHaveLength(1)
+    expect(result.rfq.line_items[0]).toMatchObject({
+      sku: 'FC-100',
+      description: 'Firecaulking at Rated Walls',
+      quantity: 84,
+      unit: 'sausage',
+    })
+    expect(result.bid.line_item_responses[0]).toMatchObject({
+      sku: 'FC-100',
+      description: 'Firecaulking at Rated Walls',
+      unit_price: 14.25,
+      total_price: 1197,
+    })
+  })
+
+  it('skips PDF price-basis lines when repairing a unit-word description', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'MCRD P-314',
+      filename: 'firecaulking-rated-walls-price-basis.pdf',
+      sourceKind: 'pdf',
+      text: `
+Supplier : Firestop Supply Expected Delivery Date : 08 / 01 / 2026
+No . Item Description Quantity Unit Price Per Total
+Firecaulking at Rated Walls
+386.40 Sausage / Sausage
+17 FC-100 Sausage 84.00 Sausage 14.250 1.00 Sausage $ 1,197.00
+`,
+      now: '2026-05-16T12:00:00.000Z',
+    })
+
+    expect(result.rfq.line_items).toHaveLength(1)
+    expect(result.rfq.line_items[0]).toMatchObject({
+      sku: 'FC-100',
+      description: 'Firecaulking at Rated Walls',
+      quantity: 84,
+      unit: 'sausage',
+    })
+    expect(result.rfq.line_items[0]?.description).not.toContain('Sausage / Sausage')
+    expect(result.bid.line_item_responses[0]).toMatchObject({
+      sku: 'FC-100',
+      description: 'Firecaulking at Rated Walls',
+      unit_price: 14.25,
+      total_price: 1197,
+    })
+  })
+
+  it('reconstructs L&W source-table description continuations from the description column', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'Triton Center',
+      filename: 'lnw-taping-materials.pdf',
+      sourceKind: 'pdf',
+      text: `
+Supplier : L n W Supply - San Diego Expected Delivery Date : 08 / 01 / 2026
+905 - Trims - Aluminum
+101 ENDCAP Fry DMEC End Cap DMEC-4875 84.00 LF 2.000 1.00 LF $168.00
+906 - Taping Materials
+All Purpose Drywall Taping
+102 ALL PURPOSE N/A 94.00 Box 11.000 Box / 1.00 EA $1,034.00
+Compound
+103 CBM Metal Corner Bead Multi 5,058.00 LF 275.000 1,000.00 LF $1,390.95
+2" X 300' Roll Drywall Fiberglass
+107 MESHTAPE N/A 64.46 Roll 6.000 Roll / 300.00 LF $386.76
+Mesh Joint Tape
+108 TAPE 500' Roll of Drywall Joint Tape N/A 102.01 Roll 6.000 Roll / 500.00 LF $612.04
+109 TOPPING Topping Drywall Taping Compound N/A 319.00 Box 11.000 Box / 1.00 EA $3,509.00
+`,
+      now: '2026-05-16T12:00:00.000Z',
+    })
+
+    expect(result.rfq.line_items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sku: 'ALL PURPOSE',
+        description: 'All Purpose Drywall Taping Compound',
+        quantity: 94,
+        unit: 'box',
+      }),
+      expect.objectContaining({
+        sku: 'MESHTAPE',
+        description: '2" X 300\' Roll Drywall Fiberglass Mesh Joint Tape',
+        quantity: 64.46,
+        unit: 'roll',
+      }),
+      expect.objectContaining({
+        sku: 'TAPE',
+        description: '500\' Roll of Drywall Joint Tape N/A',
+      }),
+    ]))
+    expect(result.rfq.line_items).not.toContainEqual(expect.objectContaining({ sku: 'ALL', description: 'PURPOSE N/A' }))
+  })
+
   it('imports compact PDF text columns without leaking generated row ids into item descriptions', () => {
     const result = createExternalQuoteImport({
       projectId: 'project-1',
@@ -380,13 +487,13 @@ EXPBLT 1/2" X 3 3/4" 84 ea $2 $185 0d
       }),
       expect.objectContaining({
         sku: '250JS-33',
-        description: '2 1/2" X 20ga. Jamb Strut 10\' 0"',
+        description: '10\' 0"',
         quantity: 1094,
         unit: 'lf',
       }),
       expect.objectContaining({
         sku: '400S162-54',
-        description: '4" X 16ga. 1 5/8" Flange Stud',
+        description: '4" X 16ga. 1 5/8"',
         quantity: 16827,
         unit: 'lf',
       }),
@@ -518,6 +625,36 @@ Total: -$330.27
       expect.objectContaining({ key: 'import_review:total:negative_price' }),
     ]))
     expect(result.bid.total_price).toBe(330.27)
+  })
+
+  it('flags extracted PDF rows with different-unit price basis as import review rather than pricing mistakes', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'Extracted PDF Unit Basis Verification',
+      filename: 'package-basis-row.pdf',
+      sourceKind: 'pdf',
+      text: `
+1 BOX-001 Boxed fasteners 12.00 EA 24.00 1.00 BOX $288.00
+Total: $288.00
+`,
+      now: '2026-05-16T16:41:14.856Z',
+    })
+
+    expect(result.rfq.line_items).toHaveLength(1)
+    expect(result.bid.line_item_responses[0]).toMatchObject({
+      sku: 'BOX-001',
+      quantity: 12,
+      unit: 'ea',
+      unit_price: 24,
+      total_price: 288,
+    })
+    expect(result.bid.line_item_responses[0].response_attributes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'price_basis', value: '24 per 1 box' }),
+      expect.objectContaining({
+        key: 'import_review:unit_price:price_basis_conversion',
+        value: expect.stringContaining('different price basis unit'),
+      }),
+    ]))
   })
 
   it('combines wrapped PDF descriptions before parsing priced continuation lines', () => {

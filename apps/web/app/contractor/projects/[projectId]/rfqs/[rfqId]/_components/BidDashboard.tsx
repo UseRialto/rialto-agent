@@ -2176,8 +2176,15 @@ function BidExcelSheet({
     containerRef.current?.focus()
   }
 
+  function hasReadableBrowserSelection() {
+    if (typeof window === 'undefined') return false
+    const selection = window.getSelection()
+    return Boolean(selection && !selection.isCollapsed && selection.toString().trim())
+  }
+
   function onCopySelectedRange(event: React.ClipboardEvent<HTMLDivElement>) {
     if (editingCell || editingHeader || editingGroupHeader) return
+    if (hasReadableBrowserSelection()) return
     const value = copySelectedRange()
     if (!value) return
     event.preventDefault()
@@ -2492,6 +2499,7 @@ function BidExcelSheet({
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); dispatchAssistant(true); return }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
+      if (hasReadableBrowserSelection()) return
       e.preventDefault()
       writeSelectedRangeToClipboard()
       return
@@ -2790,15 +2798,15 @@ function BidExcelSheet({
             <div className="min-w-0">
               <p className="truncate text-sm font-bold" style={{ color: '#1e3a2f' }}>{rfq.title}</p>
               <p className="truncate text-xs" style={{ color: '#587067' }}>
-                {visibleItems.length} line items · {bids.length} vendor quotes · {fullQuoteCount} complete
+                {visibleItems.length} line items · {bids.length} vendor quotes · {fullQuoteCount} complete · deadline {rfq.bid_deadline ?? 'not set'}
               </p>
             </div>
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="rounded-md border bg-white px-2.5 py-1 text-xs font-semibold" style={{ borderColor: '#d9e0dc', color: '#1e3a2f' }}>
+            <span className="rounded-md border px-2.5 py-1 text-xs font-semibold" style={{ borderColor: '#86efac', background: '#dcfce7', color: '#166534' }}>
               Lowest complete: {lowestBid ? `${lowestBid.vendor_name} ${fmt(lowestBid.total_price)}` : 'None'}
             </span>
-            <span className="rounded-md border bg-white px-2.5 py-1 text-xs font-semibold" style={{ borderColor: '#d9e0dc', color: '#1e3a2f' }}>
+            <span className="rounded-md border px-2.5 py-1 text-xs font-semibold" style={{ borderColor: '#93c5fd', background: '#dbeafe', color: '#1d4ed8' }}>
               Fastest: {fastestBid ? `${fastestBid.vendor_name} ${fastestBid.lead_time_days}d` : 'None'}
             </span>
             <div className="flex items-center rounded-md border bg-white" style={{ borderColor: '#d9e0dc' }}>
@@ -3008,7 +3016,11 @@ function BidExcelSheet({
         )}
 
         {sourcePreviewUrl && (
-          <div className="fixed bottom-6 right-6 top-24 z-40 flex w-[min(46rem,46vw)] min-w-[28rem] flex-col overflow-hidden rounded-xl border bg-white shadow-2xl" style={{ borderColor: '#d9e0dc' }}>
+          <div
+            className="fixed bottom-6 right-6 top-24 z-40 flex w-[min(46rem,46vw)] min-w-[28rem] flex-col overflow-hidden rounded-xl border bg-white shadow-2xl"
+            onMouseDown={() => containerRef.current?.blur()}
+            style={{ borderColor: '#d9e0dc' }}
+          >
             <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: '#d9e0dc', background: '#f8faf9' }}>
               <div className="min-w-0">
                 <p className="text-xs font-semibold uppercase" style={{ color: '#587067' }}>Source Files</p>
