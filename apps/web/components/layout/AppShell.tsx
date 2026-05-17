@@ -31,7 +31,7 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main className="flex-1 overflow-auto p-6" style={{ background: `radial-gradient(circle at top left, #fff3eb 0, transparent 28rem), linear-gradient(180deg, #f5f0eb 0, #ede8e2 100%)` }}>
+        <main className="flex-1 overflow-auto px-6 pb-32 pt-6" style={{ background: `radial-gradient(circle at top left, #fff3eb 0, transparent 28rem), linear-gradient(180deg, #f5f0eb 0, #ede8e2 100%)` }}>
           {children}
         </main>
       </div>
