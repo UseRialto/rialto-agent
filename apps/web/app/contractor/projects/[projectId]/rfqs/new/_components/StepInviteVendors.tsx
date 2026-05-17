@@ -364,7 +364,12 @@ export function StepInviteVendors({
                     <p className="text-sm font-semibold" style={{ color: '#1e3a2f' }}>{v.name}</p>
                     <p className="text-xs" style={{ color: '#8a9e96' }}>{v.email}</p>
                   </div>
-                  <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ background: '#e8f4ee', color: '#2d6a4f' }}>On Platform</span>
+                  <span className="rounded-full px-2 py-0.5 text-[10px] font-bold"
+                    style={v.onPlatform
+                      ? { background: '#e8f4ee', color: '#2d6a4f' }
+                      : { background: '#ede8e2', color: '#4a6358' }}>
+                    {v.onPlatform ? 'On Platform' : 'Saved Contact'}
+                  </span>
                 </button>
               ))}
               {showOffPlatformOption && (

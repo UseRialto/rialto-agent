@@ -1545,7 +1545,7 @@ async function parseQuoteResponseForEmail(params: {
     .from(rfqEmailAttachments)
     .where(eq(rfqEmailAttachments.email_message_id, params.emailMessageId))
 
-  const extracted = extractEmailQuoteIntake({
+  const extracted = await extractEmailQuoteIntake({
     rfq,
     vendorName: params.vendorName,
     emailBody: emailRow.text_body,
