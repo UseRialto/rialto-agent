@@ -466,7 +466,7 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
             <input
               value={emailDraft.to.join(', ')}
               onChange={(event) => setEmailDraft((current) => current && { ...current, to: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })}
-              className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#fa6b04]"
+              className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#cd682c]"
             />
           </label>
           <label className="mt-3 block text-xs font-medium text-gray-500">
@@ -474,7 +474,7 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
             <input
               value={emailDraft.cc.join(', ')}
               onChange={(event) => setEmailDraft((current) => current && { ...current, cc: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })}
-              className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#fa6b04]"
+              className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#cd682c]"
             />
           </label>
           <label className="mt-3 block text-xs font-medium text-gray-500">
@@ -482,7 +482,7 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
             <input
               value={emailDraft.subject}
               onChange={(event) => setEmailDraft((current) => current && { ...current, subject: event.target.value })}
-              className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#fa6b04]"
+              className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#cd682c]"
             />
           </label>
           <label className="mt-3 block text-xs font-medium text-gray-500">
@@ -491,7 +491,7 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
               value={emailDraft.body}
               onChange={(event) => setEmailDraft((current) => current && { ...current, body: event.target.value })}
               rows={9}
-              className="mt-1 w-full resize-none rounded-md border border-gray-200 px-3 py-2 text-sm leading-5 text-gray-900 outline-none focus:border-[#fa6b04]"
+              className="mt-1 w-full resize-none rounded-md border border-gray-200 px-3 py-2 text-sm leading-5 text-gray-900 outline-none focus:border-[#cd682c]"
             />
           </label>
           <p className="mt-3 text-xs text-gray-500">Review and edit here. Rialto Agent does not send email.</p>
@@ -528,8 +528,8 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition hover:bg-[#f4f7f5]"
-              style={{ color: '#8a9e96' }}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition hover:bg-[#fff0e4]"
+              style={{ color: '#a58a74' }}
               aria-label="Attach file"
               title="Attach CSV to create RFQ"
             >
@@ -537,8 +537,8 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
             </button>
           )}
           activity={(isSending || isLoadingContext) && (
-            <div className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm shadow-sm" style={{ background: '#f7faf8', borderColor: '#dfe8e3', color: '#24463a' }}>
-              <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: '#fa6b04' }} />
+            <div className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm shadow-sm" style={{ background: '#fffaf5', borderColor: '#ead6c4', color: '#4b3324' }}>
+              <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: '#cd682c' }} />
               {isLoadingContext ? 'Refreshing context...' : 'Thinking...'}
             </div>
           )}
@@ -554,11 +554,11 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
                         type="button"
                         onClick={() => void handleProjectOrRfqSelection(project.name)}
                         className="rounded-lg px-3 py-2 text-left text-sm font-medium shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
-                        style={{ background: '#ffffff', color: '#1e3a2f', border: '1px solid #d8e0db' }}
+                        style={{ background: '#ffffff', color: '#4b3324', border: '1px solid #ead6c4' }}
                       >
                         <span className="font-semibold">{project.name}</span>
                         {project.location && (
-                          <span className="ml-1.5 text-xs" style={{ color: '#8a9e96' }}>{project.location}</span>
+                          <span className="ml-1.5 text-xs" style={{ color: '#a58a74' }}>{project.location}</span>
                         )}
                       </button>
                     ))}
@@ -581,10 +581,10 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
                           }, 800)
                         }}
                         className="rounded-lg px-3 py-2.5 text-left text-sm font-medium shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
-                        style={{ background: '#ffffff', color: '#1e3a2f', border: '1px solid #d8e0db' }}
+                        style={{ background: '#ffffff', color: '#4b3324', border: '1px solid #ead6c4' }}
                       >
                         <span className="font-semibold">{rfq.title}</span>
-                        <span className="ml-2 inline-flex items-center gap-1.5 text-xs" style={{ color: '#8a9e96' }}>
+                        <span className="ml-2 inline-flex items-center gap-1.5 text-xs" style={{ color: '#a58a74' }}>
                           {rfq.status}
                           {typeof rfq.bidCount === 'number' && ` - ${rfq.bidCount} bid${rfq.bidCount === 1 ? '' : 's'}`}
                         </span>

@@ -142,24 +142,24 @@ export function AssistantPillBarShell({
           to { --assistant-pill-angle: 360deg; }
         }
         .assistant-pill-glint {
-          box-shadow: 0 30px 82px rgba(30,58,47,0.24), 0 12px 32px rgba(30,58,47,0.12);
+          box-shadow: 0 30px 82px rgba(83,49,28,0.2), 0 12px 32px rgba(83,49,28,0.12);
         }
         .assistant-pill-loading {
           border-color: transparent !important;
           background:
-            linear-gradient(#ffffff, #ffffff) padding-box,
+            linear-gradient(#fff8f1, #fff8f1) padding-box,
             conic-gradient(
               from var(--assistant-pill-angle, 0deg),
               transparent 0deg,
               transparent 232deg,
-              rgba(250, 107, 4, 0.42) 276deg,
-              rgba(250, 107, 4, 1) 306deg,
-              rgba(255, 211, 163, 0.98) 322deg,
-              rgba(250, 107, 4, 0.4) 346deg,
+              rgba(205, 104, 44, 0.46) 276deg,
+              rgba(205, 104, 44, 1) 306deg,
+              rgba(188, 224, 203, 0.98) 322deg,
+              rgba(205, 104, 44, 0.42) 346deg,
               transparent 360deg
             ) border-box;
           animation: assistant-pill-loading-glow 5.5s linear infinite;
-          box-shadow: 0 30px 82px rgba(30,58,47,0.24), 0 12px 32px rgba(30,58,47,0.12), 0 0 34px rgba(250,107,4,0.26);
+          box-shadow: 0 30px 82px rgba(83,49,28,0.2), 0 12px 32px rgba(83,49,28,0.12), 0 0 34px rgba(47,107,79,0.28);
         }
       `}</style>
       <section
@@ -177,12 +177,12 @@ export function AssistantPillBarShell({
           <div
             className={cn(
               'absolute bottom-[calc(100%-1px)] z-0 w-[78%] origin-bottom overflow-hidden rounded-t-[18px] rounded-b-none border border-b-0 transition-[clip-path,transform,width] duration-300 ease-out max-sm:w-[90%]',
-              hasShelfContent ? 'shadow-[0_-18px_45px_rgba(30,58,47,0.08)]' : '',
+              hasShelfContent ? 'shadow-[0_-18px_45px_rgba(83,49,28,0.08)]' : '',
               compact && 'pointer-events-none',
             )}
             style={{
-              background: '#fffaf5',
-              borderColor: '#e2d9cf',
+              background: '#fff4ea',
+              borderColor: '#e8cdb7',
               clipPath: compact ? 'inset(100% 0 0 0 round 18px 18px 0 0)' : 'inset(0 0 0 0 round 18px 18px 0 0)',
               transform: compact ? 'translateY(calc(100% + 1px)) scaleY(0.75)' : 'translateY(0) scaleY(1)',
             }}
@@ -190,18 +190,18 @@ export function AssistantPillBarShell({
             <button
               type="button"
               onClick={() => setExpanded((current) => !current)}
-              className="flex w-full items-center gap-2.5 px-3.5 py-1.5 text-left transition hover:bg-[#f5f0eb]/70"
+              className="flex w-full items-center gap-2.5 px-3.5 py-1.5 text-left transition hover:bg-[#ffead8]/70"
               aria-expanded={expanded}
               title={title}
             >
               <span
-                className={cn('h-2 w-2 shrink-0 rounded-full shadow-[0_0_0_2px_rgba(250,107,4,0.12)]', isSending ? 'animate-pulse' : '')}
-                style={{ background: statusTone === 'error' ? '#a85c2a' : statusTone === 'preview' ? '#fcd34d' : '#fa6b04' }}
+                className={cn('h-2 w-2 shrink-0 rounded-full shadow-[0_0_0_2px_rgba(47,107,79,0.14)]', isSending ? 'animate-pulse' : '')}
+                style={{ background: statusTone === 'error' ? '#a85c2a' : statusTone === 'preview' ? '#d99a2b' : '#cd682c' }}
               />
-              <span className="min-w-0 flex-1 truncate text-sm leading-tight" style={{ color: statusTone === 'error' ? '#a85c2a' : '#4a6358' }}>
+              <span className="min-w-0 flex-1 truncate text-sm leading-tight" style={{ color: statusTone === 'error' ? '#a85c2a' : '#725a48' }}>
                 {status}
               </span>
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition hover:bg-white/70" style={{ color: '#4a6358' }}>
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition hover:bg-white/70" style={{ color: '#725a48' }}>
                 {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
               </span>
             </button>
@@ -218,9 +218,9 @@ export function AssistantPillBarShell({
                       <div
                         className="max-w-[88%] rounded-lg px-3 py-2 text-sm leading-6 shadow-sm"
                         style={{
-                          background: message.role === 'user' ? '#1e3a2f' : message.tone === 'error' ? '#fff7ed' : '#f7faf8',
-                          border: message.role === 'assistant' ? '1px solid #dfe8e3' : '1px solid #1e3a2f',
-                          color: message.role === 'user' ? '#ffffff' : message.tone === 'error' ? '#a85c2a' : '#24463a',
+                          background: message.role === 'user' ? '#cd682c' : message.tone === 'error' ? '#fff1e8' : '#fffefd',
+                          border: message.role === 'assistant' ? '1px solid #f0e5db' : '1px solid #cd682c',
+                          color: message.role === 'user' ? '#ffffff' : message.tone === 'error' ? '#a85c2a' : '#4b3324',
                         }}
                       >
                         <p className="whitespace-pre-wrap">{message.content}</p>
@@ -233,7 +233,7 @@ export function AssistantPillBarShell({
                 {debug}
                 {attachments}
                 {error && (
-                  <div className="rounded-lg px-3 py-2 text-xs font-medium" style={{ background: '#fff7ed', color: '#a85c2a', border: '1px solid #f2d8c5' }}>
+                  <div className="rounded-lg px-3 py-2 text-xs font-medium" style={{ background: '#fff1e8', color: '#a85c2a', border: '1px solid #f0cdb8' }}>
                     {error}
                   </div>
                 )}
@@ -246,12 +246,12 @@ export function AssistantPillBarShell({
           onSubmit={handleSubmit}
           onClick={handleCompactActivate}
           className={cn(
-            'relative z-10 flex items-center gap-2 overflow-visible rounded-full border bg-white shadow-[0_24px_70px_rgba(30,58,47,0.18)] transition-[min-height,padding,box-shadow,border-color] duration-300',
+            'relative z-10 flex items-center gap-2 overflow-visible rounded-full border bg-[#fff8f1] shadow-[0_24px_70px_rgba(83,49,28,0.16)] transition-[min-height,padding,box-shadow,border-color] duration-300',
             compact
-              ? 'min-h-10 cursor-text px-2 py-1.5 shadow-[0_14px_38px_rgba(30,58,47,0.13)] hover:border-[#fa6b04]/55 hover:shadow-[0_18px_46px_rgba(30,58,47,0.17)]'
+              ? 'min-h-10 cursor-text px-2 py-1.5 shadow-[0_14px_38px_rgba(83,49,28,0.12)] hover:border-[#cd682c]/55 hover:shadow-[0_18px_46px_rgba(83,49,28,0.16)]'
               : cn('assistant-pill-glint min-h-[64px] px-3.5 py-3', isSending && 'assistant-pill-loading'),
           )}
-          style={{ border: !compact && isSending ? '1.25px solid transparent' : '1px solid #e2d9cf' }}
+          style={{ border: !compact && isSending ? '1.25px solid transparent' : '1px solid #e8cdb7' }}
         >
             {!compact && leftActions}
             <input
@@ -260,8 +260,8 @@ export function AssistantPillBarShell({
               onChange={(event) => onInputChange(event.target.value)}
               onFocus={handleCompactActivate}
               readOnly={compact}
-              className={cn('relative z-10 min-w-0 flex-1 bg-transparent outline-none placeholder:text-[#8a9e96]', compact ? 'py-0.5 pl-1 text-[12px]' : 'py-2 text-sm')}
-              style={{ color: '#1e3a2f' }}
+              className={cn('relative z-10 min-w-0 flex-1 bg-transparent outline-none placeholder:text-[#a58a74]', compact ? 'py-0.5 pl-1 text-[12px]' : 'py-2 text-sm')}
+              style={{ color: '#4b3324' }}
               placeholder={placeholder}
               disabled={!compact && inputDisabled}
               onKeyDown={onInputKeyDown}
@@ -274,10 +274,10 @@ export function AssistantPillBarShell({
               onClick={compact ? handleCompactActivate : undefined}
               disabled={!compact && sendDisabled}
               className={cn(
-                'relative z-10 inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full text-sm font-semibold text-white transition hover:bg-[#e05f03] disabled:opacity-50',
+                'relative z-10 inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full text-sm font-semibold text-white transition hover:bg-[#b85825] disabled:opacity-50',
                 compact ? 'h-8 w-8 px-0' : 'h-10 px-3.5 max-[420px]:w-10 max-[420px]:px-0',
               )}
-              style={{ background: '#fa6b04' }}
+              style={{ background: '#cd682c' }}
               aria-label={isSending ? sendingLabel : sendLabel}
               title={isSending ? sendingLabel : sendLabel}
             >

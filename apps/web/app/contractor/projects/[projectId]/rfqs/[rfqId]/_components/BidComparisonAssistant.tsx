@@ -148,9 +148,9 @@ function describePatch(patch: ComparisonViewPatch | null, schema: BidComparisonA
 }
 
 const TONE_STYLES: Record<PatchChip['tone'], CSSProperties> = {
-  add: { background: '#e8f4ee', border: '1px solid #a8d5ba', color: '#2d6a4f' },
+  add: { background: '#fff4ea', border: '1px solid #e6b667', color: '#cd682c' },
   remove: { background: '#fff1e8', border: '1px solid #f2b38f', color: '#a85c2a' },
-  highlight: { background: '#fef3c7', border: '1px solid #fcd34d', color: '#92400e' },
+  highlight: { background: '#edf6ea', border: '1px solid #e6b667', color: '#315f47' },
 }
 
 export function BidComparisonAssistant({
@@ -482,10 +482,10 @@ export function BidComparisonAssistant({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={isSending || isExtractingFile}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition hover:bg-[#f4f7f5] disabled:opacity-50"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition hover:bg-[#fff0e4] disabled:opacity-50"
             aria-label="Attach file"
             title={isExtractingFile ? 'Reading file...' : 'Attach PDF, CSV, Excel, Word, or text file'}
-            style={{ color: '#60746b', background: attachments.length ? '#fef3c7' : '#f4f7f5' }}
+            style={{ color: '#8a6d58', background: attachments.length ? '#edf6ea' : '#fff7f0' }}
           >
             <Paperclip className="h-4 w-4" />
           </button>
@@ -510,10 +510,10 @@ export function BidComparisonAssistant({
             try { localStorage.setItem('rialto:agent-debug', String(next)) } catch {}
             if (!next) setDebugSteps([])
           }}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition hover:bg-[#f4f7f5]"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition hover:bg-[#fff0e4]"
           style={{
-            borderColor: debugMode ? '#fa6b04' : '#d5ded9',
-            color: debugMode ? '#fa6b04' : '#60746b',
+            borderColor: debugMode ? '#cd682c' : '#ead6c4',
+            color: debugMode ? '#cd682c' : '#8a6d58',
             background: '#ffffff',
           }}
           aria-label={debugMode ? 'Turn debug off' : 'Turn debug on'}
@@ -523,19 +523,19 @@ export function BidComparisonAssistant({
         </button>
       )}
       activity={isSending && (
-        <div className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm shadow-sm" style={{ borderColor: '#dfe8e3', color: '#24463a', background: '#f7faf8' }}>
-          <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: '#fa6b04' }} />
+        <div className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm shadow-sm" style={{ borderColor: '#ead6c4', color: '#4b3324', background: '#fffaf5' }}>
+          <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: '#cd682c' }} />
           Reading the sheet...
         </div>
       )}
       preview={proposal && (
-        <div className="rounded-lg border p-3" style={{ borderColor: '#dfe8e3', background: '#fbfcfb' }}>
+        <div className="rounded-lg border p-3" style={{ borderColor: '#ead6c4', background: '#fffaf5' }}>
           <div className="mb-2 flex items-center justify-between gap-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.08em]" style={{ color: '#60746b' }}>Preview</p>
-            <span className="text-xs" style={{ color: '#7b8d86' }}>{chips.length || 0} change{chips.length === 1 ? '' : 's'}</span>
+            <p className="text-xs font-semibold uppercase tracking-[0.08em]" style={{ color: '#8a6d58' }}>Preview</p>
+            <span className="text-xs" style={{ color: '#a58a74' }}>{chips.length || 0} change{chips.length === 1 ? '' : 's'}</span>
           </div>
           {chips.length === 0 ? (
-            <p className="text-xs" style={{ color: '#8a9e96' }}>Rialto is unsure what to change.</p>
+            <p className="text-xs" style={{ color: '#a58a74' }}>Rialto is unsure what to change.</p>
           ) : (
             <div className="flex flex-wrap gap-2">
               {chips.map((chip) => (
@@ -551,7 +551,7 @@ export function BidComparisonAssistant({
               onClick={applyProposal}
               disabled={isApplying || chips.length === 0}
               className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-xs font-semibold text-white transition-all disabled:scale-95 disabled:opacity-60"
-              style={{ background: '#1e3a2f' }}
+              style={{ background: '#9f4f22' }}
             >
               <Check className="h-3.5 w-3.5" />
               {isApplying ? 'Applying...' : 'Apply'}
@@ -561,7 +561,7 @@ export function BidComparisonAssistant({
               onClick={() => { setProposal(null); setSummary(''); onPreviewChange?.(null) }}
               disabled={isApplying}
               className="rounded-md border px-3 py-2 text-xs font-semibold transition disabled:opacity-60"
-              style={{ borderColor: '#d8e0db', color: '#4a6358', background: '#ffffff' }}
+              style={{ borderColor: '#ead6c4', color: '#725a48', background: '#ffffff' }}
             >
               Discard
             </button>
@@ -569,12 +569,12 @@ export function BidComparisonAssistant({
         </div>
       )}
       debug={debugMode && debugSteps.length > 0 && (
-        <details className="rounded-lg border px-3 py-2" style={{ borderColor: '#eadfd4', background: '#fffaf6' }}>
-          <summary className="cursor-pointer text-xs font-semibold" style={{ color: '#a85c2a' }}>Agent trace</summary>
-          <ol className="mt-2 space-y-1 text-xs" style={{ color: '#5d7168' }}>
+        <details className="rounded-lg border px-3 py-2" style={{ borderColor: '#ead6c4', background: '#fffaf5' }}>
+          <summary className="cursor-pointer text-xs font-semibold" style={{ color: '#cd682c' }}>Agent trace</summary>
+          <ol className="mt-2 space-y-1 text-xs" style={{ color: '#725a48' }}>
             {debugSteps.map((step, index) => (
               <li key={`${index}-${step}`} className="grid grid-cols-[1.5rem_1fr] gap-2">
-                <span style={{ color: '#fa6b04' }}>{index + 1}.</span>
+                <span style={{ color: '#cd682c' }}>{index + 1}.</span>
                 <span>{step}</span>
               </li>
             ))}
@@ -582,9 +582,9 @@ export function BidComparisonAssistant({
         </details>
       )}
       attachments={(attachments.length > 0 || isExtractingFile) && (
-        <div className="flex flex-wrap items-center gap-2 text-xs" style={{ color: '#4a6358' }}>
+        <div className="flex flex-wrap items-center gap-2 text-xs" style={{ color: '#725a48' }}>
           {attachments.map((attachment) => (
-            <span key={attachment.sourceId} className="inline-flex max-w-[15rem] items-center gap-1.5 rounded-md px-2.5 py-1 font-semibold" style={{ background: '#fef3c7', color: '#7c3f12' }}>
+            <span key={attachment.sourceId} className="inline-flex max-w-[15rem] items-center gap-1.5 rounded-md px-2.5 py-1 font-semibold" style={{ background: '#edf6ea', color: '#315f47' }}>
               <Paperclip className="h-3 w-3 shrink-0" />
               <span className="truncate">{attachment.filename}</span>
               <button
