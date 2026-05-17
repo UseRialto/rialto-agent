@@ -342,4 +342,43 @@ No . Item Description Size Quantity Price Per Total
     await expect(page.locator('[data-testid="comparison-grid-cell"][data-row-index="5"][data-col-index="1"]')).toContainText('Original first description')
     await expect(page.locator('[data-testid="comparison-grid-cell"][data-row-index="6"][data-col-index="1"]')).toContainText('Original second description')
   })
+
+  test('opens the quote assistant pill bar with keyboard shortcut and shows preview actions', async ({ page }) => {
+    const response = await page.request.post('/api/external-quote-import', {
+      multipart: {
+        projectId: PROJECT_ID,
+        file: {
+          name: '20-base-comparison-plus-vendor-tabs.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          buffer: fs.readFileSync(BASE_COMPARISON_FIXTURE),
+        },
+      },
+    })
+    expect(response.ok()).toBe(true)
+    const body = await response.json() as { redirectTo: string }
+
+    await page.route('**/api/bid-comparison/ai-propose', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          patch: {
+            summary: 'Prepared a preview.',
+            hideColumnKeys: ['mock-column'],
+          },
+        }),
+      })
+    })
+
+    await page.goto(body.redirectTo)
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K')
+
+    const assistant = page.locator('section[aria-label="Bid comparison AI assistant"]')
+    await expect(assistant).toBeVisible()
+    await assistant.getByPlaceholder('Ask about this sheet...').fill('Hide the mock column')
+    await assistant.getByRole('button', { name: 'Send' }).click()
+
+    await expect(assistant.getByRole('button', { name: 'Apply' })).toBeVisible()
+    await expect(assistant.getByRole('button', { name: 'Discard' })).toBeVisible()
+  })
 })
