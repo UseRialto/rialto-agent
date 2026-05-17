@@ -22,6 +22,7 @@ export interface VendorQuoteDraftUnmatchedRow {
   id: string
   filename: string
   sourceRow?: number
+  sourceExcerpt?: string
   sku: string
   description: string
   quantity?: number
@@ -139,6 +140,41 @@ function reviewReasonForAlmostMatch(requested: ContractorRFQLineItem, missingDet
   return `Possible match to "${label}", but the quote row is missing requested detail${missingDetails.length === 1 ? '' : 's'}: ${missingDetails.map(formatMissingProductDetail).join(', ')}. Review before applying.`
 }
 
+function reviewReasonForAmbiguousMatch(best: ContractorRFQLineItem, runnerUp?: ContractorRFQLineItem) {
+  const bestLabel = best.sku ? `${best.sku} - ${best.description}` : best.description
+  const runnerUpLabel = runnerUp ? (runnerUp.sku ? `${runnerUp.sku} - ${runnerUp.description}` : runnerUp.description) : ''
+  return runnerUp
+    ? `Possible match to "${bestLabel}", but it is close to "${runnerUpLabel}". Review before applying.`
+    : `Possible match to "${bestLabel}", but the text match is not strong enough to auto-fill. Review before applying.`
+}
+
+function normalizeSourceLine(value: string) {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function sourceExcerptForImportedLine(sourceText: string, imported: ContractorBidLineItemResponse) {
+  const candidates = [
+    imported.sku,
+    imported.description,
+    imported.quoted_product_details,
+  ].map((entry) => key(entry)).filter(Boolean)
+  const lines = sourceText.split(/\r?\n/).map(normalizeSourceLine).filter(Boolean)
+  const found = lines.find((line) => {
+    const normalizedLine = key(line)
+    return candidates.some((candidate) => candidate.length >= 4 && normalizedLine.includes(candidate))
+  })
+  return found ?? normalizeSourceLine([
+    imported.sku,
+    imported.description,
+    imported.quoted_quantity ?? imported.quantity,
+    imported.unit,
+    imported.unit_price,
+    imported.total_price,
+    imported.lead_time_days ? `${imported.lead_time_days} days` : '',
+    imported.notes,
+  ].filter((entry) => entry != null && String(entry).trim()).join(' | '))
+}
+
 function scoreRequestedLine(item: ContractorRFQLineItem, imported: ContractorBidLineItemResponse) {
   return Math.max(
     overlapScore(item.description, imported.description),
@@ -180,14 +216,18 @@ function matchRequestedLine(
     .sort((a, b) => b.score - a.score)
 
   const best = candidates[0]
+  const runnerUp = candidates[1]
   if (!best || best.score < 0.55) return {}
+  if (best.score < 0.72 || (runnerUp && best.score - runnerUp.score < 0.18)) {
+    return { reviewReason: reviewReasonForAmbiguousMatch(best.item, runnerUp?.item) }
+  }
   if (best.missingDetails.length > 0) {
     return { reviewReason: reviewReasonForAlmostMatch(best.item, best.missingDetails) }
   }
   return { item: best.item }
 }
 
-function sourceAttributes(filename: string, imported: ContractorBidLineItemResponse, sourceUrl?: string): ProcurementLineItemAttribute[] {
+function sourceAttributes(filename: string, imported: ContractorBidLineItemResponse, sourceUrl?: string, sourceExcerpt?: string): ProcurementLineItemAttribute[] {
   return [
     ...(imported.response_attributes ?? []),
     {
@@ -197,12 +237,25 @@ function sourceAttributes(filename: string, imported: ContractorBidLineItemRespo
       source: 'spreadsheet' as const,
       order: 9_000,
     },
+    ...(sourceExcerpt ? [{
+      key: 'vendor_quote_source_excerpt',
+      label: 'Vendor Quote Source Excerpt',
+      value: sourceExcerpt,
+      source: 'spreadsheet' as const,
+      order: 9_001,
+    }, {
+      key: 'vendor_quote_review_status',
+      label: 'Vendor Quote Review Status',
+      value: 'needs_review',
+      source: 'spreadsheet' as const,
+      order: 9_002,
+    }] : []),
     ...(sourceUrl ? [{
       key: 'source_url',
       label: 'Source URL',
       value: sourceUrl,
       source: 'spreadsheet' as const,
-      order: 9_001,
+      order: 9_003,
     }] : []),
   ]
 }
@@ -219,11 +272,13 @@ function unmatchedRowFromImportedLine(
   filename: string,
   imported: ContractorBidLineItemResponse,
   index: number,
+  sourceExcerpt: string,
   matchReviewReason?: string,
 ): VendorQuoteDraftUnmatchedRow {
   return {
     id: `unmatched-${index + 1}`,
     filename,
+    sourceExcerpt,
     sku: imported.sku,
     description: imported.description || imported.sku || 'Unmatched quote row',
     quantity: imported.quoted_quantity ?? imported.quantity,
@@ -250,6 +305,7 @@ function unmatchedRowFromInlineLine(
   return {
     id: `unmatched-inline-${index + 1}`,
     filename,
+    sourceExcerpt: line,
     sku: '',
     description: sourceName || line,
     quantity: quantity || undefined,
@@ -344,7 +400,7 @@ function parseInlineQuoteResponses(input: VendorQuoteDraftInput): VendorQuoteDra
           total_price: quantity > 0 ? Number((quantity * unitPrice).toFixed(2)) : Number((requested.quantity * unitPrice).toFixed(2)),
           lead_time_days: parseLeadTimeDays(line),
           availability: 'can_source',
-        }, input.sourceUrl),
+        }, input.sourceUrl, line),
       }]
     })
 
@@ -388,9 +444,10 @@ export function buildVendorQuoteDraft(input: VendorQuoteDraftInput): VendorQuote
   const lineItemResponses = bid.line_item_responses.flatMap((line) => {
     const match = matchRequestedLine(input.rfq.line_items, line, matchedIds)
     const requested = match.item
+    const sourceExcerpt = sourceExcerptForImportedLine(input.text, line)
     if (!requested) {
       warnings.push({ message: match.reviewReason ?? `Could not match "${line.description || line.sku}" from ${input.filename} to a requested line item.` })
-      unmatchedRows.push(unmatchedRowFromImportedLine(input.filename, line, unmatchedRows.length, match.reviewReason))
+      unmatchedRows.push(unmatchedRowFromImportedLine(input.filename, line, unmatchedRows.length, sourceExcerpt, match.reviewReason))
       return []
     }
     matchedIds.add(requested.id)
@@ -402,7 +459,7 @@ export function buildVendorQuoteDraft(input: VendorQuoteDraftInput): VendorQuote
       sku: line.sku,
       description: line.description || requested.description,
       quoted_product_details: line.description && line.description !== requested.description ? line.description : line.quoted_product_details,
-      response_attributes: sourceAttributes(input.filename, line, input.sourceUrl),
+      response_attributes: sourceAttributes(input.filename, line, input.sourceUrl, sourceExcerpt),
       is_alternate: false,
     }]
   })

@@ -1042,13 +1042,56 @@ export async function upsertVendorRelationship(params: {
     })
 }
 
+export async function rememberVendorContactName(params: {
+  contractorUserId: string
+  vendorId?: string
+  vendorEmail: string
+  vendorName: string
+}): Promise<void> {
+  const vendorEmail = params.vendorEmail.trim().toLowerCase()
+  const vendorName = params.vendorName.trim()
+  if (!vendorEmail || !vendorName) return
+
+  const existingRelationship = await getVendorRelationship(params.contractorUserId, vendorEmail)
+  await upsertVendorRelationship({
+    contractorUserId: params.contractorUserId,
+    vendorId: params.vendorId ?? existingRelationship?.vendor_id ?? undefined,
+    vendorEmail,
+    vendorName,
+    trustedStatus: existingRelationship?.trusted_status ?? 'neutral',
+    rating: existingRelationship?.rating ?? 3,
+    termsHistorySummary: existingRelationship?.terms_history_summary ?? '',
+    qualificationNotes: existingRelationship?.qualification_notes ?? '',
+  })
+}
+
 export async function getVendorRelationship(contractorUserId: string, vendorEmail: string) {
   return (await db.select().from(vendorRelationshipsTable).where(
     and(
       eq(vendorRelationshipsTable.contractor_user_id, contractorUserId),
-      eq(vendorRelationshipsTable.vendor_email, vendorEmail),
+      eq(vendorRelationshipsTable.vendor_email, vendorEmail.trim().toLowerCase()),
     ),
   ))[0] ?? null
+}
+
+export async function searchVendorRelationships(contractorUserId: string, query: string, limit = 6) {
+  const trimmed = query.trim().toLowerCase()
+  if (trimmed.length < 2) return []
+  const pattern = `%${trimmed}%`
+  return db
+    .select()
+    .from(vendorRelationshipsTable)
+    .where(
+      and(
+        eq(vendorRelationshipsTable.contractor_user_id, contractorUserId),
+        or(
+          sql`lower(${vendorRelationshipsTable.vendor_name}) like ${pattern}`,
+          sql`lower(${vendorRelationshipsTable.vendor_email}) like ${pattern}`,
+        ),
+      ),
+    )
+    .orderBy(desc(vendorRelationshipsTable.updated_at))
+    .limit(limit)
 }
 
 export async function addNegotiationMessage(params: {

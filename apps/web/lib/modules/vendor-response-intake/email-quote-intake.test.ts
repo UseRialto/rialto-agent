@@ -18,15 +18,22 @@ const rfq: ContractorRFQ = {
 }
 
 describe('email quote intake', () => {
-  it('turns an inline vendor email reply into line item responses for comparison', () => {
-    const result = extractEmailQuoteIntake({
+  it('turns a GPT-normalized inline vendor email reply into line item responses for comparison', async () => {
+    const result = await extractEmailQuoteIntake({
       rfq,
       vendorName: 'Ceiling Supply',
-      emailBody: [
-        'USG Donn DXL 4 ft cross tee 15/16 fire-rated, qty 500 ea, unit price $1.82, lead time 5 days',
-        'USG Donn DXL 12 ft heavy-duty main runner, qty 80 ea, unit price $6.10, lead time 5 days',
-      ].join('\n'),
+      emailBody: 'Prices below.',
       attachments: [],
+      runInlineEmailModel: async () => ({
+        containsQuote: true,
+        normalizedText: [
+          'Supplier,Item,SKU,Description,Qty,Unit,Unit Price,Total Price,Lead Time,Notes',
+          'Ceiling Supply,1,CT-4-15/16-FW,USG Donn DXL 4 ft 15/16 in fire-rated cross tee,500,ea,1.82,910,5 days,',
+          'Ceiling Supply,2,MR-12-HD,USG Donn DXL 12 ft heavy-duty main runner,80,ea,6.10,488,5 days,',
+        ].join('\n'),
+        verificationSummary: 'All normalized values came from the email body.',
+        warnings: [],
+      }),
     })
 
     expect(result.lineItemResponses).toHaveLength(2)
@@ -40,8 +47,27 @@ describe('email quote intake', () => {
     expect(result.needsReview).toBe(false)
   })
 
-  it('prefers a readable quote attachment over inline email prose', () => {
-    const result = extractEmailQuoteIntake({
+  it('does not add comparison rows when GPT decides an inline reply has no quote data', async () => {
+    const result = await extractEmailQuoteIntake({
+      rfq,
+      vendorName: 'Ceiling Supply',
+      emailBody: 'Thanks for reaching out. We will review this tomorrow.',
+      attachments: [],
+      runInlineEmailModel: async () => ({
+        containsQuote: false,
+        normalizedText: '',
+        verificationSummary: 'The message was conversational and contained no quote values.',
+        warnings: [],
+      }),
+    })
+
+    expect(result.lineItemResponses).toHaveLength(0)
+    expect(result.sourceKind).toBe('email')
+    expect(result.needsReview).toBe(false)
+  })
+
+  it('prefers a readable quote attachment over inline email prose', async () => {
+    const result = await extractEmailQuoteIntake({
       rfq,
       vendorName: 'Ceiling Supply',
       emailBody: 'See attached, thanks.',

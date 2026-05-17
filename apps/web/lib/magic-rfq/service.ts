@@ -9,6 +9,7 @@ import {
   getNegotiationMessagesForVendor,
   getProject,
   getRFQById,
+  rememberVendorContactName,
 } from '@/lib/store/contractor-store'
 import type { ContractorBid, ContractorBidLineItemResponse } from '@/lib/types/contractor'
 import type { MagicRFQAccess } from '@/lib/types/magic-rfq'
@@ -188,6 +189,11 @@ export async function submitMagicRFQMessage(params: {
     .where(eq(rfqMagicLinks.token_hash, hashToken(params.token))))[0]
   if (link) {
     const stamp = nowIso()
+    const vendorRequest = (await db
+      .select()
+      .from(rfqVendorRequests)
+      .where(eq(rfqVendorRequests.id, link.vendor_request_id)))[0]
+
     await db.update(rfqVendorRequests)
       .set({
         vendor_name: authorName,
@@ -197,6 +203,14 @@ export async function submitMagicRFQMessage(params: {
         updated_at: stamp,
       })
       .where(eq(rfqVendorRequests.id, link.vendor_request_id))
+
+    if (vendorRequest) {
+      await rememberVendorContactName({
+        contractorUserId: vendorRequest.contractor_user_id,
+        vendorEmail: access.vendorEmail,
+        vendorName: authorName,
+      })
+    }
   }
 }
 
@@ -279,6 +293,12 @@ export async function submitMagicRFQBid(params: {
       updated_at: submittedAt,
     })
     .where(eq(rfqVendorRequests.id, vendorRequest.id))
+
+  await rememberVendorContactName({
+    contractorUserId: vendorRequest.contractor_user_id,
+    vendorEmail: access.vendorEmail,
+    vendorName,
+  })
 
   await db.update(rfqMagicLinks)
     .set({

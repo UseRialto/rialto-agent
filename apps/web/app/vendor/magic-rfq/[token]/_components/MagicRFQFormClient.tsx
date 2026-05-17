@@ -139,7 +139,7 @@ function formatCurrencyInput(value: string) {
   if (!value) return ''
   const [whole, decimal] = value.split('.')
   const formattedWhole = whole ? Number(whole).toLocaleString('en-US') : ''
-  return `$${formattedWhole}${decimal != null ? `.${decimal}` : ''}`
+  return `$${formattedWhole}${decimal != null ? `.${decimal.padEnd(2, '0').slice(0, 2)}` : ''}`
 }
 
 function parseCurrencyInput(value: string) {
@@ -149,17 +149,56 @@ function parseCurrencyInput(value: string) {
   return decimalParts.length > 0 ? `${whole}.${decimal}` : whole
 }
 
-function moneyDisplay(value: string) {
-  const n = parseFloat(value)
-  if (!Number.isFinite(n)) return '-'
-  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-}
-
 function calculateQuotedTotalPrice(quantity: string, unitPrice: string) {
   const parsedQuantity = parseFloat(quantity)
   const parsedUnitPrice = parseFloat(unitPrice)
   if (!Number.isFinite(parsedQuantity) || !Number.isFinite(parsedUnitPrice)) return ''
   return (parsedQuantity * parsedUnitPrice).toFixed(2)
+}
+
+function moneyString(value: number | string | undefined) {
+  const parsed = typeof value === 'number' ? value : parseFloat(String(value ?? ''))
+  return Number.isFinite(parsed) ? parsed.toFixed(2) : ''
+}
+
+function uploadedQuoteFilename(file: ClientUploadedFileResult) {
+  return file.filename || sourceFilenameFromUrl(file.url)
+}
+
+function sourceFilenameFromUrl(url: string) {
+  try {
+    const pathname = url.startsWith('http') ? new URL(url).pathname : url
+    return decodeURIComponent((pathname.split('/').pop() ?? url).replace(/^\d+-/, '')) || 'Quote file'
+  } catch {
+    return url
+  }
+}
+
+function isPdfSourceFile(url: string) {
+  try {
+    const pathname = url.startsWith('http') ? new URL(url).pathname : url.split('?')[0]
+    return pathname.toLowerCase().endsWith('.pdf')
+  } catch {
+    return url.toLowerCase().split('?')[0].endsWith('.pdf')
+  }
+}
+
+function QuoteFilePreview({ file }: { file: ClientUploadedFileResult }) {
+  const filename = uploadedQuoteFilename(file)
+  if (isPdfSourceFile(file.url)) {
+    return (
+      <object data={file.url} type="application/pdf" className="h-full min-h-0 w-full" aria-label={`Quote file ${filename}`}>
+        <div className="flex h-full min-h-80 flex-col items-center justify-center gap-3 px-6 text-center">
+          <p className="text-sm font-semibold" style={{ color: '#587067' }}>This browser could not show the PDF preview inline.</p>
+          <a href={file.url} target="_blank" rel="noreferrer" className="rounded-md px-3 py-2 text-xs font-bold text-white" style={{ background: '#1e3a2f' }}>
+            Open Quote File
+          </a>
+        </div>
+      </object>
+    )
+  }
+
+  return <iframe title={`Quote file ${filename}`} src={file.url} className="h-full min-h-0 w-full bg-white" />
 }
 
 function hasPositiveUnitPrice(bid: LineItemBid) {
@@ -374,8 +413,8 @@ function mergeQuoteFileDraftIntoBid(
     quoted_quantity: response.quoted_quantity?.toString() ?? response.quantity?.toString() ?? bid.quoted_quantity,
     quoted_unit: response.unit || bid.quoted_unit || item.unit,
     units_available: response.units_available?.toString() ?? bid.units_available,
-    unit_price: response.unit_price > 0 ? response.unit_price.toString() : '',
-    total_price: response.total_price > 0 ? response.total_price.toString() : '',
+    unit_price: moneyString(response.unit_price),
+    total_price: moneyString(response.total_price),
     lead_time_days: response.lead_time_days > 0 ? response.lead_time_days.toString() : bid.lead_time_days,
     delivery_terms: response.delivery_terms ?? bid.delivery_terms,
     substitution_notes: '',
@@ -982,12 +1021,14 @@ function LineItemsWorkbook({
   updateBid,
   uploadFolder,
   pricingIssueLineItemIds,
+  appliedQuoteLineItemIds,
 }: {
   rfq: ContractorRFQ
   bids: LineItemBid[]
   updateBid: (id: string, partial: Partial<LineItemBid>) => void
   uploadFolder: string
   pricingIssueLineItemIds: Set<string>
+  appliedQuoteLineItemIds: Set<string>
 }) {
   const sheetRef = useRef<HTMLDivElement>(null)
   const vendorResponseFields = visibleVendorResponseFields(rfq)
@@ -1028,6 +1069,7 @@ function LineItemsWorkbook({
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [vendorPaneWidthOverride, setVendorPaneWidthOverride] = useState<number | null>(null)
   const [substitutionLineItemId, setSubstitutionLineItemId] = useState<string | null>(null)
+  const [sourceReviewLineItemId, setSourceReviewLineItemId] = useState<string | null>(null)
   const columnWidth = (key: string, fallback: number) => columnWidths[key] ?? fallback
   const requestPinnedGridTemplateColumns = requestPinnedColumns.map((col) => `${columnWidth(col.key, col.width)}px`).join(' ')
   const requestDetailsGridTemplateColumns = detailColumns.map((col) => `${columnWidth(col.key, col.width)}px`).join(' ')
@@ -1165,8 +1207,29 @@ function LineItemsWorkbook({
     setSubstitutionLineItemId(null)
   }
 
+  function confirmSourceReview(bid: LineItemBid) {
+    updateResponseAttribute(bid, 'vendor_quote_review_status', 'confirmed')
+    setSourceReviewLineItemId(null)
+  }
+
+  function rejectSourceReview(bid: LineItemBid) {
+    updateBid(bid.line_item_id, {
+      unit_price: '',
+      total_price: '',
+      lead_time_days: '',
+      quoted_product_details: '',
+      response_attributes: {
+        ...bid.response_attributes,
+        vendor_quote_review_status: 'rejected',
+      },
+    })
+    setSourceReviewLineItemId(null)
+  }
+
   const substitutionItem = substitutionLineItemId ? rfq.line_items.find((item) => item.id === substitutionLineItemId) : undefined
   const substitutionBid = substitutionLineItemId ? bids.find((bid) => bid.line_item_id === substitutionLineItemId) : undefined
+  const sourceReviewItem = sourceReviewLineItemId ? rfq.line_items.find((item) => item.id === sourceReviewLineItemId) : undefined
+  const sourceReviewBid = sourceReviewLineItemId ? bids.find((bid) => bid.line_item_id === sourceReviewLineItemId) : undefined
 
   return (
     <>
@@ -1380,8 +1443,10 @@ function LineItemsWorkbook({
                 const computedTotalPrice = unitPrice * quotedQuantity
                 const totalPrice = computedTotalPrice
                 const hasRowPricingIssue = pricingIssueLineItemIds.has(item.id)
+                const wasJustApplied = appliedQuoteLineItemIds.has(item.id)
                 const issueRowStyle = hasRowPricingIssue
                   ? { borderColor: '#e49a9a', background: '#f4b4b4' }
+                  : wasJustApplied ? { borderColor: '#86efac', background: '#dcfce7' }
                   : { borderColor: '#f0ebe6', background: bid.is_alternate ? '#f8faf9' : '#ffffff' }
                 const renderResponseCells = (alternateRow: boolean) => {
                   if (bid.is_alternate && !alternateRow) {
@@ -1401,7 +1466,10 @@ function LineItemsWorkbook({
                     )
                   }
                   const hasPricingIssue = hasRowPricingIssue && !alternateRow
-                  const cellBorderColor = hasPricingIssue ? '#d66f6f' : alternateRow ? '#f2c99d' : '#f0ebe6'
+                  const sourceExcerpt = bid.response_attributes.vendor_quote_source_excerpt
+                  const sourceReviewStatus = bid.response_attributes.vendor_quote_review_status
+                  const needsSourceReview = Boolean(sourceExcerpt && sourceReviewStatus !== 'confirmed' && sourceReviewStatus !== 'rejected')
+                  const cellBorderColor = hasPricingIssue ? '#d66f6f' : wasJustApplied ? '#86efac' : alternateRow ? '#f2c99d' : '#f0ebe6'
                   const unitPriceBorder = hasPricingIssue
                     ? '1.5px solid #c0392b'
                     : alternateRow ? '1px dashed #fa6b04' : '1px solid #e2d9cf'
@@ -1410,7 +1478,7 @@ function LineItemsWorkbook({
                       <div
                         className="overflow-hidden border-r p-1.5"
                         style={{
-                          background: hasPricingIssue ? '#f4b4b4' : undefined,
+                          background: hasPricingIssue ? '#f4b4b4' : wasJustApplied ? '#dcfce7' : undefined,
                           borderColor: cellBorderColor,
                         }}
                       >
@@ -1427,21 +1495,33 @@ function LineItemsWorkbook({
                             })
                           }}
                           className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
-                          style={{ background: hasPricingIssue ? '#fff8f8' : '#fbf8f5', border: unitPriceBorder, color: '#1e3a2f' }}
+                          style={{ background: hasPricingIssue ? '#fff8f8' : wasJustApplied ? '#f0fdf4' : '#fbf8f5', border: unitPriceBorder, color: '#1e3a2f' }}
                           {...editableCellProps(index, 0)}
                         />
+                        {needsSourceReview ? (
+                          <button
+                            type="button"
+                            onClick={() => setSourceReviewLineItemId(item.id)}
+                            className="mt-1 inline-flex w-full items-center justify-center gap-1 rounded-md border px-1.5 py-1 text-[11px] font-bold"
+                            style={{ borderColor: '#fde68a', background: '#fffbeb', color: '#92400e' }}
+                            title="Review extracted source line"
+                          >
+                            <span aria-hidden="true">💡</span>
+                            Review
+                          </button>
+                        ) : null}
                       </div>
-                      <div className="min-w-0 overflow-hidden border-r p-1.5" style={{ background: hasPricingIssue ? '#f4b4b4' : undefined, borderColor: cellBorderColor }}>
+                      <div className="min-w-0 overflow-hidden border-r p-1.5" style={{ background: hasPricingIssue ? '#f4b4b4' : wasJustApplied ? '#dcfce7' : undefined, borderColor: cellBorderColor }}>
                         <div
                           className="min-w-0 overflow-hidden rounded-md px-2 py-1.5 text-right text-sm font-semibold"
-                          style={{ background: hasPricingIssue ? '#fff8f8' : '#fff', border: hasPricingIssue ? '1px solid #c0392b' : alternateRow ? '1px dashed #fa6b04' : '1px solid #f2c99d', color: hasPricingIssue ? '#7f1d1d' : '#8a4615' }}
+                          style={{ background: hasPricingIssue ? '#fff8f8' : wasJustApplied ? '#f0fdf4' : '#fff', border: hasPricingIssue ? '1px solid #c0392b' : wasJustApplied ? '1px solid #22c55e' : alternateRow ? '1px dashed #fa6b04' : '1px solid #f2c99d', color: hasPricingIssue ? '#7f1d1d' : wasJustApplied ? '#166534' : '#8a4615' }}
                         >
                           <span className="block truncate">
                             {bid.unit_price ? `$${totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
                           </span>
                         </div>
                       </div>
-                      <div className="overflow-hidden border-r p-1.5" style={{ background: hasPricingIssue ? '#f4b4b4' : undefined, borderColor: cellBorderColor }}>
+                      <div className="overflow-hidden border-r p-1.5" style={{ background: hasPricingIssue ? '#f4b4b4' : wasJustApplied ? '#dcfce7' : undefined, borderColor: cellBorderColor }}>
                         <label className="sr-only">Lead Time</label>
                         <input
                           type="number"
@@ -1449,7 +1529,7 @@ function LineItemsWorkbook({
                           value={bid.lead_time_days}
                           onChange={(event) => updateBid(item.id, { lead_time_days: event.target.value })}
                           className="w-full rounded-md px-2 py-1.5 text-sm focus:outline-none"
-                          style={{ background: hasPricingIssue ? '#fff8f8' : '#fbf8f5', border: hasPricingIssue ? '1px solid #c0392b' : alternateRow ? '1px dashed #fa6b04' : '1px solid #e2d9cf', color: '#1e3a2f' }}
+                          style={{ background: hasPricingIssue ? '#fff8f8' : wasJustApplied ? '#f0fdf4' : '#fbf8f5', border: hasPricingIssue ? '1px solid #c0392b' : wasJustApplied ? '1px solid #22c55e' : alternateRow ? '1px dashed #fa6b04' : '1px solid #e2d9cf', color: '#1e3a2f' }}
                           {...editableCellProps(index, 1)}
                         />
                       </div>
@@ -1528,6 +1608,51 @@ function LineItemsWorkbook({
         onRemove={() => removeSubstitution(substitutionItem.id)}
       />
     )}
+    {sourceReviewItem && sourceReviewBid ? (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+        <div className="w-full max-w-2xl overflow-hidden rounded-2xl border bg-white shadow-2xl" style={{ borderColor: '#e2d9cf' }}>
+          <div className="border-b px-5 py-4" style={{ borderColor: '#e2d9cf', background: '#fffbeb' }}>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em]" style={{ color: '#92400e' }}>Source review</p>
+            <h3 className="mt-1 text-lg font-semibold" style={{ color: '#1e3a2f' }}>{sourceReviewItem.sku || sourceReviewItem.description}</h3>
+          </div>
+          <div className="space-y-4 p-5">
+            <div>
+              <p className="text-xs font-semibold" style={{ color: '#4a6358' }}>Pulled exactly from uploaded quote</p>
+              <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap rounded-lg border p-3 text-xs leading-5" style={{ borderColor: '#fde68a', background: '#fffbeb', color: '#1e3a2f' }}>
+                {sourceReviewBid.response_attributes.vendor_quote_source_excerpt}
+              </pre>
+            </div>
+            <div className="grid gap-2 text-sm sm:grid-cols-3">
+              <div className="rounded-lg border p-3" style={{ borderColor: '#e2d9cf' }}>
+                <p className="text-[11px] font-semibold uppercase" style={{ color: '#8a9e96' }}>Unit price</p>
+                <p className="mt-1 font-bold" style={{ color: '#1e3a2f' }}>{sourceReviewBid.unit_price ? formatCurrencyInput(sourceReviewBid.unit_price) : '-'}</p>
+              </div>
+              <div className="rounded-lg border p-3" style={{ borderColor: '#e2d9cf' }}>
+                <p className="text-[11px] font-semibold uppercase" style={{ color: '#8a9e96' }}>Total</p>
+                <p className="mt-1 font-bold" style={{ color: '#1e3a2f' }}>{sourceReviewBid.total_price ? formatCurrencyInput(sourceReviewBid.total_price) : '-'}</p>
+              </div>
+              <div className="rounded-lg border p-3" style={{ borderColor: '#e2d9cf' }}>
+                <p className="text-[11px] font-semibold uppercase" style={{ color: '#8a9e96' }}>Lead time</p>
+                <p className="mt-1 font-bold" style={{ color: '#1e3a2f' }}>{sourceReviewBid.lead_time_days || '-'}</p>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t px-5 py-4" style={{ borderColor: '#e2d9cf', background: '#f8faf9' }}>
+            <button type="button" onClick={() => rejectSourceReview(sourceReviewBid)} className="rounded-md border bg-white px-4 py-2 text-sm font-semibold" style={{ borderColor: '#f5c6c6', color: '#c0392b' }}>
+              X out and replace
+            </button>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setSourceReviewLineItemId(null)} className="rounded-md border bg-white px-4 py-2 text-sm font-medium" style={{ borderColor: '#e2d9cf', color: '#4a6358' }}>
+                Close
+              </button>
+              <button type="button" onClick={() => confirmSourceReview(sourceReviewBid)} className="rounded-md px-4 py-2 text-sm font-semibold text-white" style={{ background: '#2d6a4f' }}>
+                Check and accept
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    ) : null}
     </>
   )
 }
@@ -1599,7 +1724,9 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
   const [quoteFileWarnings, setQuoteFileWarnings] = useState<string[]>([])
   const [quoteFileUnmatchedRows, setQuoteFileUnmatchedRows] = useState<VendorQuoteDraftUnmatchedRow[]>([])
   const [quoteFileUnmatchedAssignments, setQuoteFileUnmatchedAssignments] = useState<Record<string, string>>({})
-  const [quoteEmailBodyDraft, setQuoteEmailBodyDraft] = useState('')
+  const [quoteFilePreview, setQuoteFilePreview] = useState<ClientUploadedFileResult | null>(null)
+  const [quoteFilePreviewOpen, setQuoteFilePreviewOpen] = useState(false)
+  const [appliedQuoteLineItemIds, setAppliedQuoteLineItemIds] = useState<Set<string>>(() => new Set())
   const [messages, setMessages] = useState<NegotiationMessage[]>(initialMessages)
   const [messageDraft, setMessageDraft] = useState('')
   const [sendingMessage, setSendingMessage] = useState(false)
@@ -1688,6 +1815,18 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
     setBids((prev) => prev.map((entry) => (entry.line_item_id === id ? { ...entry, ...partial } : entry)))
   }
 
+  function markQuoteRowsApplied(lineItemIds: string[]) {
+    if (lineItemIds.length === 0) return
+    setAppliedQuoteLineItemIds((prev) => new Set([...prev, ...lineItemIds]))
+    window.setTimeout(() => {
+      setAppliedQuoteLineItemIds((prev) => {
+        const next = new Set(prev)
+        for (const id of lineItemIds) next.delete(id)
+        return next
+      })
+    }, 2200)
+  }
+
   function applyUnmatchedQuoteRow(row: VendorQuoteDraftUnmatchedRow) {
     const lineItemId = quoteFileUnmatchedAssignments[row.id]
     const item = rfq.line_items.find((entry) => entry.id === lineItemId)
@@ -1707,7 +1846,8 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
       delete next[row.id]
       return next
     })
-    setQuoteFileMessage(`Matched "${row.description || row.sku}" to ${item.sku || item.description}. Review the filled row before submitting.`)
+    markQuoteRowsApplied([item.id])
+    setQuoteFileMessage(`Applied "${row.description || row.sku}" to ${item.sku || item.description}.`)
   }
 
   function clearUnmatchedQuoteRow(rowId: string) {
@@ -1730,6 +1870,8 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
     setError('')
     try {
       const uploadedFile = await uploadRequestAttachmentFile(file, `quote-imports/magic-${crypto.randomUUID().slice(0, 8)}`)
+      setQuoteFilePreview(uploadedFile)
+      setQuoteFilePreviewOpen(true)
       const formData = new FormData()
       formData.append('uploadedFile', JSON.stringify(uploadedFile))
       if (isPreview) {
@@ -1756,73 +1898,20 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
         return
       }
       const responseByLineItemId = new Map(extracted.map((entry) => [entry.line_item_id, entry]))
+      const appliedIds: string[] = []
       setBids((prev) => prev.map((bid) => {
         const item = rfq.line_items.find((entry) => entry.id === bid.line_item_id)
         const extractedResponse = responseByLineItemId.get(bid.line_item_id)
         if (!item || !extractedResponse) return bid
+        appliedIds.push(item.id)
         return mergeQuoteFileDraftIntoBid(item, bid, extractedResponse)
       }))
-      setQuoteFileMessage(`Filled ${extracted.length} line item${extracted.length === 1 ? '' : 's'} from ${file.name}.`)
+      markQuoteRowsApplied(appliedIds)
+      setQuoteFileMessage(`Applied ${extracted.length} line item${extracted.length === 1 ? '' : 's'} from ${file.name}.`)
       setQuoteFileWarnings((result.warnings ?? []).map((warning) => warning.message))
       setQuoteFileUnmatchedRows(result.unmatchedRows ?? [])
     } catch (uploadError) {
       setQuoteFileMessage(uploadError instanceof Error ? uploadError.message : 'Failed to read quote file.')
-    } finally {
-      setReadingQuoteFile(false)
-    }
-  }
-
-  async function handleQuoteEmailDraft() {
-    const bodyText = quoteEmailBodyDraft.trim()
-    if (!bodyText) {
-      setQuoteFileMessage('Paste a vendor email reply first.')
-      return
-    }
-    const formData = new FormData()
-    formData.append('bodyText', bodyText)
-    formData.append('filename', isPreview ? 'preview-email-reply.txt' : 'inline-email-reply.txt')
-    if (isPreview) {
-      formData.append('rfq', JSON.stringify(rfq))
-      formData.append('vendorName', vendorName)
-    }
-    setReadingQuoteFile(true)
-    setQuoteFileMessage('')
-    setQuoteFileWarnings([])
-    setQuoteFileUnmatchedRows([])
-    setQuoteFileUnmatchedAssignments({})
-    setError('')
-    try {
-      const quoteDraftUrl = props.mode === 'preview'
-        ? '/api/magic-rfq/preview/quote-file-draft'
-        : `/api/magic-rfq/${encodeURIComponent(props.token)}/quote-file-draft`
-      const response = await fetch(quoteDraftUrl, {
-        method: 'POST',
-        body: formData,
-      })
-      const result = await response.json() as MagicRFQQuoteFileDraftResult
-      if (!result.success) {
-        setQuoteFileMessage(result.error ?? 'Failed to read email reply.')
-        return
-      }
-      const extracted = result.lineItemResponses ?? []
-      if (extracted.length === 0) {
-        setQuoteFileMessage('No requested line items could be filled from that email reply.')
-        setQuoteFileWarnings((result.warnings ?? []).map((warning) => warning.message))
-        setQuoteFileUnmatchedRows(result.unmatchedRows ?? [])
-        return
-      }
-      const responseByLineItemId = new Map(extracted.map((entry) => [entry.line_item_id, entry]))
-      setBids((prev) => prev.map((bid) => {
-        const item = rfq.line_items.find((entry) => entry.id === bid.line_item_id)
-        const extractedResponse = responseByLineItemId.get(bid.line_item_id)
-        if (!item || !extractedResponse) return bid
-        return mergeQuoteFileDraftIntoBid(item, bid, extractedResponse)
-      }))
-      setQuoteFileMessage(`Filled ${extracted.length} line item${extracted.length === 1 ? '' : 's'} from pasted email reply.`)
-      setQuoteFileWarnings((result.warnings ?? []).map((warning) => warning.message))
-      setQuoteFileUnmatchedRows(result.unmatchedRows ?? [])
-    } catch (uploadError) {
-      setQuoteFileMessage(uploadError instanceof Error ? uploadError.message : 'Failed to read email reply.')
     } finally {
       setReadingQuoteFile(false)
     }
@@ -2182,13 +2271,23 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
         </div>
       )}
 
-      {(
-        <div className="mb-5 rounded-2xl border bg-white p-5 shadow-sm" style={{ borderColor: '#e2d9cf' }}>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-lg font-bold" style={{ color: '#1e3a2f' }}>Quote File</h2>
-              <p className="mt-1 text-sm" style={{ color: '#8a9e96' }}>Upload a completed quote file or paste a vendor email reply to prefill the response table.</p>
-            </div>
+      <div className="mb-5 rounded-2xl border bg-white p-5 shadow-sm" style={{ borderColor: '#e2d9cf' }}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-lg font-bold" style={{ color: '#1e3a2f' }}>Quote Upload</h2>
+            <p className="mt-1 text-sm" style={{ color: '#8a9e96' }}>Upload a completed quote file to preview it and apply matched values into the response table.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {quoteFilePreview ? (
+              <button
+                type="button"
+                onClick={() => setQuoteFilePreviewOpen(true)}
+                className="rounded-md border px-4 py-2 text-sm font-semibold"
+                style={{ borderColor: '#d6c9bd', color: '#1e3a2f', background: '#ffffff' }}
+              >
+                Preview quote
+              </button>
+            ) : null}
             <label className="inline-flex cursor-pointer items-center justify-center rounded-md px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors" style={{ background: '#2d6a4f' }}>
               {readingQuoteFile ? 'Reading...' : 'Upload quote'}
               <input
@@ -2203,108 +2302,109 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
               />
             </label>
           </div>
-          <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-            <label className="grid gap-1">
-              <span className="text-xs font-semibold" style={{ color: '#4a6358' }}>Paste email reply</span>
-              <textarea
-                rows={3}
-                value={quoteEmailBodyDraft}
-                onChange={(event) => setQuoteEmailBodyDraft(event.target.value)}
-                placeholder="Thanks, see our pricing below..."
-                className="w-full rounded-lg px-3 py-2 text-sm outline-none"
-                style={{ border: '1px solid #e2d9cf', color: '#1e3a2f' }}
-              />
-            </label>
-            <button
-              type="button"
-              onClick={() => void handleQuoteEmailDraft()}
-              disabled={readingQuoteFile}
-              className="rounded-md border px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-50"
-              style={{ borderColor: '#d6c9bd', color: '#1e3a2f', background: '#ffffff' }}
-            >
-              Prefill from email
-            </button>
-          </div>
-          {quoteFileMessage ? (
-            <p className="mt-3 text-sm font-medium" style={{ color: quoteFileMessage.startsWith('Filled') ? '#2d6a4f' : '#a85c2a' }}>{quoteFileMessage}</p>
-          ) : null}
-          {quoteFileWarnings.length > 0 ? (
-            <ul className="mt-2 space-y-1 text-xs" style={{ color: '#8a9e96' }}>
-              {quoteFileWarnings.slice(0, 4).map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
-          ) : null}
-          {quoteFileUnmatchedRows.length > 0 ? (
-            <div className="mt-4 rounded-xl border p-4" style={{ borderColor: '#fdc89a', background: '#fffaf5' }}>
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <p className="text-sm font-bold" style={{ color: '#1e3a2f' }}>Rows that need a requested item</p>
-                  <p className="mt-1 text-xs" style={{ color: '#8a9e96' }}>
-                    We could not find a matching requested item for these quote rows. Choose the matching item, then apply it into the editable table.
-                  </p>
-                </div>
-                <span className="rounded-full px-2 py-1 text-xs font-semibold" style={{ background: '#fff3eb', color: '#a85c2a' }}>
-                  {quoteFileUnmatchedRows.length} unmatched
-                </span>
-              </div>
-              <div className="mt-3 space-y-3">
-                {quoteFileUnmatchedRows.map((row) => (
-                  <div key={row.id} className="grid gap-3 rounded-lg border bg-white p-3 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.7fr)_auto_auto] lg:items-center" style={{ borderColor: '#e2d9cf' }}>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold" style={{ color: '#1e3a2f' }}>
-                        {row.description || row.sku || 'Unmatched quote row'}
-                      </p>
-                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs" style={{ color: '#8a9e96' }}>
-                        {row.sku ? <span>SKU: {row.sku}</span> : null}
-                        {row.quantity ? <span>Qty: {row.quantity.toLocaleString()} {row.unit ?? ''}</span> : null}
-                        {row.unitPrice ? <span>Unit: ${row.unitPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> : null}
-                        {row.totalPrice ? <span>Total: ${row.totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> : null}
-                        {row.leadTimeDays ? <span>Lead: {row.leadTimeDays} days</span> : null}
-                      </div>
-                      {row.matchReviewReason ? <p className="mt-2 rounded-md px-2 py-1 text-xs font-medium" style={{ background: '#fff3eb', color: '#a85c2a' }}>{row.matchReviewReason}</p> : null}
-                      {row.notes ? <p className="mt-1 line-clamp-2 text-xs" style={{ color: '#8a9e96' }}>{row.notes}</p> : null}
-                    </div>
-                    <label className="grid gap-1">
-                      <span className="text-xs font-semibold" style={{ color: '#4a6358' }}>Requested item</span>
-                      <select
-                        value={quoteFileUnmatchedAssignments[row.id] ?? ''}
-                        onChange={(event) => setQuoteFileUnmatchedAssignments((prev) => ({ ...prev, [row.id]: event.target.value }))}
-                        className="w-full rounded-md px-3 py-2 text-sm outline-none"
-                        style={{ border: '1px solid #d6c9bd', color: '#1e3a2f', background: '#ffffff' }}
-                      >
-                        <option value="">Choose item...</option>
-                        {rfq.line_items.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.sku ? `${item.sku} - ${item.description}` : item.description}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => applyUnmatchedQuoteRow(row)}
-                      className="rounded-md px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                      style={{ background: '#2d6a4f' }}
-                      disabled={!quoteFileUnmatchedAssignments[row.id]}
-                    >
-                      Apply
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => clearUnmatchedQuoteRow(row.id)}
-                      className="rounded-md border px-3 py-2 text-sm font-semibold"
-                      style={{ borderColor: '#d6c9bd', color: '#4a6358', background: '#ffffff' }}
-                    >
-                      Skip
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
         </div>
-      )}
+        {quoteFileMessage ? (
+          <p className="mt-3 text-sm font-medium" style={{ color: quoteFileMessage.startsWith('Applied') ? '#166534' : '#a85c2a' }}>{quoteFileMessage}</p>
+        ) : null}
+        {quoteFileWarnings.length > 0 ? (
+          <ul className="mt-2 space-y-1 text-xs" style={{ color: '#8a9e96' }}>
+            {quoteFileWarnings.slice(0, 4).map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        ) : null}
+        {quoteFileUnmatchedRows.length > 0 ? (
+          <div className="mt-4 rounded-xl border p-4" style={{ borderColor: '#fdc89a', background: '#fffaf5' }}>
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-bold" style={{ color: '#1e3a2f' }}>Rows that need a requested item</p>
+                <p className="mt-1 text-xs" style={{ color: '#8a9e96' }}>
+                  Choose the matching requested item, then apply it into the response table. Applied cells highlight green immediately.
+                </p>
+              </div>
+              <span className="rounded-full px-2 py-1 text-xs font-semibold" style={{ background: '#fff3eb', color: '#a85c2a' }}>
+                {quoteFileUnmatchedRows.length} near match{quoteFileUnmatchedRows.length === 1 ? '' : 'es'}
+              </span>
+            </div>
+            <div className="mt-3 space-y-3">
+              {quoteFileUnmatchedRows.map((row) => (
+                <div key={row.id} className="grid gap-3 rounded-lg border bg-white p-3 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.7fr)_auto_auto] lg:items-center" style={{ borderColor: '#e2d9cf' }}>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold" style={{ color: '#1e3a2f' }}>{row.description || row.sku || 'Quote row'}</p>
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs" style={{ color: '#8a9e96' }}>
+                      {row.sku ? <span>SKU: {row.sku}</span> : null}
+                      {row.quantity ? <span>Qty: {row.quantity.toLocaleString()} {row.unit ?? ''}</span> : null}
+                      {row.unitPrice ? <span>Unit: {formatCurrencyInput(moneyString(row.unitPrice))}</span> : null}
+                      {row.totalPrice ? <span>Total: {formatCurrencyInput(moneyString(row.totalPrice))}</span> : null}
+                      {row.leadTimeDays ? <span>Lead: {row.leadTimeDays} days</span> : null}
+                    </div>
+                    {row.matchReviewReason ? <p className="mt-2 rounded-md px-2 py-1 text-xs font-medium" style={{ background: '#fff3eb', color: '#a85c2a' }}>{row.matchReviewReason}</p> : null}
+                    {row.notes ? <p className="mt-1 line-clamp-2 text-xs" style={{ color: '#8a9e96' }}>{row.notes}</p> : null}
+                  </div>
+                  <label className="grid gap-1">
+                    <span className="text-xs font-semibold" style={{ color: '#4a6358' }}>Requested item</span>
+                    <select
+                      value={quoteFileUnmatchedAssignments[row.id] ?? ''}
+                      onChange={(event) => setQuoteFileUnmatchedAssignments((prev) => ({ ...prev, [row.id]: event.target.value }))}
+                      className="w-full rounded-md px-3 py-2 text-sm outline-none"
+                      style={{ border: '1px solid #d6c9bd', color: '#1e3a2f', background: '#ffffff' }}
+                    >
+                      <option value="">Choose item...</option>
+                      {rfq.line_items.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.sku ? `${item.sku} - ${item.description}` : item.description}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => applyUnmatchedQuoteRow(row)}
+                    className="rounded-md px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    style={{ background: '#2d6a4f' }}
+                    disabled={!quoteFileUnmatchedAssignments[row.id]}
+                  >
+                    Apply
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => clearUnmatchedQuoteRow(row.id)}
+                    className="rounded-md border px-3 py-2 text-sm font-semibold"
+                    style={{ borderColor: '#d6c9bd', color: '#4a6358', background: '#ffffff' }}
+                  >
+                    Skip
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      {quoteFilePreview && quoteFilePreviewOpen ? (
+        <div className="fixed bottom-6 right-6 top-24 z-40 flex w-[min(46rem,46vw)] min-w-[28rem] flex-col overflow-hidden rounded-xl border bg-white shadow-2xl" style={{ borderColor: '#d9e0dc' }}>
+          <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: '#d9e0dc', background: '#f8faf9' }}>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase" style={{ color: '#587067' }}>Quote Preview</p>
+              <p className="truncate text-sm font-bold" style={{ color: '#1e3a2f' }}>{uploadedQuoteFilename(quoteFilePreview)}</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <a href={quoteFilePreview.url} target="_blank" rel="noreferrer" className="rounded-md border bg-white px-3 py-1.5 text-xs font-bold" style={{ borderColor: '#d9e0dc', color: '#4a6358' }}>
+                Open
+              </a>
+              <a href={quoteFilePreview.url} download={uploadedQuoteFilename(quoteFilePreview)} className="rounded-md border bg-white px-3 py-1.5 text-xs font-bold" style={{ borderColor: '#d9e0dc', color: '#4a6358' }}>
+                Download
+              </a>
+              <button type="button" onClick={() => setQuoteFilePreviewOpen(false)} className="rounded-md border px-3 py-1.5 text-xs font-bold" style={{ borderColor: '#d9e0dc', color: '#4a6358' }}>
+                Close
+              </button>
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 bg-[#f4f6f5]">
+            <QuoteFilePreview file={quoteFilePreview} />
+          </div>
+        </div>
+      ) : null}
 
       <div className="space-y-4">
         <LineItemsWorkbook
@@ -2313,6 +2413,7 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
           updateBid={updateBid}
           uploadFolder={`magic-rfq/${rfq.id}/${vendorEmail || 'vendor'}`}
           pricingIssueLineItemIds={pricingIssueLineItemIds}
+          appliedQuoteLineItemIds={appliedQuoteLineItemIds}
         />
       </div>
 

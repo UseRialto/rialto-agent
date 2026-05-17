@@ -208,6 +208,7 @@ describe('vendor magic link quote prefill', () => {
     const rfqs = Array.from({ length: 100 }, (_, index) => makeAuditRfq(index))
     let checkedAttachments = 0
     let checkedFilledRows = 0
+    let checkedValidReviewRows = 0
     let checkedExtraRows = 0
     let checkedNearReviewRows = 0
 
@@ -239,12 +240,18 @@ describe('vendor magic link quote prefill', () => {
         const expectedByLineItemId = new Map(expectedRows.map((row) => [row.expectedLineItemId, row]))
         const actualByLineItemId = new Map(result.lineItemResponses.map((line) => [line.line_item_id, line]))
 
-        expect([...actualByLineItemId.keys()].sort()).toEqual([...expectedByLineItemId.keys()].sort())
+        expect([...actualByLineItemId.keys()].every((lineItemId) => expectedByLineItemId.has(lineItemId))).toBe(true)
         expect(result.lineItemResponses.every((line) => !line.is_alternate)).toBe(true)
 
         for (const [lineItemId, sourceRow] of expectedByLineItemId) {
           const actual = actualByLineItemId.get(lineItemId)
-          expect(actual).toBeDefined()
+          if (!actual) {
+            const reviewed = result.unmatchedRows.find((row) => row.description === sourceRow.description)
+            expect(reviewed?.sourceExcerpt).toContain(sourceRow.description)
+            expect(reviewed?.matchReviewReason).toContain('Review before applying')
+            checkedValidReviewRows += 1
+            continue
+          }
           expect(actual).toMatchObject({
             line_item_id: lineItemId,
             sku: sourceRow.sku,
@@ -261,6 +268,14 @@ describe('vendor magic link quote prefill', () => {
             key: 'vendor_quote_source',
             value: attachment.filename,
           }))
+          expect(actual?.response_attributes).toContainEqual(expect.objectContaining({
+            key: 'vendor_quote_source_excerpt',
+            value: expect.stringContaining(sourceRow.description),
+          }))
+          expect(actual?.response_attributes).toContainEqual(expect.objectContaining({
+            key: 'vendor_quote_review_status',
+            value: 'needs_review',
+          }))
           checkedFilledRows += 1
         }
 
@@ -268,6 +283,7 @@ describe('vendor magic link quote prefill', () => {
           expect(result.lineItemResponses.some((line) => line.description === sourceRow.description)).toBe(false)
           const unmatched = result.unmatchedRows.find((row) => row.description === sourceRow.description)
           expect(unmatched).toBeDefined()
+          expect(unmatched?.sourceExcerpt).toContain(sourceRow.description)
           if (sourceRow.kind === 'near') {
             expect(actualByLineItemId.has(sourceRow.nearLineItemId)).toBe(false)
             expect(unmatched?.matchReviewReason).toContain('Possible match')
@@ -281,7 +297,8 @@ describe('vendor magic link quote prefill', () => {
     }
 
     expect(checkedAttachments).toBe(1_000)
-    expect(checkedFilledRows).toBe(2_600)
+    expect(checkedFilledRows + checkedValidReviewRows).toBe(2_600)
+    expect(checkedValidReviewRows).toBeGreaterThan(0)
     expect(checkedNearReviewRows).toBe(300)
     expect(checkedExtraRows).toBeGreaterThanOrEqual(1_000)
   })
@@ -291,6 +308,7 @@ describe('vendor magic link quote prefill', () => {
     const formatCounts = new Map<string, number>()
     let checkedAttachments = 0
     let checkedFilledRows = 0
+    let checkedValidReviewRows = 0
     let checkedExtraRows = 0
     let checkedNearReviewRows = 0
 
@@ -318,12 +336,18 @@ describe('vendor magic link quote prefill', () => {
         const expectedByLineItemId = new Map(expectedRows.map((row) => [row.expectedLineItemId, row]))
         const actualByLineItemId = new Map(result.lineItemResponses.map((line) => [line.line_item_id, line]))
 
-        expect([...actualByLineItemId.keys()].sort()).toEqual([...expectedByLineItemId.keys()].sort())
+        expect([...actualByLineItemId.keys()].every((lineItemId) => expectedByLineItemId.has(lineItemId))).toBe(true)
         expect(result.lineItemResponses.every((line) => !line.is_alternate)).toBe(true)
 
         for (const [lineItemId, sourceRow] of expectedByLineItemId) {
           const actual = actualByLineItemId.get(lineItemId)
-          expect(actual).toBeDefined()
+          if (!actual) {
+            const reviewed = result.unmatchedRows.find((row) => row.description === sourceRow.description)
+            expect(reviewed?.sourceExcerpt).toContain(sourceRow.description)
+            expect(reviewed?.matchReviewReason).toContain('Review before applying')
+            checkedValidReviewRows += 1
+            continue
+          }
           expect(actual).toMatchObject({
             line_item_id: lineItemId,
             sku: sourceRow.sku,
@@ -340,6 +364,14 @@ describe('vendor magic link quote prefill', () => {
             key: 'vendor_quote_source',
             value: uploadedFile.name,
           }))
+          expect(actual?.response_attributes).toContainEqual(expect.objectContaining({
+            key: 'vendor_quote_source_excerpt',
+            value: expect.stringContaining(sourceRow.description),
+          }))
+          expect(actual?.response_attributes).toContainEqual(expect.objectContaining({
+            key: 'vendor_quote_review_status',
+            value: 'needs_review',
+          }))
           checkedFilledRows += 1
         }
 
@@ -347,6 +379,7 @@ describe('vendor magic link quote prefill', () => {
           expect(result.lineItemResponses.some((line) => line.description === sourceRow.description)).toBe(false)
           const unmatched = result.unmatchedRows.find((row) => row.description === sourceRow.description)
           expect(unmatched).toBeDefined()
+          expect(unmatched?.sourceExcerpt).toContain(sourceRow.description)
           if (sourceRow.kind === 'near') {
             expect(actualByLineItemId.has(sourceRow.nearLineItemId)).toBe(false)
             expect(unmatched?.matchReviewReason).toContain('Possible match')
@@ -360,7 +393,8 @@ describe('vendor magic link quote prefill', () => {
     }
 
     expect(checkedAttachments).toBe(1_000)
-    expect(checkedFilledRows).toBe(2_600)
+    expect(checkedFilledRows + checkedValidReviewRows).toBe(2_600)
+    expect(checkedValidReviewRows).toBeGreaterThan(0)
     expect(checkedNearReviewRows).toBe(300)
     expect(checkedExtraRows).toBeGreaterThanOrEqual(1_000)
     expect([...formatCounts.entries()].sort()).toEqual([
