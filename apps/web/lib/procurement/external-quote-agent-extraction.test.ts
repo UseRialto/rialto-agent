@@ -20,6 +20,7 @@ describe('Unsupported external quote file agent extraction', () => {
         return {
           title: 'Delta XML quote',
           normalizedText: modelNormalizedTable,
+          verificationSummary: 'Checked 2 item rows and 4 vendor price cells against the XML source text.',
           warnings: ['Normalized from unsupported XML.'],
         }
       },

@@ -1,10 +1,23 @@
 import { NextResponse } from 'next/server'
 import { getMagicRFQAccess } from '@/lib/magic-rfq/service'
 import { buildVendorMagicLinkQuotePrefill } from '@/lib/modules/vendor-magiclink/quote-prefill'
+import { loadUploadedExternalQuoteFile, type UploadedExternalQuoteFileReference } from '@/lib/procurement/external-quote-upload-source'
 
 export const runtime = 'nodejs'
 
-const MAX_MAGIC_QUOTE_FILE_BYTES = 8 * 1024 * 1024
+const MAX_MAGIC_QUOTE_FILE_BYTES = 100 * 1024 * 1024
+
+function parseUploadedFileReference(raw: FormDataEntryValue | null): UploadedExternalQuoteFileReference | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined
+  const parsed = JSON.parse(raw) as Partial<UploadedExternalQuoteFileReference>
+  if (!parsed || typeof parsed.url !== 'string') return undefined
+  return {
+    url: parsed.url,
+    filename: typeof parsed.filename === 'string' ? parsed.filename : undefined,
+    mimeType: typeof parsed.mimeType === 'string' ? parsed.mimeType : undefined,
+    sizeBytes: typeof parsed.sizeBytes === 'number' ? parsed.sizeBytes : undefined,
+  }
+}
 
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
   const { token } = await context.params
@@ -16,15 +29,24 @@ export async function POST(request: Request, context: { params: Promise<{ token:
   try {
     const formData = await request.formData()
     const file = formData.get('file')
+    const uploadedFile = parseUploadedFileReference(formData.get('uploadedFile'))
     const bodyText = String(formData.get('bodyText') ?? '').trim()
 
     let source: Parameters<typeof buildVendorMagicLinkQuotePrefill>[0]['source']
-    if (file instanceof File) {
+    if (uploadedFile) {
+      source = {
+        kind: 'file',
+        file: {
+          ...(await loadUploadedExternalQuoteFile(uploadedFile, MAX_MAGIC_QUOTE_FILE_BYTES)),
+          sourceUrl: uploadedFile.url,
+        },
+      }
+    } else if (file instanceof File) {
       if (file.size <= 0) {
         return NextResponse.json({ success: false, error: `${file.name} is empty.` }, { status: 400 })
       }
       if (file.size > MAX_MAGIC_QUOTE_FILE_BYTES) {
-        return NextResponse.json({ success: false, error: `${file.name} is too large. Use files under 8 MB.` }, { status: 400 })
+        return NextResponse.json({ success: false, error: `${file.name} is too large. Use files under 100 MB.` }, { status: 400 })
       }
       source = {
         kind: 'file',

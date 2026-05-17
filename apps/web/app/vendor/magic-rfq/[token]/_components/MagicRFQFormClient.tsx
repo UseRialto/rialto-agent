@@ -1722,12 +1722,6 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
   async function handleQuoteFileDraft(files: FileList | null) {
     if (!files?.length) return
     const file = files[0]
-    const formData = new FormData()
-    formData.append('file', file)
-    if (isPreview) {
-      formData.append('rfq', JSON.stringify(rfq))
-      formData.append('vendorName', vendorName)
-    }
     setReadingQuoteFile(true)
     setQuoteFileMessage('')
     setQuoteFileWarnings([])
@@ -1735,6 +1729,13 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
     setQuoteFileUnmatchedAssignments({})
     setError('')
     try {
+      const uploadedFile = await uploadRequestAttachmentFile(file, `quote-imports/magic-${crypto.randomUUID().slice(0, 8)}`)
+      const formData = new FormData()
+      formData.append('uploadedFile', JSON.stringify(uploadedFile))
+      if (isPreview) {
+        formData.append('rfq', JSON.stringify(rfq))
+        formData.append('vendorName', vendorName)
+      }
       const quoteDraftUrl = props.mode === 'preview'
         ? '/api/magic-rfq/preview/quote-file-draft'
         : `/api/magic-rfq/${encodeURIComponent(props.token)}/quote-file-draft`
@@ -2261,6 +2262,7 @@ export function MagicRFQFormClient(props: MagicRFQFormClientProps) {
                         {row.totalPrice ? <span>Total: ${row.totalPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> : null}
                         {row.leadTimeDays ? <span>Lead: {row.leadTimeDays} days</span> : null}
                       </div>
+                      {row.matchReviewReason ? <p className="mt-2 rounded-md px-2 py-1 text-xs font-medium" style={{ background: '#fff3eb', color: '#a85c2a' }}>{row.matchReviewReason}</p> : null}
                       {row.notes ? <p className="mt-1 line-clamp-2 text-xs" style={{ color: '#8a9e96' }}>{row.notes}</p> : null}
                     </div>
                     <label className="grid gap-1">

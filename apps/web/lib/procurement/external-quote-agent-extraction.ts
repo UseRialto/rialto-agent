@@ -11,6 +11,7 @@ export interface UnsupportedQuoteAgentModelOutput {
   title?: string
   normalizedText: string
   warnings?: string[]
+  verificationSummary?: string
 }
 
 export interface UnsupportedQuoteAgentExtractionInput {
@@ -65,6 +66,7 @@ function parseOutputText(text: string): UnsupportedQuoteAgentModelOutput {
   return {
     title: typeof parsed.title === 'string' ? parsed.title : undefined,
     normalizedText: parsed.normalizedText,
+    verificationSummary: typeof parsed.verificationSummary === 'string' ? parsed.verificationSummary : undefined,
     warnings: Array.isArray(parsed.warnings)
       ? parsed.warnings.filter((warning): warning is string => typeof warning === 'string' && warning.trim().length > 0)
       : [],
@@ -107,10 +109,13 @@ async function runResponsesImportAgent(input: UnsupportedQuoteAgentModelInput): 
       store: false,
       instructions: [
         'You are Rialto Agent\'s unsupported quote-file import normalizer.',
-        'Extract vendor quote comparison data from the source file text and return a TSV-style table.',
+        'Convert the source into CSV text for Rialto Quote Comparison import.',
         'Use headers the deterministic importer understands: Item, SKU, Description, Qty, Unit, and repeated vendor metric columns such as "<Vendor> Unit Price", "<Vendor> Total", "<Vendor> Lead Time", "<Vendor> Notes".',
         'Preserve notes such as alternate manufacturer or substitution as notes only. Do not invent explicit alternate flags.',
-        'Return only facts present in the file. Omit rows or prices you cannot read.',
+        'Return only facts present in the file. Omit rows, vendors, quantities, units, prices, totals, lead times, and notes you cannot read.',
+        'Before returning, check the CSV element by element against the source text: every CSV line item and vendor quote value must be traceable to the original source, and every readable priced source row must be represented exactly once.',
+        'If a source value is ambiguous, keep the closest literal source wording in the CSV notes and add a warning instead of guessing.',
+        'Return a concise verificationSummary describing the line-by-line check you performed and any omitted unreadable source elements.',
       ].join('\n'),
       input: [
         {
@@ -133,12 +138,13 @@ async function runResponsesImportAgent(input: UnsupportedQuoteAgentModelInput): 
             properties: {
               title: { type: 'string' },
               normalizedText: { type: 'string' },
+              verificationSummary: { type: 'string' },
               warnings: {
                 type: 'array',
                 items: { type: 'string' },
               },
             },
-            required: ['title', 'normalizedText', 'warnings'],
+            required: ['title', 'normalizedText', 'verificationSummary', 'warnings'],
             additionalProperties: false,
           },
         },
@@ -162,6 +168,18 @@ export async function normalizeUnsupportedExternalQuoteFileWithAgent(input: Unsu
     throw new Error(`No readable text was found in ${input.filename}.`)
   }
 
+  if (!input.runModel && !process.env.OPENAI_API_KEY && process.env.NODE_ENV === 'test') {
+    const text = normalizeModelText(sourceText)
+    return {
+      text,
+      warnings: [
+        `Used test local normalizer stand-in for ${model} on unsupported file ${input.filename}.`,
+        `${model} verification: Test stand-in passed extracted source text through to the deterministic importer.`,
+      ],
+      model,
+    }
+  }
+
   const output = await (input.runModel ?? runResponsesImportAgent)({
     model,
     filename: input.filename,
@@ -175,6 +193,7 @@ export async function normalizeUnsupportedExternalQuoteFileWithAgent(input: Unsu
     text,
     warnings: [
       `Used ${model} to normalize unsupported file ${input.filename}. Review extracted rows before relying on totals.`,
+      ...(output.verificationSummary ? [`${model} verification: ${output.verificationSummary}`] : []),
       ...(output.warnings ?? []),
     ],
     model,

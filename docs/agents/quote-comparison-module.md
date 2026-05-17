@@ -5,13 +5,13 @@ This module owns the External Quote Import and Comparison Sheet path for Rialto 
 ## Product Shape
 
 - Quote Request can still collect vendor responses through the normal RFQ workflow.
-- External Quote Import lets an estimator start Quote Comparison from client-provided quote files. The UI has one quote dropzone; the module tries deterministic extraction/import first and privately falls back to GPT-5.5 normalization only when the normal path fails.
+- External Quote Import lets an estimator start Quote Comparison from client-provided quote files. The UI has one quote dropzone; CSV/TSV/XLS/XLSX files use deterministic spreadsheet extraction/import, while PDF, XML, text, HTML, YAML, and other non-spreadsheet files get a fast deterministic preflight after text extraction. Files that already yield priced quote rows import immediately; the rest are normalized by GPT-5.5 into verified importer-ready CSV text and then re-enter the deterministic importer.
 - A single-vendor quote import creates an active Quote Request, infers requested line items from the quoted rows, creates one imported vendor response, and opens the existing spreadsheet-style Quote Comparison page.
 - Imported rows are review-first data. Quantities, units, price basis, negative credits, alternates, and wrapped PDF descriptions should remain visible for estimator review.
 
 ## Main Files
 
-- `apps/web/lib/procurement/external-quote-import.ts` parses extracted quote text into a `ContractorRFQ` plus imported `ContractorBid`; GPT-normalized fallback text must re-enter this importer rather than bypass it.
+- `apps/web/lib/procurement/external-quote-import.ts` parses extracted or model-normalized quote text into a `ContractorRFQ` plus imported `ContractorBid`; agent-normalized CSV must re-enter this importer rather than bypass it.
 - `apps/web/app/api/external-quote-import/route.ts` accepts the uploaded PDF/XLS/XLSX, extracts text, saves the Quote Request and imported vendor response, and returns the comparison route.
 - `apps/web/app/contractor/projects/[projectId]/_components/ExternalQuoteImportButton.tsx` is the project-level entry point.
 - `apps/web/app/contractor/projects/[projectId]/rfqs/[rfqId]/_components/BidDashboard.tsx` renders the Google-Sheets-style Comparison Sheet and exports the visible view as CSV, Excel, or PDF.

@@ -507,6 +507,13 @@ export async function updateRFQInviteList(
   }
 }
 
+export async function updateRFQAttachmentUrls(rfqId: string, attachmentUrls: string[]): Promise<void> {
+  await db
+    .update(rfqsTable)
+    .set({ attachment_urls_json: JSON.stringify([...new Set(attachmentUrls)]) })
+    .where(eq(rfqsTable.id, rfqId))
+}
+
 export async function appendRFQLineItemsAndInvites(
   rfqId: string,
   lineItems: ContractorRFQLineItem[],

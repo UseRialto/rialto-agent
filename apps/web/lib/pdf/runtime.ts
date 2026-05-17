@@ -69,11 +69,11 @@ export async function ensurePdfRuntime() {
   pdfRuntimeReady ??= (async () => {
     const globalWithCanvas = globalThis as Record<string, unknown>
 
-    globalWithCanvas.DOMMatrix ??= PdfDOMMatrix
-    globalWithCanvas.DOMPoint ??= PdfDOMPoint
-    globalWithCanvas.DOMRect ??= PdfDOMRect
-    globalWithCanvas.ImageData ??= PdfImageData
-    globalWithCanvas.Path2D ??= PdfPath2D
+    if (typeof globalWithCanvas.DOMMatrix !== 'function') globalWithCanvas.DOMMatrix = PdfDOMMatrix
+    if (typeof globalWithCanvas.DOMPoint !== 'function') globalWithCanvas.DOMPoint = PdfDOMPoint
+    if (typeof globalWithCanvas.DOMRect !== 'function') globalWithCanvas.DOMRect = PdfDOMRect
+    if (typeof globalWithCanvas.ImageData !== 'function') globalWithCanvas.ImageData = PdfImageData
+    if (typeof globalWithCanvas.Path2D !== 'function') globalWithCanvas.Path2D = PdfPath2D
   })()
 
   await pdfRuntimeReady
@@ -81,10 +81,7 @@ export async function ensurePdfRuntime() {
 
 export async function loadPdfJs() {
   await ensurePdfRuntime()
-  const [pdfjs, pdfjsWorker] = await Promise.all([
-    import('pdfjs-dist/legacy/build/pdf.mjs'),
-    import('pdfjs-dist/legacy/build/pdf.worker.mjs'),
-  ])
-  ;(globalThis as typeof globalThis & { pdfjsWorker?: typeof pdfjsWorker }).pdfjsWorker = pdfjsWorker
+  const runtimeImport = new Function('specifier', 'return import(specifier)') as <T>(specifier: string) => Promise<T>
+  const pdfjs = await runtimeImport<typeof import('pdfjs-dist/legacy/build/pdf.mjs')>('pdfjs-dist/legacy/build/pdf.mjs')
   return pdfjs
 }

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   buildQuoteComparisonSummaryAnswer,
   buildQuoteImportAnalyticsHighlights,
+  buildQuoteImportReviewHighlights,
+  IMPORT_REVIEW_HIGHLIGHT,
   PRICING_MISTAKE_HIGHLIGHT,
 } from './comparison-analytics'
 import type { ContractorBid, ContractorRFQ } from '@/lib/types/contractor'
@@ -57,6 +59,31 @@ function bid(id: string, vendorName: string, unitPrices: Record<string, number>)
 }
 
 describe('comparison analytics', () => {
+  it('builds light red import review highlights from importer normalization metadata', () => {
+    const reviewedBid = bid('vendor-review', 'Review Supply', { 'line-drywall': 1.1 })
+    reviewedBid.line_item_responses[0].response_attributes = [{
+      key: 'import_review:unit_price:price_basis_conversion',
+      label: 'Import Review: Price Basis Conversion',
+      value: JSON.stringify({
+        metric: 'unit_price',
+        category: 'price_basis_conversion',
+        originalValue: '$1,100.00 per 1,000 lf',
+        normalizedValue: '$1.10 per lf',
+        reason: 'Rialto normalized the quoted unit price.',
+      }),
+      source: 'system',
+    }]
+
+    const highlights = buildQuoteImportReviewHighlights(rfq, [reviewedBid])
+
+    expect(highlights).toEqual([expect.objectContaining({
+      id: expect.stringContaining('import-review-price_basis_conversion-line-drywall-vendor-review-unit_price'),
+      selector: { kind: 'cell', rowKey: 'line-drywall', colKey: 'vendor:vendor-review:unit_price' },
+      color: IMPORT_REVIEW_HIGHLIGHT,
+      note: expect.stringContaining('Original: $1,100.00 per 1,000 lf.'),
+    })])
+  })
+
   it('builds purple import highlights for severe unit price outliers', () => {
     const highlights = buildQuoteImportAnalyticsHighlights(rfq, [
       bid('vendor-a', 'A Supply', { 'line-drywall': 18, 'line-screws': 40 }),

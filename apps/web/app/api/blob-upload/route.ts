@@ -9,9 +9,12 @@ const MAX_REQUEST_ATTACHMENT_BYTES = 100 * 1024 * 1024 // 100 MB
 const REQUEST_ATTACHMENT_CONTENT_TYPES = [
   'application/pdf',
   'text/csv',
+  'text/tab-separated-values',
   'text/plain',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel',
+  'text/xml',
+  'application/xml',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/msword',
   'image/png',

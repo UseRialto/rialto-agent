@@ -1,4 +1,4 @@
-import { buildQuoteImportAnalyticsHighlights, DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT } from '../../procurement/comparison-analytics'
+import { buildQuoteImportAnalyticsHighlights, buildQuoteImportReviewHighlights, DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT } from '../../procurement/comparison-analytics'
 import type { ComparisonHighlight } from '../../procurement/comparison-sheet-state'
 import {
   createExternalQuoteImport,
@@ -10,6 +10,7 @@ import { ingestExternalQuoteFile, type ExternalQuoteFileIngestionResult, type Ex
 
 export interface QuoteComparisonImportUpload extends ExternalQuoteUploadFile {
   forceAgent?: boolean
+  sourceUrl?: string
 }
 
 export interface ImportedQuoteComparisonInput {
@@ -27,15 +28,16 @@ export interface ImportedQuoteComparisonResult {
   diagnostics: {
     usedAgentFallback: boolean
     fallbackReasons: string[]
-    processedFiles: Array<{ filename: string; mode: 'normal' | 'agent-fallback' | 'agent-forced'; reason?: string }>
+    processedFiles: Array<{ filename: string; mode: 'normal' | 'agent-forced'; reason?: string }>
   }
 }
 
-function asImportFile(ingested: ExternalQuoteFileIngestionResult): ExternalQuoteImportFileInput {
+function asImportFile(ingested: ExternalQuoteFileIngestionResult, sourceUrl?: string): ExternalQuoteImportFileInput {
   return {
     filename: ingested.filename,
     sourceKind: ingested.sourceKind,
     text: ingested.text,
+    sourceUrl,
   }
 }
 
@@ -43,16 +45,14 @@ export async function buildImportedQuoteComparison(input: ImportedQuoteCompariso
   const ingestFile = input.ingestFile ?? ingestExternalQuoteFile
   const extractedFiles: ExternalQuoteImportFileInput[] = []
   const warnings: Array<{ message: string }> = []
-  const normalUploads: QuoteComparisonImportUpload[] = []
   const processedFiles: ImportedQuoteComparisonResult['diagnostics']['processedFiles'] = []
 
   for (const file of input.files) {
-    if (!file.forceAgent) normalUploads.push(file)
     const ingested = await ingestFile({
       file,
       forceAgent: file.forceAgent,
     })
-    extractedFiles.push(asImportFile(ingested))
+    extractedFiles.push(asImportFile(ingested, file.sourceUrl))
     warnings.push(...ingested.warnings)
     processedFiles.push({
       filename: file.name,
@@ -69,6 +69,7 @@ export async function buildImportedQuoteComparison(input: ImportedQuoteCompariso
           filename: filesToImport[0].filename,
           sourceKind: filesToImport[0].sourceKind,
           text: filesToImport[0].text,
+          sourceUrl: filesToImport[0].sourceUrl,
         })
       : createExternalQuoteImportFromFiles({
           projectId: input.projectId,
@@ -78,62 +79,30 @@ export async function buildImportedQuoteComparison(input: ImportedQuoteCompariso
         })
   )
 
-  let imported: ExternalQuoteImportResult
-  const fallbackReasons: string[] = []
-  try {
-    imported = createImport(extractedFiles)
-  } catch (error) {
-    const normalFailureReason = error instanceof Error ? error.message : String(error)
-    if (normalUploads.length === 0) throw error
-    const repairedFiles = [...extractedFiles]
-    for (const file of normalUploads) {
-      let repaired: ExternalQuoteFileIngestionResult
-      try {
-        repaired = await ingestFile({
-          file,
-          forceAgent: true,
-        })
-      } catch (fallbackError) {
-        const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
-        throw new Error(`${file.name}: normal import failed (${normalFailureReason}) and smart import fallback also failed (${fallbackMessage}).`)
-      }
-      const replacement = asImportFile(repaired)
-      const index = repairedFiles.findIndex((candidate) => candidate.filename === file.name)
-      if (index >= 0) repairedFiles[index] = replacement
-      else repairedFiles.push(replacement)
-      fallbackReasons.push(`${file.name}: ${normalFailureReason}`)
-      const processed = processedFiles.find((entry) => entry.filename === file.name)
-      if (processed) {
-        processed.mode = 'agent-fallback'
-        processed.reason = normalFailureReason
-      }
-      warnings.push(
-        { message: `${file.name}: normal quote parsing failed (${normalFailureReason}); retried with the smart import agent.` },
-        ...repaired.warnings,
-      )
-    }
-    try {
-      imported = createImport(repairedFiles)
-    } catch (fallbackImportError) {
-      const fallbackImportMessage = fallbackImportError instanceof Error ? fallbackImportError.message : String(fallbackImportError)
-      throw new Error(`Normal quote import failed (${normalFailureReason}); GPT-5.5 fallback ran but still could not create priced quote rows (${fallbackImportMessage}).`)
-    }
-  }
+  const imported = createImport(extractedFiles)
 
-  const analyticsHighlights = buildQuoteImportAnalyticsHighlights(imported.rfq, imported.bids)
+  const importReviewHighlights = buildQuoteImportReviewHighlights(imported.rfq, imported.bids)
+  const pricingMistakeHighlights = buildQuoteImportAnalyticsHighlights(imported.rfq, imported.bids)
+  const analyticsHighlights = [
+    ...importReviewHighlights,
+    ...pricingMistakeHighlights,
+  ]
   return {
     imported,
     analyticsHighlights,
     warnings: [
       ...imported.warnings,
       ...warnings,
-      ...(analyticsHighlights.length > 0 ? [{
-        message: `Flagged ${analyticsHighlights.length} pricing mistake candidate${analyticsHighlights.length === 1 ? '' : 's'} in purple for estimator review using the default ${DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT}% unit-price difference threshold.`,
+      ...(importReviewHighlights.length > 0 ? [{
+        message: `Flagged ${importReviewHighlights.length} importer-normalized price cell${importReviewHighlights.length === 1 ? '' : 's'} in light red for estimator approval.`,
+      }] : []),
+      ...(pricingMistakeHighlights.length > 0 ? [{
+        message: `Flagged ${pricingMistakeHighlights.length} pricing mistake candidate${pricingMistakeHighlights.length === 1 ? '' : 's'} in purple for estimator review using the default ${DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT}% unit-price difference threshold.`,
       }] : []),
     ],
     diagnostics: {
-      usedAgentFallback: processedFiles.some((file) => file.mode === 'agent-fallback' || file.mode === 'agent-forced'),
-      fallbackReasons,
+      usedAgentFallback: processedFiles.some((file) => file.mode === 'agent-forced'),
+      fallbackReasons: processedFiles.flatMap((file) => file.reason ? [`${file.filename}: ${file.reason}`] : []),
       processedFiles,
     },
   }

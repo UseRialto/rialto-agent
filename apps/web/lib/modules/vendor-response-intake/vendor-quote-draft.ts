@@ -8,6 +8,7 @@ export interface VendorQuoteDraftInput {
   filename: string
   sourceKind: ExternalQuoteImportSourceKind
   text: string
+  sourceUrl?: string
   now?: string
 }
 
@@ -29,6 +30,7 @@ export interface VendorQuoteDraftUnmatchedRow {
   totalPrice?: number
   leadTimeDays?: number
   notes?: string
+  matchReviewReason?: string
 }
 
 function key(value: string | undefined) {
@@ -50,6 +52,102 @@ function overlapScore(left: string | undefined, right: string | undefined) {
   return shared / Math.max(leftTokens.size, rightTokens.size)
 }
 
+function requestedCoverageScore(requested: string | undefined, imported: string | undefined) {
+  const requestedTokens = textTokens(requested)
+  const importedTokens = textTokens(imported)
+  if (requestedTokens.size === 0 || importedTokens.size === 0) return 0
+  let shared = 0
+  for (const token of requestedTokens) {
+    if (importedTokens.has(token)) shared += 1
+  }
+  return shared / requestedTokens.size
+}
+
+function normalizeDetailValue(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/feet|foot/g, 'ft')
+    .replace(/inches|inch/g, 'in')
+    .replace(/^0+(\d)/, '$1')
+}
+
+function productDetailTokens(value: string | undefined) {
+  const normalized = String(value ?? '')
+    .toLowerCase()
+    .replace(/[“”]/g, '"')
+    .replace(/[’]/g, "'")
+    .replace(/\bfeet\b|\bfoot\b/g, 'ft')
+    .replace(/\binches\b|\binch\b/g, 'in')
+
+  const tokens = new Set<string>()
+  const addMatches = (pattern: RegExp, prefix: string, valueIndex = 1) => {
+    for (const match of normalized.matchAll(pattern)) {
+      const raw = match[valueIndex]
+      if (raw) tokens.add(`${prefix}:${normalizeDetailValue(raw)}`)
+    }
+  }
+
+  const numberOrFraction = String.raw`\d+(?:\.\d+)?(?:-\d+\/\d+)?|\d+\/\d+`
+  addMatches(new RegExp(`\\b(${numberOrFraction})\\s*(?:ft|')\\b`, 'g'), 'ft')
+  addMatches(new RegExp(`\\b(${numberOrFraction})\\s*(?:in|")\\b`, 'g'), 'in')
+  addMatches(/\b(\d+-\d+\/\d+|\d+\/\d+)\b/g, 'in')
+  addMatches(/\b(\d+)\s*(?:ga|gauge)\b/g, 'gauge')
+  addMatches(/\b(\d+)\s*awg\b/g, 'awg')
+  addMatches(/\b(\d+)\s*mil\b/g, 'mil')
+  addMatches(/\b(\d+)\s*gal\b/g, 'gal')
+  addMatches(/\b(\d+)\s*lb\b/g, 'lb')
+  addMatches(/#\s*(\d+)\b/g, 'rebar')
+  addMatches(/\bgrade\s*(\d+)\b/g, 'grade')
+  addMatches(/\b(\d+\s*x\s*\d+)\b/g, 'grid')
+  addMatches(/\bw\s*(\d+)\b/g, 'wire')
+
+  return tokens
+}
+
+function missingRequestedProductDetails(requested: ContractorRFQLineItem, imported: ContractorBidLineItemResponse) {
+  const requestedDetails = productDetailTokens(requested.description)
+  if (requestedDetails.size === 0) return []
+
+  const importedDetails = productDetailTokens(`${imported.description} ${imported.quoted_product_details ?? ''}`)
+  const missing: string[] = []
+  for (const detail of requestedDetails) {
+    if (!importedDetails.has(detail)) missing.push(detail)
+  }
+  return missing
+}
+
+function formatMissingProductDetail(detail: string) {
+  const [kind, value] = detail.split(':')
+  if (!kind || !value) return detail
+  if (kind === 'ft') return `${value} ft`
+  if (kind === 'in') return `${value} in`
+  if (kind === 'gauge') return `${value} gauge`
+  if (kind === 'awg') return `${value} AWG`
+  if (kind === 'mil') return `${value} mil`
+  if (kind === 'gal') return `${value} gal`
+  if (kind === 'lb') return `${value} lb`
+  if (kind === 'rebar') return `#${value}`
+  if (kind === 'grade') return `grade ${value}`
+  if (kind === 'grid') return value.replace('x', ' x ')
+  if (kind === 'wire') return `W${value}`
+  return value
+}
+
+function reviewReasonForAlmostMatch(requested: ContractorRFQLineItem, missingDetails: string[]) {
+  const label = requested.sku ? `${requested.sku} - ${requested.description}` : requested.description
+  return `Possible match to "${label}", but the quote row is missing requested detail${missingDetails.length === 1 ? '' : 's'}: ${missingDetails.map(formatMissingProductDetail).join(', ')}. Review before applying.`
+}
+
+function scoreRequestedLine(item: ContractorRFQLineItem, imported: ContractorBidLineItemResponse) {
+  return Math.max(
+    overlapScore(item.description, imported.description),
+    overlapScore(`${item.sku} ${item.description}`, `${imported.sku} ${imported.description}`),
+    requestedCoverageScore(item.description, imported.description),
+    requestedCoverageScore(`${item.sku} ${item.description}`, `${imported.sku} ${imported.description}`),
+  )
+}
+
 function importedBidForVendor(bids: ContractorBid[], vendorName?: string) {
   const wanted = key(vendorName)
   if (wanted) {
@@ -65,28 +163,31 @@ function matchRequestedLine(
   requested: ContractorRFQLineItem[],
   imported: ContractorBidLineItemResponse,
   alreadyMatched: Set<string>,
-) {
+): { item: ContractorRFQLineItem, reviewReason?: undefined } | { item?: undefined, reviewReason?: string } {
   const importedSku = key(imported.sku)
   if (importedSku) {
     const skuMatch = requested.find((item) => !alreadyMatched.has(item.id) && key(item.sku) === importedSku)
-    if (skuMatch) return skuMatch
+    if (skuMatch) return { item: skuMatch }
   }
 
   const candidates = requested
     .filter((item) => !alreadyMatched.has(item.id))
     .map((item) => ({
       item,
-      score: Math.max(
-        overlapScore(item.description, imported.description),
-        overlapScore(`${item.sku} ${item.description}`, `${imported.sku} ${imported.description}`),
-      ),
+      score: scoreRequestedLine(item, imported),
+      missingDetails: missingRequestedProductDetails(item, imported),
     }))
     .sort((a, b) => b.score - a.score)
 
-  return candidates[0]?.score >= 0.35 ? candidates[0].item : undefined
+  const best = candidates[0]
+  if (!best || best.score < 0.55) return {}
+  if (best.missingDetails.length > 0) {
+    return { reviewReason: reviewReasonForAlmostMatch(best.item, best.missingDetails) }
+  }
+  return { item: best.item }
 }
 
-function sourceAttributes(filename: string, imported: ContractorBidLineItemResponse): ProcurementLineItemAttribute[] {
+function sourceAttributes(filename: string, imported: ContractorBidLineItemResponse, sourceUrl?: string): ProcurementLineItemAttribute[] {
   return [
     ...(imported.response_attributes ?? []),
     {
@@ -96,6 +197,13 @@ function sourceAttributes(filename: string, imported: ContractorBidLineItemRespo
       source: 'spreadsheet' as const,
       order: 9_000,
     },
+    ...(sourceUrl ? [{
+      key: 'source_url',
+      label: 'Source URL',
+      value: sourceUrl,
+      source: 'spreadsheet' as const,
+      order: 9_001,
+    }] : []),
   ]
 }
 
@@ -111,6 +219,7 @@ function unmatchedRowFromImportedLine(
   filename: string,
   imported: ContractorBidLineItemResponse,
   index: number,
+  matchReviewReason?: string,
 ): VendorQuoteDraftUnmatchedRow {
   return {
     id: `unmatched-${index + 1}`,
@@ -123,6 +232,7 @@ function unmatchedRowFromImportedLine(
     totalPrice: imported.total_price,
     leadTimeDays: imported.lead_time_days,
     notes: imported.notes,
+    matchReviewReason,
   }
 }
 
@@ -135,6 +245,7 @@ function unmatchedRowFromInlineLine(
   unit: string,
   unitPrice: number,
   leadTimeDays: number,
+  matchReviewReason?: string,
 ): VendorQuoteDraftUnmatchedRow {
   return {
     id: `unmatched-inline-${index + 1}`,
@@ -147,6 +258,7 @@ function unmatchedRowFromInlineLine(
     totalPrice: quantity > 0 ? Number((quantity * unitPrice).toFixed(2)) : unitPrice,
     leadTimeDays,
     notes: line,
+    matchReviewReason,
   }
 }
 
@@ -179,7 +291,7 @@ function parseInlineQuoteResponses(input: VendorQuoteDraftInput): VendorQuoteDra
         .replace(/\s+/g, ' ')
         .replace(/^[,;:-]+|[,;:-]+$/g, '')
         .trim()
-      const requested = matchRequestedLine(input.rfq.line_items, {
+      const match = matchRequestedLine(input.rfq.line_items, {
         line_item_id: '',
         sku: '',
         description: sourceName || line,
@@ -191,8 +303,9 @@ function parseInlineQuoteResponses(input: VendorQuoteDraftInput): VendorQuoteDra
         lead_time_days: parseLeadTimeDays(line),
         availability: 'can_source',
       }, matchedIds)
+      const requested = match.item
       if (!requested) {
-        warnings.push({ message: `Could not match "${sourceName || line}" from ${input.filename} to a requested line item.` })
+        warnings.push({ message: match.reviewReason ?? `Could not match "${sourceName || line}" from ${input.filename} to a requested line item.` })
         unmatchedRows.push(unmatchedRowFromInlineLine(
           input.filename,
           line,
@@ -202,6 +315,7 @@ function parseInlineQuoteResponses(input: VendorQuoteDraftInput): VendorQuoteDra
           unit,
           unitPrice,
           parseLeadTimeDays(line),
+          match.reviewReason,
         ))
         return []
       }
@@ -230,7 +344,7 @@ function parseInlineQuoteResponses(input: VendorQuoteDraftInput): VendorQuoteDra
           total_price: quantity > 0 ? Number((quantity * unitPrice).toFixed(2)) : Number((requested.quantity * unitPrice).toFixed(2)),
           lead_time_days: parseLeadTimeDays(line),
           availability: 'can_source',
-        }),
+        }, input.sourceUrl),
       }]
     })
 
@@ -253,6 +367,7 @@ export function buildVendorQuoteDraft(input: VendorQuoteDraftInput): VendorQuote
       filename: input.filename,
       sourceKind: input.sourceKind,
       text: input.text,
+      sourceUrl: input.sourceUrl,
       now: input.now,
     })
   } catch {
@@ -271,10 +386,11 @@ export function buildVendorQuoteDraft(input: VendorQuoteDraftInput): VendorQuote
   const warnings: Array<{ message: string }> = [...imported.warnings]
   const unmatchedRows: VendorQuoteDraftUnmatchedRow[] = []
   const lineItemResponses = bid.line_item_responses.flatMap((line) => {
-    const requested = matchRequestedLine(input.rfq.line_items, line, matchedIds)
+    const match = matchRequestedLine(input.rfq.line_items, line, matchedIds)
+    const requested = match.item
     if (!requested) {
-      warnings.push({ message: `Could not match "${line.description || line.sku}" from ${input.filename} to a requested line item.` })
-      unmatchedRows.push(unmatchedRowFromImportedLine(input.filename, line, unmatchedRows.length))
+      warnings.push({ message: match.reviewReason ?? `Could not match "${line.description || line.sku}" from ${input.filename} to a requested line item.` })
+      unmatchedRows.push(unmatchedRowFromImportedLine(input.filename, line, unmatchedRows.length, match.reviewReason))
       return []
     }
     matchedIds.add(requested.id)
@@ -286,7 +402,7 @@ export function buildVendorQuoteDraft(input: VendorQuoteDraftInput): VendorQuote
       sku: line.sku,
       description: line.description || requested.description,
       quoted_product_details: line.description && line.description !== requested.description ? line.description : line.quoted_product_details,
-      response_attributes: sourceAttributes(input.filename, line),
+      response_attributes: sourceAttributes(input.filename, line, input.sourceUrl),
       is_alternate: false,
     }]
   })

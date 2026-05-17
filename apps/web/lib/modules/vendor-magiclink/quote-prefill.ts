@@ -34,6 +34,7 @@ export async function buildVendorMagicLinkQuotePrefill(input: VendorMagicLinkQuo
     filename: ingested.filename,
     sourceKind: ingested.sourceKind,
     text: ingested.text,
+    sourceUrl: input.source.kind === 'file' ? input.source.file.sourceUrl : undefined,
   })
 
   return {

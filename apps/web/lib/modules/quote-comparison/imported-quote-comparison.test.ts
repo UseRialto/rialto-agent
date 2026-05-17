@@ -35,7 +35,7 @@ describe('imported quote comparison', () => {
     ]))
   })
 
-  it('retries failed PDF parsing through the smart agent path inside the module', async () => {
+  it('imports non-spreadsheet files after smart-agent normalization instead of exposing deterministic parser failures', async () => {
     const calls: Array<{ forceAgent?: boolean }> = []
     const result = await buildImportedQuoteComparison({
       projectId: 'project-1',
@@ -49,24 +49,24 @@ describe('imported quote comparison', () => {
         calls.push({ forceAgent: input.forceAgent })
         return {
           filename: 'vendor.pdf',
-          sourceKind: input.forceAgent ? 'spreadsheet' : 'pdf',
-          text: input.forceAgent
-            ? [
-                'Supplier,Item,SKU,Description,Qty,Unit,Unit Price,Total Price,Lead Time,Notes',
-                'Acme,1,GWB-58,5/8 Type X Gypsum Board,100,sheet,18,1800,3 days,',
-              ].join('\n')
-            : 'not a priced quote',
-          warnings: input.forceAgent ? [{ message: 'agent normalized pdf' }] : [],
-          diagnostics: { mode: input.forceAgent ? 'agent-forced' : 'normal' },
+          sourceKind: 'spreadsheet',
+          text: [
+            'Supplier,Item,SKU,Description,Qty,Unit,Unit Price,Total Price,Lead Time,Notes',
+            'Acme,1,GWB-58,5/8 Type X Gypsum Board,100,sheet,18,1800,3 days,',
+          ].join('\n'),
+          warnings: [{ message: 'agent normalized pdf and verified source rows' }],
+          diagnostics: {
+            mode: 'agent-forced',
+            fallbackReason: 'Non-CSV/Excel quote file normalized through GPT-5.5 before deterministic import.',
+          },
         }
       },
     })
 
-    expect(calls).toEqual([{ forceAgent: undefined }, { forceAgent: true }])
+    expect(calls).toEqual([{ forceAgent: undefined }])
     expect(result.imported.bids[0].vendor_name).toBe('Acme')
-    expect(result.warnings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ message: expect.stringContaining('retried with the smart import agent') }),
-      expect.objectContaining({ message: 'agent normalized pdf' }),
-    ]))
+    expect(result.diagnostics.usedAgentFallback).toBe(true)
+    expect(result.diagnostics.fallbackReasons).toEqual(['vendor.pdf: Non-CSV/Excel quote file normalized through GPT-5.5 before deterministic import.'])
+    expect(result.warnings.map((warning) => warning.message)).toContain('agent normalized pdf and verified source rows')
   })
 })

@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useRouter } from 'next/navigation'
 import { AlertCircle, CheckCircle2, FileSpreadsheet, FileText, Loader2, Plus, Trash2, UploadCloud } from 'lucide-react'
+import { uploadRequestAttachmentFile } from '@/lib/files/blob-client-upload'
 
 interface Props {
   projectId: string
@@ -72,10 +73,12 @@ export function VendorQuoteImportWorkflow({ projectId, projectName }: Props) {
     setError('')
     setWarnings([])
     try {
+      const uploadFolder = `quote-imports/${crypto.randomUUID().slice(0, 8)}`
+      const uploadedFiles = await Promise.all(files.map((file) => uploadRequestAttachmentFile(file, uploadFolder)))
       const formData = new FormData()
       formData.append('projectId', projectId)
       formData.append('rfqName', rfqName.trim())
-      files.forEach((file) => formData.append('files', file))
+      formData.append('uploadedFiles', JSON.stringify(uploadedFiles))
       const response = await fetch('/api/external-quote-import', {
         method: 'POST',
         body: formData,

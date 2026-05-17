@@ -3,6 +3,7 @@ import type { ComparisonHighlight } from './comparison-sheet-state'
 import type { ComparisonSheetSnapshot } from './comparison-sheet-snapshot'
 
 export const PRICING_MISTAKE_HIGHLIGHT = '#e9d5ff'
+export const IMPORT_REVIEW_HIGHLIGHT = '#fee2e2'
 export const DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT = 30
 
 interface PricePoint {
@@ -47,6 +48,78 @@ function highlight(point: PricePoint, metric: 'unit_price' | 'total', note: stri
     color: PRICING_MISTAKE_HIGHLIGHT,
     note,
   }
+}
+
+export interface ImportReviewMetadata {
+  metric: 'unit_price' | 'total'
+  category: 'price_basis_conversion' | 'negative_price'
+  originalValue: string
+  normalizedValue: string
+  reason: string
+}
+
+export function importReviewCategoryLabel(category: ImportReviewMetadata['category']) {
+  if (category === 'price_basis_conversion') return 'Price basis conversions'
+  if (category === 'negative_price') return 'Negative price corrections'
+  return category
+}
+
+export function parseImportReviewMetadata(value: string | undefined): ImportReviewMetadata | undefined {
+  if (!value) return undefined
+  try {
+    const parsed = JSON.parse(value) as Partial<ImportReviewMetadata>
+    if (
+      (parsed.metric === 'unit_price' || parsed.metric === 'total') &&
+      (parsed.category === 'price_basis_conversion' || parsed.category === 'negative_price') &&
+      typeof parsed.originalValue === 'string' &&
+      typeof parsed.normalizedValue === 'string' &&
+      typeof parsed.reason === 'string'
+    ) {
+      return parsed as ImportReviewMetadata
+    }
+  } catch {
+    return undefined
+  }
+  return undefined
+}
+
+function importReviewHighlightId(input: { lineItemId: string; bidId: string; metric: ImportReviewMetadata['metric']; category: ImportReviewMetadata['category'] }) {
+  return `import-review-${input.category}-${input.lineItemId}-${input.bidId}-${input.metric}`
+}
+
+export function importReviewCategoryFromHighlightId(id: string): ImportReviewMetadata['category'] | undefined {
+  if (id.startsWith('import-review-price_basis_conversion-')) return 'price_basis_conversion'
+  if (id.startsWith('import-review-negative_price-')) return 'negative_price'
+  return undefined
+}
+
+export function buildQuoteImportReviewHighlights(_rfq: ContractorRFQ, bids: ContractorBid[]): ComparisonHighlight[] {
+  const highlights: ComparisonHighlight[] = []
+  for (const bid of bids) {
+    for (const response of bid.line_item_responses) {
+      for (const attribute of response.response_attributes ?? []) {
+        if (!attribute.key.startsWith('import_review:')) continue
+        const metadata = parseImportReviewMetadata(attribute.value)
+        if (!metadata) continue
+        highlights.push({
+          id: importReviewHighlightId({
+            lineItemId: response.line_item_id,
+            bidId: bid.id,
+            metric: metadata.metric,
+            category: metadata.category,
+          }),
+          selector: { kind: 'cell', rowKey: response.line_item_id, colKey: `vendor:${bid.id}:${metadata.metric}` },
+          color: IMPORT_REVIEW_HIGHLIGHT,
+          note: [
+            `${importReviewCategoryLabel(metadata.category)}: ${metadata.reason}`,
+            `Original: ${metadata.originalValue}.`,
+            `Imported comparison value: ${metadata.normalizedValue}.`,
+          ].join(' '),
+        })
+      }
+    }
+  }
+  return highlights
 }
 
 export function buildQuoteImportAnalyticsHighlights(

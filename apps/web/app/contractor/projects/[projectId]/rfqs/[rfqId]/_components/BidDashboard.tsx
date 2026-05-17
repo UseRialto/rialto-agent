@@ -3,14 +3,22 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { Clock3, Columns3, Eraser, FileSpreadsheet, Lightbulb, Loader2, Plus, Redo2, RefreshCw, Rows3, Trash2, Undo2, UploadCloud } from 'lucide-react'
+import { Check, Clock3, Columns3, Eraser, FileSpreadsheet, Lightbulb, Loader2, Plus, Redo2, RefreshCw, Rows3, Trash2, Undo2, UploadCloud } from 'lucide-react'
 import type { ContractorBid, ContractorRFQ } from '@/lib/types/contractor'
 import type { BidSpecComplianceEvidence, BidSpecComplianceItem, ProjectSpecDocumentSummary } from '@/lib/types/procurement'
 import { buildLiveQuoteComparisonSummary } from '@/lib/procurement/quote-comparison'
 import { submitComparisonExport, type ComparisonExportFormat } from '@/lib/procurement/comparison-export-client'
 import { workbookVersionMetadataFromApprovedComparisonPatch } from '@/lib/procurement/comparison-agent-tools'
 import { buildComparisonSheetSnapshot } from '@/lib/procurement/comparison-sheet-snapshot'
-import { buildQuoteImportAnalyticsHighlights, DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT, PRICING_MISTAKE_HIGHLIGHT } from '@/lib/procurement/comparison-analytics'
+import {
+  buildQuoteImportAnalyticsHighlights,
+  DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT,
+  IMPORT_REVIEW_HIGHLIGHT,
+  importReviewCategoryFromHighlightId,
+  importReviewCategoryLabel,
+  PRICING_MISTAKE_HIGHLIGHT,
+} from '@/lib/procurement/comparison-analytics'
+import { uploadRequestAttachmentFile } from '@/lib/files/blob-client-upload'
 import {
   addNegotiationMessageAction,
   createRemainderRFQAction,
@@ -56,6 +64,74 @@ function workbookVersionActorLabel(version: { source: string; actorName?: string
     return version.actorName ? `${version.actorName}` : 'Rialto AI'
   }
   return version.actorName ?? version.actorUserId ?? 'Unknown user'
+}
+
+function sourceFilenameFromUrl(url: string) {
+  try {
+    const pathname = url.startsWith('http') ? new URL(url).pathname : url
+    return decodeURIComponent((pathname.split('/').pop() ?? url).replace(/^\d+-/, '')) || 'Source file'
+  } catch {
+    return url
+  }
+}
+
+function isPdfSourceFile(url: string) {
+  try {
+    const pathname = url.startsWith('http') ? new URL(url).pathname : url.split('?')[0]
+    return pathname.toLowerCase().endsWith('.pdf')
+  } catch {
+    return url.toLowerCase().split('?')[0].endsWith('.pdf')
+  }
+}
+
+function SourceFilePreview({ url }: { url: string }) {
+  if (isPdfSourceFile(url)) return <PdfSourcePreview url={url} />
+
+  return (
+    <iframe
+      title={`Source file ${sourceFilenameFromUrl(url)}`}
+      src={url}
+      className="min-h-0 flex-1 bg-white"
+    />
+  )
+}
+
+function PdfSourcePreview({ url }: { url: string }) {
+  return (
+    <div className="min-h-0 flex-1 bg-[#f4f6f5]">
+      <object
+        data={url}
+        type="application/pdf"
+        className="h-full min-h-0 w-full"
+        aria-label={`Source PDF ${sourceFilenameFromUrl(url)}`}
+      >
+        <div className="flex h-full min-h-80 flex-col items-center justify-center gap-3 px-6 text-center">
+          <p className="text-sm font-semibold" style={{ color: '#587067' }}>
+            This browser could not show the PDF preview inline.
+          </p>
+          <div className="flex items-center gap-2">
+            <a
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded-md px-3 py-2 text-xs font-bold text-white"
+              style={{ background: '#1e3a2f' }}
+            >
+              Open Source File
+            </a>
+            <a
+              href={url}
+              download={sourceFilenameFromUrl(url)}
+              className="rounded-md border bg-white px-3 py-2 text-xs font-bold"
+              style={{ borderColor: '#d9e0dc', color: '#4a6358' }}
+            >
+              Download
+            </a>
+          </div>
+        </div>
+      </object>
+    </div>
+  )
 }
 
 const DECISION_STYLES: Record<NonNullable<ContractorBid['buyer_decision_status']>, { label: string; bg: string; text: string; border: string }> = {
@@ -1329,7 +1405,7 @@ function colLetter(index: number) {
 
 function moneyShort(value: number | null | undefined) {
   if (value == null) return ''
-  return `$${Math.round(value).toLocaleString()}`
+  return formatSheetMoney(value)
 }
 
 function parseSheetNumber(value: string | undefined) {
@@ -1342,7 +1418,7 @@ function formatSheetMoney(value: number) {
   return value.toLocaleString('en-US', {
     style: 'currency',
     currency: 'USD',
-    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })
 }
@@ -1652,6 +1728,8 @@ function BidExcelSheet({
   const [quoteImportFiles, setQuoteImportFiles] = useState<File[]>([])
   const [quoteImportBusy, setQuoteImportBusy] = useState(false)
   const [quoteImportError, setQuoteImportError] = useState('')
+  const sourceFiles = (rfq.attachment_urls ?? []).filter((url): url is string => Boolean(url?.trim()))
+  const [sourcePreviewUrl, setSourcePreviewUrl] = useState<string | null>(null)
 
   const items = useMemo(() => {
     let next = [...baseItems]
@@ -1696,6 +1774,19 @@ function BidExcelSheet({
     ...view.highlights.filter((highlight) => highlight.color.toLowerCase() !== PRICING_MISTAKE_HIGHLIGHT),
     ...buildQuoteImportAnalyticsHighlights(rfq, bids, { majorUnitPriceDifferencePct: priceDifferenceThresholdPct }),
   ], [bids, priceDifferenceThresholdPct, rfq, view.highlights])
+  const importReviewHighlights = useMemo(
+    () => visibleHighlights.filter((highlight) => highlight.color.toLowerCase() === IMPORT_REVIEW_HIGHLIGHT),
+    [visibleHighlights],
+  )
+  const importReviewCategoryEntries = useMemo(() => {
+    const groups = new Map<NonNullable<ReturnType<typeof importReviewCategoryFromHighlightId>>, typeof importReviewHighlights>()
+    for (const highlight of importReviewHighlights) {
+      const category = importReviewCategoryFromHighlightId(highlight.id)
+      if (!category) continue
+      groups.set(category, [...(groups.get(category) ?? []), highlight])
+    }
+    return [...groups.entries()]
+  }, [importReviewHighlights])
   const fullQuoteCount = comparisonSummary.fullQuoteCount
   const lowestBid = comparisonSummary.lowestCompleteBid
   const fastestBid = comparisonSummary.fastestBid
@@ -1763,6 +1854,13 @@ function BidExcelSheet({
     const map = new Map<string, string>()
     for (const h of visibleHighlights) {
       if (h.selector.kind === 'cell' && h.note) map.set(`${h.selector.rowKey}|${h.selector.colKey}`, h.note)
+    }
+    return map
+  }, [visibleHighlights])
+  const highlightByCellMap = useMemo(() => {
+    const map = new Map<string, typeof visibleHighlights[number]>()
+    for (const h of visibleHighlights) {
+      if (h.selector.kind === 'cell') map.set(`${h.selector.rowKey}|${h.selector.colKey}`, h)
     }
     return map
   }, [visibleHighlights])
@@ -1888,6 +1986,7 @@ function BidExcelSheet({
   const [historyMenuOpen, setHistoryMenuOpen] = useState(false)
   const [rangeStart, setRangeStart] = useState<{ r: number; c: number } | null>(null)
   const [isDraggingRange, setIsDraggingRange] = useState(false)
+  const isDraggingRangeRef = useRef(false)
   const manualInsertCounterRef = useRef(0)
 
   function startCellEdit(item: typeof items[number], col: SheetColumn) {
@@ -2053,6 +2152,46 @@ function BidExcelSheet({
     return rows.map((row) => row.join('\t')).join('\n')
   }
 
+  function writeSelectedRangeToClipboard() {
+    const value = copySelectedRange()
+    if (!value) return
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(value).catch(() => writeTextWithTextareaFallback(value))
+      return
+    }
+    writeTextWithTextareaFallback(value)
+  }
+
+  function writeTextWithTextareaFallback(value: string) {
+    const textarea = document.createElement('textarea')
+    textarea.value = value
+    textarea.setAttribute('readonly', 'true')
+    textarea.style.position = 'fixed'
+    textarea.style.left = '-9999px'
+    textarea.style.top = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+    containerRef.current?.focus()
+  }
+
+  function onCopySelectedRange(event: React.ClipboardEvent<HTMLDivElement>) {
+    if (editingCell || editingHeader || editingGroupHeader) return
+    const value = copySelectedRange()
+    if (!value) return
+    event.preventDefault()
+    event.clipboardData.setData('text/plain', value)
+  }
+
+  function onPasteIntoSelection(event: React.ClipboardEvent<HTMLDivElement>) {
+    if (editingCell || editingHeader || editingGroupHeader) return
+    const text = event.clipboardData.getData('text/plain')
+    if (!text) return
+    event.preventDefault()
+    pasteTextToSelection(text)
+  }
+
   function pasteTextToSelection(text: string) {
     const rows = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').map((row) => row.split('\t'))
     if (rows.length === 1 && rows[0].length === 1) {
@@ -2133,15 +2272,23 @@ function BidExcelSheet({
     setContextMenu({ x: e.clientX, y: e.clientY, rowKey, colKey })
   }
 
-  function startRangeSelect(r: number, c: number) {
+  function startRangeSelect(r: number, c: number, event?: React.MouseEvent) {
     containerRef.current?.focus()
+    if (event?.shiftKey) {
+      isDraggingRangeRef.current = false
+      setRangeStart((start) => start ?? sel)
+      setSel({ r, c })
+      setIsDraggingRange(false)
+      return
+    }
+    isDraggingRangeRef.current = true
     setSel({ r, c })
     setRangeStart({ r, c })
     setIsDraggingRange(true)
   }
 
   function extendRangeSelect(r: number, c: number) {
-    if (!isDraggingRange) return
+    if (!isDraggingRangeRef.current) return
     setSel({ r, c })
   }
 
@@ -2238,11 +2385,21 @@ function BidExcelSheet({
       entry.selector.kind === 'cell' &&
       entry.selector.rowKey === openPricingMistakeBubble.itemId &&
       entry.selector.colKey === openPricingMistakeBubble.colKey &&
-      entry.color.toLowerCase() === PRICING_MISTAKE_HIGHLIGHT,
+      (entry.color.toLowerCase() === PRICING_MISTAKE_HIGHLIGHT || entry.color.toLowerCase() === IMPORT_REVIEW_HIGHLIGHT),
     )
     if (!item || !col || !highlight) return undefined
     return { item, col, highlight, anchor: openPricingMistakeBubble.anchor }
   }, [openPricingMistakeBubble, visibleHighlights, visibleCols, visibleItems])
+
+  function approveImportReviewHighlights(ids: string[]) {
+    const existing = new Set(view.highlights.map((highlight) => highlight.id))
+    const removable = ids.filter((id) => existing.has(id))
+    if (removable.length === 0) return
+    removeHighlights(removable)
+    if (openPricingMistakeBubble && removable.some((id) => activePricingMistakeBubble?.highlight.id === id)) {
+      setOpenPricingMistakeBubble(null)
+    }
+  }
 
   useEffect(() => {
     setSel((s) => ({ r: Math.min(s.r, lastEmptyRow), c: Math.min(s.c, Math.max(0, totalGridCols - 1)) }))
@@ -2268,7 +2425,10 @@ function BidExcelSheet({
 
   useEffect(() => {
     if (!isDraggingRange) return
-    const stop = () => setIsDraggingRange(false)
+    const stop = () => {
+      isDraggingRangeRef.current = false
+      setIsDraggingRange(false)
+    }
     window.addEventListener('mouseup', stop)
     return () => window.removeEventListener('mouseup', stop)
   }, [isDraggingRange])
@@ -2332,13 +2492,11 @@ function BidExcelSheet({
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); dispatchAssistant(true); return }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
-      const value = copySelectedRange()
-      if (value && navigator.clipboard) void navigator.clipboard.writeText(value)
+      e.preventDefault()
+      writeSelectedRangeToClipboard()
       return
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') {
-      e.preventDefault()
-      if (navigator.clipboard) void navigator.clipboard.readText().then((text) => pasteTextToSelection(text))
       return
     }
     if (e.key === 'Backspace' || e.key === 'Delete') {
@@ -2600,8 +2758,10 @@ function BidExcelSheet({
     setQuoteImportBusy(true)
     setQuoteImportError('')
     try {
+      const uploadFolder = `quote-imports/${rfq.id}-${crypto.randomUUID().slice(0, 8)}`
+      const uploadedFiles = await Promise.all(quoteImportFiles.map((file) => uploadRequestAttachmentFile(file, uploadFolder)))
       const formData = new FormData()
-      quoteImportFiles.forEach((file) => formData.append('files', file))
+      formData.append('uploadedFiles', JSON.stringify(uploadedFiles))
       const response = await fetch(`/api/rfqs/${rfq.id}/external-quote-import`, {
         method: 'POST',
         body: formData,
@@ -2708,6 +2868,17 @@ function BidExcelSheet({
               <UploadCloud className="h-4 w-4" aria-hidden="true" />
               Add Quote
             </button>
+            {sourceFiles.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSourcePreviewUrl((current) => current ?? sourceFiles[0] ?? null)}
+                className="flex h-8 items-center gap-1.5 rounded-md border bg-white px-2.5 text-xs font-bold transition"
+                style={{ borderColor: '#d9e0dc', color: '#4a6358' }}
+              >
+                <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
+                Source Files
+              </button>
+            )}
             <div className="relative" onClick={(event) => event.stopPropagation()}>
               <button
                 type="button"
@@ -2836,6 +3007,60 @@ function BidExcelSheet({
           </div>
         )}
 
+        {sourcePreviewUrl && (
+          <div className="fixed bottom-6 right-6 top-24 z-40 flex w-[min(46rem,46vw)] min-w-[28rem] flex-col overflow-hidden rounded-xl border bg-white shadow-2xl" style={{ borderColor: '#d9e0dc' }}>
+            <div className="flex items-center justify-between gap-3 border-b px-4 py-3" style={{ borderColor: '#d9e0dc', background: '#f8faf9' }}>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase" style={{ color: '#587067' }}>Source Files</p>
+                <p className="truncate text-sm font-bold" style={{ color: '#1e3a2f' }}>{sourceFilenameFromUrl(sourcePreviewUrl)}</p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <a
+                  href={sourcePreviewUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-md border bg-white px-3 py-1.5 text-xs font-bold"
+                  style={{ borderColor: '#d9e0dc', color: '#4a6358' }}
+                >
+                  Open
+                </a>
+                <a
+                  href={sourcePreviewUrl}
+                  download={sourceFilenameFromUrl(sourcePreviewUrl)}
+                  className="rounded-md border bg-white px-3 py-1.5 text-xs font-bold"
+                  style={{ borderColor: '#d9e0dc', color: '#4a6358' }}
+                >
+                  Download
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setSourcePreviewUrl(null)}
+                  className="rounded-md border px-3 py-1.5 text-xs font-bold"
+                  style={{ borderColor: '#d9e0dc', color: '#4a6358' }}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="flex gap-2 overflow-x-auto border-b px-3 py-2" style={{ borderColor: '#d9e0dc' }}>
+              {sourceFiles.map((url) => (
+                <button
+                  key={url}
+                  type="button"
+                  onClick={() => setSourcePreviewUrl(url)}
+                  className="max-w-52 shrink-0 truncate rounded-md border px-2.5 py-1 text-xs font-semibold"
+                  style={url === sourcePreviewUrl
+                    ? { borderColor: '#1e3a2f', background: '#1e3a2f', color: '#ffffff' }
+                    : { borderColor: '#d9e0dc', background: '#ffffff', color: '#4a6358' }}
+                >
+                  {sourceFilenameFromUrl(url)}
+                </button>
+              ))}
+            </div>
+            <SourceFilePreview url={sourcePreviewUrl} />
+          </div>
+        )}
+
         <div className="flex min-h-9 items-stretch border-t" style={{ borderColor: '#d9e0dc', background: '#ffffff' }}>
           <div className="flex items-center justify-center" style={{ width: 94, borderRight: baseBorder, fontSize: 12, fontWeight: 700, color: '#2563eb', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
             {visibleCols[sel.c] ? `${colLetter(sel.c)}${sel.r + 1}` : '-'}
@@ -2863,6 +3088,29 @@ function BidExcelSheet({
                 Clear highlights
               </button>
             )}
+            {importReviewHighlights.length > 0 && (
+              <button
+                type="button"
+                onClick={() => approveImportReviewHighlights(importReviewHighlights.map((highlight) => highlight.id))}
+                className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold"
+                style={{ borderColor: '#86efac', color: '#166534', background: '#f0fdf4' }}
+              >
+                <Check className="h-3 w-3" />
+                Approve all import changes
+              </button>
+            )}
+            {importReviewCategoryEntries.map(([category, highlights]) => (
+              <button
+                key={category}
+                type="button"
+                onClick={() => approveImportReviewHighlights(highlights.map((highlight) => highlight.id))}
+                className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold"
+                style={{ borderColor: '#fecaca', color: '#9f1239', background: '#fff7f7' }}
+              >
+                <Check className="h-3 w-3" />
+                Approve {importReviewCategoryLabel(category)} ({highlights.length})
+              </button>
+            ))}
           </div>
         </div>
 
@@ -2886,6 +3134,10 @@ function BidExcelSheet({
           <span className="inline-flex items-center gap-1.5">
             <span className="inline-block h-3 w-6 rounded-sm" style={{ background: PRICING_MISTAKE_HIGHLIGHT, border: '1px solid #c084fc' }} />
             Pricing mistake
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-3 w-6 rounded-sm" style={{ background: IMPORT_REVIEW_HIGHLIGHT, border: '1px solid #fca5a5' }} />
+            Importer change review
           </span>
           <label className="inline-flex items-center gap-1.5">
             <span>Threshold</span>
@@ -2984,35 +3236,68 @@ function BidExcelSheet({
       {activePricingMistakeBubble && (
         <div
           className="fixed z-30 w-[min(420px,calc(100vw-2rem))] rounded-xl border bg-white p-3 shadow-2xl"
-          style={{ top: activePricingMistakeBubble.anchor.top, left: activePricingMistakeBubble.anchor.left, borderColor: '#c084fc', boxShadow: '0 18px 45px rgba(30,58,47,0.18)' }}
+          style={{
+            top: activePricingMistakeBubble.anchor.top,
+            left: activePricingMistakeBubble.anchor.left,
+            borderColor: activePricingMistakeBubble.highlight.color.toLowerCase() === IMPORT_REVIEW_HIGHLIGHT ? '#fca5a5' : '#c084fc',
+            boxShadow: '0 18px 45px rgba(30,58,47,0.18)',
+          }}
         >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-[11px] font-bold uppercase tracking-wide" style={{ color: '#7e22ce' }}>
-                Pricing Mistake Candidate
+              <p className="text-[11px] font-bold uppercase tracking-wide" style={{ color: activePricingMistakeBubble.highlight.color.toLowerCase() === IMPORT_REVIEW_HIGHLIGHT ? '#b42318' : '#7e22ce' }}>
+                {activePricingMistakeBubble.highlight.color.toLowerCase() === IMPORT_REVIEW_HIGHLIGHT ? 'Importer Change Review' : 'Pricing Mistake Candidate'}
               </p>
               <p className="mt-1 text-sm font-semibold leading-tight" style={{ color: '#1e3a2f' }}>
                 {activePricingMistakeBubble.col.vendorName ?? 'Vendor'} · {activePricingMistakeBubble.item.description}
               </p>
             </div>
-            <button
-              type="button"
-              aria-label="Close pricing mistake explanation"
-              onClick={() => setOpenPricingMistakeBubble(null)}
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded border text-sm font-bold"
-              style={{ borderColor: '#d9e0dc', color: '#587067', background: '#ffffff' }}
-            >
-              ×
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              {activePricingMistakeBubble.highlight.color.toLowerCase() === IMPORT_REVIEW_HIGHLIGHT && (
+                <button
+                  type="button"
+                  aria-label="Approve importer change"
+                  title="Approve this importer change"
+                  onClick={() => approveImportReviewHighlights([activePricingMistakeBubble.highlight.id])}
+                  className="flex h-6 w-6 items-center justify-center rounded border text-sm font-bold"
+                  style={{ borderColor: '#86efac', color: '#166534', background: '#f0fdf4' }}
+                >
+                  <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              )}
+              <button
+                type="button"
+                aria-label="Close pricing mistake explanation"
+                onClick={() => setOpenPricingMistakeBubble(null)}
+                className="flex h-6 w-6 items-center justify-center rounded border text-sm font-bold"
+                style={{ borderColor: '#d9e0dc', color: '#587067', background: '#ffffff' }}
+              >
+                ×
+              </button>
+            </div>
           </div>
-          <p className="mt-2 rounded border px-2.5 py-2 text-xs leading-relaxed" style={{ borderColor: '#d8b4fe', background: '#faf5ff', color: '#4a2a68' }}>
+          <p
+            className="mt-2 rounded border px-2.5 py-2 text-xs leading-relaxed"
+            style={activePricingMistakeBubble.highlight.color.toLowerCase() === IMPORT_REVIEW_HIGHLIGHT
+              ? { borderColor: '#fecaca', background: '#fff7f7', color: '#7f1d1d' }
+              : { borderColor: '#d8b4fe', background: '#faf5ff', color: '#4a2a68' }}
+          >
             {activePricingMistakeBubble.highlight.note ?? 'This price is materially different from comparable quotes. Confirm the unit of measure before relying on this comparison.'}
           </p>
         </div>
       )}
 
       {/* Scrollable grid */}
-      <div ref={containerRef} className="flex-1 min-h-0 overflow-auto outline-none" tabIndex={0} onKeyDown={onKeyDown} style={{ background: '#ffffff', userSelect: 'none', WebkitUserSelect: 'none' }}>
+      <div
+        ref={containerRef}
+        data-testid="comparison-grid-container"
+        className="flex-1 min-h-0 overflow-auto outline-none"
+        tabIndex={0}
+        onKeyDown={onKeyDown}
+        onCopy={onCopySelectedRange}
+        onPaste={onPasteIntoSelection}
+        style={{ background: '#ffffff', userSelect: 'none', WebkitUserSelect: 'none' }}
+      >
         <div
           style={{
             display: 'grid',
@@ -3199,7 +3484,7 @@ function BidExcelSheet({
           {visibleCols.map((col, c) => (
             <div
               key={`fh-${col.key}`}
-              onMouseDown={() => startRangeSelect(fieldHeaderRowIdx, c)}
+              onMouseDown={(event) => startRangeSelect(fieldHeaderRowIdx, c, event)}
               onMouseEnter={() => extendRangeSelect(fieldHeaderRowIdx, c)}
               onDoubleClick={() => startHeaderEdit(col)}
               onContextMenu={(e) => openContextMenu(e, undefined, col.key)}
@@ -3279,7 +3564,9 @@ function BidExcelSheet({
                   const autoHighlight = isLowestPrice ? '#dcfce7' : isFastestLead ? '#dbeafe' : undefined
                   const highlight = previewHighlightMap.get(cellKey) ?? (hasPreview ? '#fef3c7' : highlightMap.get(cellKey) ?? autoHighlight)
                   const highlightNote = highlightNoteMap.get(cellKey)
+                  const cellHighlight = highlightByCellMap.get(cellKey)
                   const isPricingMistakeHighlight = highlight?.toLowerCase() === PRICING_MISTAKE_HIGHLIGHT
+                  const isImportReviewHighlight = highlight?.toLowerCase() === IMPORT_REVIEW_HIGHLIGHT
                   const isSelected = sel.r === r && sel.c === c
                   const inRange = isInSelectedRange(r, c)
                   const isFrozen = col.key === frozenColumnKey
@@ -3304,19 +3591,25 @@ function BidExcelSheet({
                     'finding' in cellState &&
                     cellState.finding?.review_kind === 'substitution',
                   )
-                  const canOpenPricingMistakeBubble = Boolean(isPricingMistakeHighlight && highlightNote)
+                  const canOpenPricingMistakeBubble = Boolean((isPricingMistakeHighlight || isImportReviewHighlight) && highlightNote)
+                  const canApproveImportReview = Boolean(isImportReviewHighlight && cellHighlight)
                   return (
                     <div
                       key={`cell-${item.id}-${col.key}`}
                       className="group"
-                      onMouseDown={() => startRangeSelect(r, c)}
+                      data-testid="comparison-grid-cell"
+                      data-row-index={r}
+                      data-col-index={c}
+                      data-col-key={col.key}
+                      data-row-key={item.id}
+                      onMouseDown={(event) => startRangeSelect(r, c, event)}
                       onMouseEnter={() => extendRangeSelect(r, c)}
                       onDoubleClick={() => startCellEdit(item, col)}
                       onContextMenu={(e) => openContextMenu(e, item.id, col.key)}
                       title={[
                         isLowestPrice ? 'Lowest total price for this item.' : '',
                         isFastestLead ? 'Fastest lead time for this item.' : '',
-                        canOpenPricingMistakeBubble ? 'Click the lightbulb for pricing mistake reasoning.' : '',
+                        canOpenPricingMistakeBubble ? `Click the lightbulb for ${isImportReviewHighlight ? 'importer change details' : 'pricing mistake reasoning'}.` : '',
                         canOpenSpecBubble ? 'Click the lightbulb for spec justification.' : cellState.tooltip,
                       ].filter(Boolean).join('\n')}
                       style={{
@@ -3377,7 +3670,7 @@ function BidExcelSheet({
                       {canOpenPricingMistakeBubble && (
                         <button
                           type="button"
-                          aria-label={`Open pricing mistake reasoning for ${item.description}`}
+                          aria-label={`Open ${isImportReviewHighlight ? 'importer change details' : 'pricing mistake reasoning'} for ${item.description}`}
                           title={highlightNote}
                           onMouseDown={(event) => {
                             event.preventDefault()
@@ -3389,13 +3682,31 @@ function BidExcelSheet({
                             setOpenPricingMistakeBubble({ itemId: item.id, colKey: col.key, anchor: bubbleAnchor(event.currentTarget) })
                           }}
                           className="absolute right-1 top-1/2 z-10 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full border opacity-0 shadow-sm transition group-hover:opacity-100 focus:opacity-100"
-                          style={{
-                            background: '#faf5ff',
-                            borderColor: '#c084fc',
-                            color: '#7e22ce',
-                          }}
+                          style={isImportReviewHighlight
+                            ? { background: '#fff7f7', borderColor: '#fca5a5', color: '#b42318' }
+                            : { background: '#faf5ff', borderColor: '#c084fc', color: '#7e22ce' }}
                         >
                           <Lightbulb className="h-3 w-3" aria-hidden="true" />
+                        </button>
+                      )}
+                      {canApproveImportReview && cellHighlight && (
+                        <button
+                          type="button"
+                          aria-label={`Approve importer change for ${item.description}`}
+                          title="Approve importer change"
+                          onMouseDown={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                          }}
+                          onClick={(event) => {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            approveImportReviewHighlights([cellHighlight.id])
+                          }}
+                          className="absolute right-7 top-1/2 z-10 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full border opacity-0 shadow-sm transition group-hover:opacity-100 focus:opacity-100"
+                          style={{ background: '#f0fdf4', borderColor: '#86efac', color: '#166534' }}
+                        >
+                          <Check className="h-3 w-3" aria-hidden="true" />
                         </button>
                       )}
                     </div>
@@ -3409,7 +3720,7 @@ function BidExcelSheet({
                   return (
                     <div
                       key={`cell-${item.id}-extra-${i}`}
-                      onMouseDown={() => startRangeSelect(r, c)}
+                      onMouseDown={(event) => startRangeSelect(r, c, event)}
                       onMouseEnter={() => extendRangeSelect(r, c)}
                       onContextMenu={(e) => openContextMenu(e, item.id)}
                       style={{ ...cellBase, gridRow: r + 1, gridColumn: visibleCols.length + 2 + i, background: isSelected ? '#dbeafe' : inRange ? '#eff6ff' : stripe, ...(isSelected ? { boxShadow: 'inset 0 0 0 2px #2563eb' } : inRange ? { boxShadow: 'inset 0 0 0 1px #93c5fd' } : {}) }}

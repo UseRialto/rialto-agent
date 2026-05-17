@@ -1,15 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { revalidatePath } from 'next/cache'
 import { getSession } from '@/lib/auth/session'
-import { appendBidToRFQ, appendRFQLineItemsAndInvites, getBidsForRFQ, getProject, getRFQ } from '@/lib/store/contractor-store'
+import { appendBidToRFQ, appendRFQLineItemsAndInvites, getBidsForRFQ, getProject, getRFQ, updateRFQAttachmentUrls } from '@/lib/store/contractor-store'
 import { mergeExternalQuoteImportIntoRFQ } from '@/lib/procurement/external-quote-import'
 import { buildImportedQuoteComparison, type QuoteComparisonImportUpload } from '@/lib/modules/quote-comparison/imported-quote-comparison'
+import { loadUploadedExternalQuoteFile, type UploadedExternalQuoteFileReference } from '@/lib/procurement/external-quote-upload-source'
+import { suggestExternalQuoteSemanticMatches } from '@/lib/procurement/external-quote-semantic-match'
+import { buildQuoteImportReviewHighlights } from '@/lib/procurement/comparison-analytics'
+import { getComparisonSheetViewRecord, saveComparisonSheetView } from '@/lib/store/comparison-sheet-view-store'
 
 export const runtime = 'nodejs'
 
-const MAX_IMPORT_BYTES = 8 * 1024 * 1024
+const MAX_IMPORT_BYTES = 100 * 1024 * 1024
 const MAX_IMPORT_FILES = 12
-const MAX_TOTAL_IMPORT_BYTES = 32 * 1024 * 1024
+const MAX_TOTAL_IMPORT_BYTES = 500 * 1024 * 1024
+
+function parseUploadedFileReferences(raw: FormDataEntryValue | null): UploadedExternalQuoteFileReference[] {
+  if (typeof raw !== 'string' || !raw.trim()) return []
+  const parsed = JSON.parse(raw) as unknown
+  if (!Array.isArray(parsed)) return []
+  return parsed.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return []
+    const record = entry as Record<string, unknown>
+    const url = typeof record.url === 'string' ? record.url : ''
+    if (!url) return []
+    return [{
+      url,
+      filename: typeof record.filename === 'string' ? record.filename : undefined,
+      mimeType: typeof record.mimeType === 'string' ? record.mimeType : undefined,
+      sizeBytes: typeof record.sizeBytes === 'number' ? record.sizeBytes : undefined,
+    }]
+  })
+}
 
 export async function POST(
   request: NextRequest,
@@ -26,16 +48,17 @@ export async function POST(
     const files = formData.getAll('files').filter((value): value is File => value instanceof File)
     const legacyFile = formData.get('file')
     if (legacyFile instanceof File) files.push(legacyFile)
+    const uploadedFileReferences = parseUploadedFileReferences(formData.get('uploadedFiles'))
 
-    if (files.length === 0) {
+    if (files.length === 0 && uploadedFileReferences.length === 0) {
       return NextResponse.json({ error: 'Upload at least one quote file.' }, { status: 400 })
     }
-    if (files.length > MAX_IMPORT_FILES) {
+    if (files.length + uploadedFileReferences.length > MAX_IMPORT_FILES) {
       return NextResponse.json({ error: `Upload ${MAX_IMPORT_FILES} quote files or fewer at a time.` }, { status: 400 })
     }
-    const totalBytes = files.reduce((sum, file) => sum + file.size, 0)
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0) + uploadedFileReferences.reduce((sum, file) => sum + (file.sizeBytes ?? 0), 0)
     if (totalBytes > MAX_TOTAL_IMPORT_BYTES) {
-      return NextResponse.json({ error: 'Import files are too large. Use a combined upload under 32 MB.' }, { status: 400 })
+      return NextResponse.json({ error: 'Import files are too large. Use a combined upload under 500 MB.' }, { status: 400 })
     }
     const emptyFile = files.find((file) => file.size <= 0)
     if (emptyFile) {
@@ -43,7 +66,11 @@ export async function POST(
     }
     const oversizedFile = files.find((file) => file.size > MAX_IMPORT_BYTES)
     if (oversizedFile) {
-      return NextResponse.json({ error: `${oversizedFile.name} is too large. Use files under 8 MB.` }, { status: 400 })
+      return NextResponse.json({ error: `${oversizedFile.name} is too large. Use files under 100 MB.` }, { status: 400 })
+    }
+    const oversizedUploadedFile = uploadedFileReferences.find((file) => (file.sizeBytes ?? 0) > MAX_IMPORT_BYTES)
+    if (oversizedUploadedFile) {
+      return NextResponse.json({ error: `${oversizedUploadedFile.filename ?? 'Uploaded file'} is too large. Use files under 100 MB.` }, { status: 400 })
     }
 
     const rfq = await getRFQ(rfqId)
@@ -62,6 +89,12 @@ export async function POST(
         buffer: Buffer.from(await file.arrayBuffer()),
       })
     }
+    for (const reference of uploadedFileReferences) {
+      uploadFiles.push({
+        ...(await loadUploadedExternalQuoteFile(reference, MAX_IMPORT_BYTES)),
+        sourceUrl: reference.url,
+      })
+    }
 
     const built = await buildImportedQuoteComparison({
       projectId: rfq.project_id,
@@ -70,22 +103,48 @@ export async function POST(
       files: uploadFiles,
     })
     const existingBids = await getBidsForRFQ(rfq.id)
+    const semanticMatches = await suggestExternalQuoteSemanticMatches({
+      importedLineItems: built.imported.rfq.line_items,
+      targetLineItems: rfq.line_items,
+    }).catch((error) => {
+      console.error('Semantic quote matching failed:', error)
+      return []
+    })
     const merged = mergeExternalQuoteImportIntoRFQ({
       targetRfq: rfq,
       existingBids,
       imported: built.imported,
+      semanticMatches,
     })
 
     await appendRFQLineItemsAndInvites(rfq.id, addedLineItemsWithoutExisting(merged.addedLineItems, rfq.line_items), [])
+    await updateRFQAttachmentUrls(rfq.id, merged.rfq.attachment_urls ?? [])
     for (const bid of merged.bids) {
       await appendBidToRFQ(rfq.id, bid)
+    }
+    const importReviewHighlights = buildQuoteImportReviewHighlights(merged.rfq, merged.bids)
+    if (importReviewHighlights.length > 0) {
+      const viewRecord = await getComparisonSheetViewRecord(rfq.id)
+      const highlightsById = new Map([
+        ...viewRecord.view.highlights,
+        ...importReviewHighlights,
+      ].map((highlight) => [highlight.id, highlight]))
+      await saveComparisonSheetView(rfq.id, {
+        ...viewRecord.view,
+        highlights: [...highlightsById.values()],
+      }, {
+        source: 'import',
+        actorUserId: session.userId,
+        actorName: session.name,
+        summary: `Flagged ${importReviewHighlights.length} importer-normalized price cell${importReviewHighlights.length === 1 ? '' : 's'} for review.`,
+      })
     }
 
     revalidatePath(`/contractor/projects/${rfq.project_id}`)
     revalidatePath(`/contractor/projects/${rfq.project_id}/rfqs/${rfq.id}`)
 
     const importMessage = built.diagnostics.usedAgentFallback
-      ? `GPT-5.5 fallback used after normal import failed: ${built.diagnostics.fallbackReasons[0] ?? 'normal parser could not finish'}.`
+      ? 'Converted non-CSV/Excel quote files to verified CSV through the smart import agent.'
       : `Added ${merged.bids.length} quote import${merged.bids.length === 1 ? '' : 's'} through the normal importer.`
 
     return NextResponse.json({
