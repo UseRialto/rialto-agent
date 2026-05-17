@@ -55,4 +55,43 @@ test.describe('Quote comparison workspace', () => {
     expect(workspaceBox!.height).toBeGreaterThan((viewport!.height - 64) * 0.85)
     expect(overviewBox!.y + overviewBox!.height).toBeLessThanOrEqual(80)
   })
+
+  test('opens the quote assistant pill bar with keyboard shortcut and shows preview actions', async ({ page }) => {
+    const response = await page.request.post('/api/external-quote-import', {
+      multipart: {
+        projectId: PROJECT_ID,
+        file: {
+          name: '20-base-comparison-plus-vendor-tabs.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          buffer: fs.readFileSync(BASE_COMPARISON_FIXTURE),
+        },
+      },
+    })
+    expect(response.ok()).toBe(true)
+    const body = await response.json() as { redirectTo: string }
+
+    await page.route('**/api/bid-comparison/ai-propose', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          patch: {
+            summary: 'Prepared a preview.',
+            hideColumnKeys: ['mock-column'],
+          },
+        }),
+      })
+    })
+
+    await page.goto(body.redirectTo)
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K')
+
+    const assistant = page.locator('section[aria-label="Bid comparison AI assistant"]')
+    await expect(assistant).toBeVisible()
+    await assistant.getByPlaceholder('Ask about this sheet...').fill('Hide the mock column')
+    await assistant.getByRole('button', { name: 'Send' }).click()
+
+    await expect(assistant.getByRole('button', { name: 'Apply' })).toBeVisible()
+    await expect(assistant.getByRole('button', { name: 'Discard' })).toBeVisible()
+  })
 })

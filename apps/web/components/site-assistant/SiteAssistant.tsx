@@ -1,7 +1,9 @@
 'use client'
 
-import { type CSSProperties, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, Send, RotateCcw, Paperclip, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePathname } from 'next/navigation'
+import { Paperclip } from 'lucide-react'
+import { AssistantPillBarShell } from './AssistantPillBarShell'
 
 type Role = 'user' | 'assistant'
 
@@ -81,13 +83,23 @@ const WELCOME_MESSAGE: ChatMessage = {
   content: 'Hi, I can help you reason through your Rialto projects, quote requests, vendor responses, and quote comparisons.',
 }
 
+function assistantPlaceholderForPage(pathname: string | null, preferredAssistant: string | null): string {
+  if (preferredAssistant === 'bid-comparison') return 'Show me the biggest quote differences...'
+  if (!pathname) return 'Ask Rialto to help with quotes...'
+  if (pathname.includes('/comparison')) return 'Find the best value quote...'
+  if (pathname.includes('/rfqs/') && pathname.includes('/responses')) return 'Summarize vendor responses...'
+  if (pathname.includes('/rfqs/') && pathname.includes('/messages')) return 'Draft a vendor follow-up...'
+  if (pathname.includes('/rfqs/')) return 'Compare these quotes for me...'
+  if (pathname.includes('/contractor/projects/new')) return 'Help me set up this project...'
+  if (pathname.includes('/contractor/projects/') && pathname.includes('/rfqs')) return 'Help me create an RFQ...'
+  if (pathname.includes('/contractor/projects/')) return 'What needs attention on this project?'
+  if (pathname.includes('/contractor/projects')) return 'Find projects with active quote requests...'
+  return 'Ask Rialto to help with quotes...'
+}
+
 function makeId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`
-}
-
-function cn(...parts: Array<string | false | undefined>) {
-  return parts.filter(Boolean).join(' ')
 }
 
 function agentDebugEnabled() {
@@ -108,6 +120,7 @@ function debugTraceMessage(data: AgentTurnResponse): ChatMessage | null {
 }
 
 export function SiteAssistant({ storageScope }: SiteAssistantProps) {
+  const pathname = usePathname()
   const storageKey = useMemo(() => `rialto-site-assistant:${storageScope}`, [storageScope])
   const [isOpen, setIsOpen] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
@@ -119,7 +132,6 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
   const [error, setError] = useState<string | null>(null)
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null)
   const [customizeMotion, setCustomizeMotion] = useState<'idle' | 'entering' | 'active' | 'exiting'>('idle')
-  const [customizeShift, setCustomizeShift] = useState('-50vw')
   const [preferredAssistant, setPreferredAssistant] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -167,7 +179,7 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
 
   useEffect(() => {
     if (isOpen && !isClosing) {
-      const t = setTimeout(() => inputRef.current?.focus(), 800)
+      const t = setTimeout(() => inputRef.current?.focus(), 260)
       return () => clearTimeout(t)
     }
   }, [isOpen, isClosing])
@@ -181,7 +193,7 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
       setIsOpen(false)
       setIsClosing(false)
       setCustomizeMotion('idle')
-    }, 900)
+    }, 320)
   }, [isClosing])
 
   useEffect(() => {
@@ -199,17 +211,9 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
   }, [isOpen, isClosing, dismissChat])
 
   useEffect(() => {
-    function calculateCustomizeShift() {
-      const assistantWidth = Math.min(820, window.innerWidth - 32)
-      const customizeIconCenter = (window.innerWidth - assistantWidth) / 2 + 24
-      const normalIconCenter = window.innerWidth - 44
-      setCustomizeShift(`${customizeIconCenter - normalIconCenter}px`)
-    }
-
     function handleCustomizeAssistant(event: Event) {
       const open = Boolean((event as CustomEvent<{ open?: boolean }>).detail?.open)
       if (customizeTimerRef.current) clearTimeout(customizeTimerRef.current)
-      calculateCustomizeShift()
       if (open) {
         setIsOpen(false)
         setIsClosing(false)
@@ -225,12 +229,10 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
 
     window.addEventListener('rialto:rfq-customize-assistant', handleCustomizeAssistant)
     window.addEventListener('rialto:bid-comparison-assistant', handleCustomizeAssistant)
-    window.addEventListener('resize', calculateCustomizeShift)
     return () => {
       if (customizeTimerRef.current) clearTimeout(customizeTimerRef.current)
       window.removeEventListener('rialto:rfq-customize-assistant', handleCustomizeAssistant)
       window.removeEventListener('rialto:bid-comparison-assistant', handleCustomizeAssistant)
-      window.removeEventListener('resize', calculateCustomizeShift)
     }
   }, [customizeMotion])
 
@@ -240,15 +242,17 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
     if (customizeTimerRef.current) clearTimeout(customizeTimerRef.current)
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
 
-    const assistantWidth = Math.min(820, window.innerWidth - 32)
-    const customizeIconCenter = (window.innerWidth - assistantWidth) / 2 + 24
-    const normalIconCenter = window.innerWidth - 44
-    setCustomizeShift(`${customizeIconCenter - normalIconCenter}px`)
-
     setIsClosing(false)
-    setCustomizeMotion('entering')
     setIsOpen(true)
-    customizeTimerRef.current = setTimeout(() => setCustomizeMotion('active'), 900)
+  }
+
+  function activateAssistant() {
+    if (isClosing) return
+    if (preferredAssistant === 'bid-comparison') {
+      window.dispatchEvent(new CustomEvent('rialto:bid-comparison-assistant', { detail: { open: true } }))
+      return
+    }
+    openChat()
   }
 
   async function refreshContext() {
@@ -306,15 +310,7 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
     if (followUps.length) setMessages((current) => [...current, ...followUps])
   }
 
-  async function startNewChat() {
-    setMessages([WELCOME_MESSAGE])
-    setDraft('')
-    setError(null)
-    await refreshContext()
-  }
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  async function handleSubmit() {
     const content = draft.trim()
     if (!content || isSending) return
 
@@ -430,57 +426,18 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
   // Visible messages: only show the last user message + its response by default,
   // but render all messages so the user can scroll up.
   const visibleMessages = messages.filter(m => m.id !== 'welcome')
-  const hasMessages = visibleMessages.length > 0 || isSending || isLoadingContext
-
   const inCustomize = customizeMotion === 'entering' || customizeMotion === 'active'
+  const status = error
+    ? 'Needs attention'
+    : isLoadingContext
+      ? 'Refreshing context...'
+      : isSending
+        ? 'Working'
+        : 'Ready'
+  const assistantPlaceholder = assistantPlaceholderForPage(pathname, preferredAssistant)
 
   return (
     <>
-      <style jsx global>{`
-        @keyframes site-assistant-to-customize {
-          0% { transform: translate(0, 0); }
-          100% { transform: translate(var(--rfq-customize-shift), -1.75rem); }
-        }
-        @keyframes site-assistant-from-customize {
-          0% { transform: translate(var(--rfq-customize-shift), -1.75rem); }
-          100% { transform: translate(0, 0); }
-        }
-        @keyframes sa-pill-emerge { 0% { opacity: 0; } 100% { opacity: 1; } }
-        @keyframes sa-pill-collapse { 0% { opacity: 1; } 100% { opacity: 0; } }
-        @keyframes sa-content-fade { 0% { opacity: 0; } 60% { opacity: 0; } 100% { opacity: 1; } }
-        @keyframes sa-content-hide { 0% { opacity: 1; } 100% { opacity: 0; } }
-        @keyframes sa-messages-fade { 0% { opacity: 0; transform: translateY(8px); } 100% { opacity: 1; transform: translateY(0); } }
-        @keyframes sa-messages-hide { 0% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(8px); } }
-      `}</style>
-
-      {/* Floating button */}
-      {(!isOpen || isClosing) && (
-        <button
-          type="button"
-          onClick={() => {
-            if (inCustomize) return
-            if (preferredAssistant === 'bid-comparison') {
-              window.dispatchEvent(new CustomEvent('rialto:bid-comparison-assistant', { detail: { open: true } }))
-              return
-            }
-            openChat()
-          }}
-          disabled={customizeMotion === 'entering'}
-          className={cn(
-            'fixed bottom-5 right-5 z-50 flex h-12 w-12 items-center justify-center rounded-full text-white shadow-2xl transition disabled:pointer-events-none',
-            customizeMotion === 'idle' && !isOpen ? 'hover:-translate-y-0.5 hover:shadow-xl' : '',
-            (customizeMotion === 'entering') ? 'animate-[site-assistant-to-customize_900ms_cubic-bezier(0.4,0,0.2,1)_forwards]' : '',
-            customizeMotion === 'exiting' ? 'animate-[site-assistant-from-customize_900ms_cubic-bezier(0.4,0,0.2,1)_forwards]' : '',
-          )}
-          style={{ background: '#fa6b04', '--rfq-customize-shift': customizeShift } as CSSProperties}
-          aria-label="AI Assistant"
-          title="AI Assistant"
-        >
-          <Bot className="h-5 w-5" />
-        </button>
-      )}
-
-      {/* Hidden file input */}
       <input
         ref={fileInputRef}
         type="file"
@@ -541,179 +498,104 @@ export function SiteAssistant({ storageScope }: SiteAssistantProps) {
         </section>
       )}
 
-      {/* Center pill chat */}
-      {isOpen && (
-        <section
-          ref={sectionRef}
-          className="fixed bottom-5 right-5 z-50 w-[min(440px,calc(100vw-1.5rem))]"
-          aria-label="AI Assistant"
-        >
-          <div
-            className={cn(
-              'overflow-hidden rounded-lg bg-white shadow-2xl',
-              isClosing ? 'animate-[sa-pill-collapse_200ms_ease-out_forwards]' : 'animate-[sa-messages-fade_220ms_ease-out_1]',
-            )}
-            style={{ border: '1px solid #d8e0db', boxShadow: '0 24px 70px rgba(30,58,47,0.18)' }}
-          >
-            <div className="flex items-center justify-between gap-3 border-b px-3.5 py-3" style={{ borderColor: '#edf1ee', background: '#fbfcfb' }}>
-              <div className="flex min-w-0 items-center gap-2.5">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white" style={{ background: '#fa6b04' }}>
-                  <Bot className="h-4 w-4" />
-                </span>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold leading-tight" style={{ color: '#1e3a2f' }}>Rialto assistant</p>
-                  <p className="text-[11px] leading-tight" style={{ color: '#7b8d86' }}>{isSending || isLoadingContext ? 'Working' : 'Ready'}</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={dismissChat}
-                className="flex h-8 w-8 items-center justify-center rounded-md transition hover:bg-[#f4f7f5]"
-                style={{ color: '#8a9e96' }}
-                aria-label="Close assistant"
-              >
-                <X className="h-4 w-4" />
-              </button>
+      {(!inCustomize || isOpen || isClosing) && (
+        <AssistantPillBarShell
+          shellRef={sectionRef}
+          ariaLabel="AI Assistant"
+          title="Rialto assistant"
+          status={status}
+          statusTone={error ? 'error' : 'normal'}
+          closing={isClosing}
+          compact={!isOpen || isClosing}
+          messages={visibleMessages}
+          listRef={listRef}
+          inputRef={inputRef}
+          inputValue={!isOpen || isClosing ? '' : draft}
+          placeholder={assistantPlaceholder}
+          inputDisabled={isSending}
+          sendDisabled={!draft.trim() || isSending}
+          sendLabel="Send"
+          sendingLabel="Thinking"
+          isSending={isSending || isLoadingContext}
+          error={error}
+          onInputChange={setDraft}
+          onSubmit={handleSubmit}
+          onActivate={activateAssistant}
+          onInputKeyDown={(event) => {
+            if (event.key === 'Escape') { event.preventDefault(); dismissChat() }
+          }}
+          leftActions={(
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition hover:bg-[#f4f7f5]"
+              style={{ color: '#8a9e96' }}
+              aria-label="Attach file"
+              title="Attach CSV to create RFQ"
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+          )}
+          activity={(isSending || isLoadingContext) && (
+            <div className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm shadow-sm" style={{ background: '#f7faf8', borderColor: '#dfe8e3', color: '#24463a' }}>
+              <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: '#fa6b04' }} />
+              {isLoadingContext ? 'Refreshing context...' : 'Thinking...'}
             </div>
-
-            {hasMessages && (
-              <div
-                ref={listRef}
-                className="max-h-[min(52vh,460px)] space-y-3 overflow-y-auto px-3.5 py-3.5"
-              >
-                  {visibleMessages.map((message) => (
-                    <div key={message.id}>
-                      <div className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-                        <div
-                          className="max-w-[88%] rounded-lg px-3 py-2 text-sm leading-6 shadow-sm"
-                          style={{
-                            background: message.role === 'user' ? '#1e3a2f' : '#f7faf8',
-                            border: message.role === 'assistant' ? '1px solid #dfe8e3' : '1px solid #1e3a2f',
-                            color: message.role === 'user' ? '#ffffff' : '#24463a',
-                          }}
-                        >
-                          <p className="whitespace-pre-wrap">{message.content}</p>
-                        </div>
-                      </div>
-                      {message.projects && message.projects.length > 0 && (
-                        <div className="mt-2 grid gap-2">
-                          {message.projects.map((project) => (
-                            <button
-                              key={project.id}
-                              type="button"
-                              onClick={() => void handleProjectOrRfqSelection(project.name)}
-                              className="rounded-lg px-3 py-2 text-left text-sm font-medium shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
-                              style={{ background: '#ffffff', color: '#1e3a2f', border: '1px solid #d8e0db' }}
-                            >
-                              <span className="font-semibold">{project.name}</span>
-                              {project.location && (
-                                <span className="ml-1.5 text-xs" style={{ color: '#8a9e96' }}>{project.location}</span>
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {message.rfqs && message.rfqs.length > 0 && (
-                        <div className="mt-2 grid gap-2">
-                          {message.rfqs.map((rfq) => (
-                            <button
-                              key={rfq.id}
-                              type="button"
-                              onClick={() => {
-                                setMessages((current) => [
-                                  ...current,
-                                  { id: makeId(), role: 'user', content: rfq.title },
-                                  { id: makeId(), role: 'assistant', content: `Taking you to ${rfq.title}...` },
-                                ])
-                                setTimeout(() => {
-                                  window.location.href = `/contractor/projects/${rfq.projectId}/rfqs/${rfq.id}`
-                                }, 800)
-                              }}
-                              className="rounded-lg px-3 py-2.5 text-left text-sm font-medium shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
-                              style={{ background: '#ffffff', color: '#1e3a2f', border: '1px solid #d8e0db' }}
-                            >
-                              <span className="font-semibold">{rfq.title}</span>
-                              <span className="ml-2 inline-flex items-center gap-1.5 text-xs" style={{ color: '#8a9e96' }}>
-                                {rfq.status}
-                                {typeof rfq.bidCount === 'number' && ` · ${rfq.bidCount} bid${rfq.bidCount === 1 ? '' : 's'}`}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  {(isSending || isLoadingContext) && (
-                    <div className="flex justify-start">
-                      <div
-                        className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm shadow-sm"
-                        style={{ background: '#f7faf8', borderColor: '#dfe8e3', color: '#24463a' }}
+          )}
+          renderMessageExtras={(message) => {
+            const richMessage = message as ChatMessage
+            return (
+              <>
+                {richMessage.projects && richMessage.projects.length > 0 && (
+                  <div className="mt-2 grid gap-2">
+                    {richMessage.projects.map((project) => (
+                      <button
+                        key={project.id}
+                        type="button"
+                        onClick={() => void handleProjectOrRfqSelection(project.name)}
+                        className="rounded-lg px-3 py-2 text-left text-sm font-medium shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                        style={{ background: '#ffffff', color: '#1e3a2f', border: '1px solid #d8e0db' }}
                       >
-                        <span className="h-2 w-2 animate-pulse rounded-full" style={{ background: '#fa6b04' }} />
-                        {isLoadingContext ? 'Refreshing context...' : 'Thinking...'}
-                      </div>
-                    </div>
-                  )}
-              </div>
-            )}
-
-            {error && (
-              <div className="mx-3.5 mb-3 rounded-lg px-3 py-2 text-xs font-medium" style={{ background: '#fff7ed', color: '#a85c2a', border: '1px solid #f2d8c5' }}>
-                {error}
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} className="border-t p-2.5" style={{ borderColor: '#edf1ee', background: '#ffffff' }}>
-              <div className="flex items-center gap-2 rounded-lg border bg-white px-2 py-2" style={{ borderColor: '#d8e0db' }}>
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white" style={{ background: '#fa6b04' }} aria-hidden="true">
-                  <Bot className="h-4 w-4" />
-                </span>
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition hover:bg-[#f4f7f5]"
-                  style={{ color: '#8a9e96' }}
-                  aria-label="Attach file"
-                  title="Attach CSV to create RFQ"
-                >
-                  <Paperclip className="h-4 w-4" />
-                </button>
-                <input
-                  ref={inputRef}
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  className="min-w-0 flex-1 bg-transparent py-1.5 text-sm outline-none"
-                  style={{ color: '#1e3a2f' }}
-                  placeholder="Ask Rialto..."
-                  disabled={isSending}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Escape') { event.preventDefault(); dismissChat() }
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={startNewChat}
-                  disabled={isLoadingContext || isSending || messages.length <= 1}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition disabled:opacity-40"
-                  style={{ color: '#8a9e96' }}
-                  aria-label="New chat"
-                  title="New chat"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="submit"
-                  disabled={!draft.trim() || isSending}
-                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-white transition-opacity disabled:opacity-60"
-                  style={{ background: '#1e3a2f' }}
-                >
-                  <Send className="h-3.5 w-3.5" />
-                  {isSending ? 'Thinking' : 'Send'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </section>
+                        <span className="font-semibold">{project.name}</span>
+                        {project.location && (
+                          <span className="ml-1.5 text-xs" style={{ color: '#8a9e96' }}>{project.location}</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {richMessage.rfqs && richMessage.rfqs.length > 0 && (
+                  <div className="mt-2 grid gap-2">
+                    {richMessage.rfqs.map((rfq) => (
+                      <button
+                        key={rfq.id}
+                        type="button"
+                        onClick={() => {
+                          setMessages((current) => [
+                            ...current,
+                            { id: makeId(), role: 'user', content: rfq.title },
+                            { id: makeId(), role: 'assistant', content: `Taking you to ${rfq.title}...` },
+                          ])
+                          setTimeout(() => {
+                            window.location.href = `/contractor/projects/${rfq.projectId}/rfqs/${rfq.id}`
+                          }, 800)
+                        }}
+                        className="rounded-lg px-3 py-2.5 text-left text-sm font-medium shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                        style={{ background: '#ffffff', color: '#1e3a2f', border: '1px solid #d8e0db' }}
+                      >
+                        <span className="font-semibold">{rfq.title}</span>
+                        <span className="ml-2 inline-flex items-center gap-1.5 text-xs" style={{ color: '#8a9e96' }}>
+                          {rfq.status}
+                          {typeof rfq.bidCount === 'number' && ` - ${rfq.bidCount} bid${rfq.bidCount === 1 ? '' : 's'}`}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )
+          }}
+        />
       )}
     </>
   )

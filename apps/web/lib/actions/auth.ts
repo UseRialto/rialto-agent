@@ -15,6 +15,17 @@ import {
 
 export type FormState = { errors?: Record<string, string[]>; message?: string } | undefined
 
+function authStorageErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  const cause = error instanceof Error && 'cause' in error
+    ? String((error as { cause?: unknown }).cause)
+    : ''
+  if (`${message} ${cause}`.includes('DATABASE_URL is not configured')) {
+    return 'Database is not configured. Add DATABASE_URL to apps/web/.env.local to sign in locally.'
+  }
+  return 'Authentication is temporarily unavailable. Please try again.'
+}
+
 // --- Login ---
 const loginSchema = z.object({
   email: z.string().email('Invalid email address'),
@@ -32,7 +43,12 @@ export async function loginAction(_state: FormState, formData: FormData): Promis
   }
 
   const { email, password } = parsed.data
-  const user = await findUserByEmail(email)
+  let user
+  try {
+    user = await findUserByEmail(email)
+  } catch (error) {
+    return { message: authStorageErrorMessage(error) }
+  }
 
   if (!user || !(await bcrypt.compare(password, user.password_hash))) {
     return { message: 'Invalid email or password.' }
@@ -73,12 +89,21 @@ export async function registerAction(_state: FormState, formData: FormData): Pro
   const { name, email, password } = parsed.data
   const role = parsed.data.role ?? 'contractor'
 
-  if (await findUserByEmail(email)) {
-    return { message: 'An account with this email already exists.' }
+  try {
+    if (await findUserByEmail(email)) {
+      return { message: 'An account with this email already exists.' }
+    }
+  } catch (error) {
+    return { message: authStorageErrorMessage(error) }
   }
 
   const password_hash = await bcrypt.hash(password, 12)
-  const user = await createUser({ email, password_hash, name, role, onboarding_completed: false })
+  let user
+  try {
+    user = await createUser({ email, password_hash, name, role, onboarding_completed: false })
+  } catch (error) {
+    return { message: authStorageErrorMessage(error) }
+  }
 
   await createSession({
     userId: user.id,

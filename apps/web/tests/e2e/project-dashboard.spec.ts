@@ -17,4 +17,23 @@ test.describe('Contractor project dashboard', () => {
       await expect(page.getByRole('link', { name: tab })).toBeVisible()
     }
   })
+
+  test('opens and reopens the bottom-center AI assistant pill bar', async ({ page }) => {
+    await page.goto(`/contractor/projects/${PROJECT_ID}`)
+
+    const collapsedAssistant = page.getByRole('button', { name: 'AI Assistant' })
+    await expect(collapsedAssistant).toBeVisible()
+
+    await collapsedAssistant.click()
+    const assistant = page.locator('section[aria-label="AI Assistant"]')
+    await expect(assistant).toBeVisible()
+    await expect(assistant.getByPlaceholder('Ask Rialto...')).toBeVisible()
+    await expect(assistant.getByRole('button', { name: 'Attach file' })).toBeVisible()
+
+    await assistant.getByRole('button', { name: 'Close assistant' }).click()
+    await expect(collapsedAssistant).toBeVisible()
+
+    await collapsedAssistant.click()
+    await expect(page.locator('section[aria-label="AI Assistant"]')).toBeVisible()
+  })
 })
