@@ -3,7 +3,10 @@ import {
   buildQuoteComparisonSummaryAnswer,
   buildQuoteImportAnalyticsHighlights,
   buildQuoteImportReviewHighlights,
+  EMAIL_REVIEW_HIGHLIGHT,
   IMPORT_REVIEW_HIGHLIGHT,
+  importReviewCategoryFromHighlightId,
+  importReviewCategoryLabel,
   PRICING_MISTAKE_HIGHLIGHT,
 } from './comparison-analytics'
 import type { ContractorBid, ContractorRFQ } from '@/lib/types/contractor'
@@ -82,6 +85,39 @@ describe('comparison analytics', () => {
       color: IMPORT_REVIEW_HIGHLIGHT,
       note: expect.stringContaining('Original: $1,100.00 per 1,000 lf.'),
     })])
+  })
+
+  it('builds light red review highlights from uncertain email reply extraction metadata', () => {
+    const reviewedBid = bid('vendor-email', 'Email Supply', { 'line-drywall': 12.5 })
+    reviewedBid.source = 'email'
+    reviewedBid.status = 'under_review'
+    reviewedBid.line_item_responses[0].response_attributes = [{
+      key: 'email_review:line_match',
+      label: 'Email Reply Review',
+      value: JSON.stringify({
+        category: 'line_match',
+        confidence: 0.71,
+        reason: 'Confirm this reply attachment matched the requested drywall line.',
+      }),
+      source: 'system',
+    }]
+
+    const highlights = buildQuoteImportReviewHighlights(rfq, [reviewedBid])
+
+    expect(highlights).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'email-review-line_match-line-drywall-vendor-email-unit_price',
+        selector: { kind: 'cell', rowKey: 'line-drywall', colKey: 'vendor:vendor-email:unit_price' },
+        color: EMAIL_REVIEW_HIGHLIGHT,
+        note: expect.stringContaining('Confirm this reply attachment matched the requested drywall line.'),
+      }),
+      expect.objectContaining({
+        id: 'email-review-line_match-line-drywall-vendor-email-total',
+        selector: { kind: 'cell', rowKey: 'line-drywall', colKey: 'vendor:vendor-email:total' },
+      }),
+    ]))
+    expect(importReviewCategoryFromHighlightId('email-review-line_match-line-drywall-vendor-email-unit_price')).toBe('email_line_match')
+    expect(importReviewCategoryLabel('email_line_match')).toBe('Email reply line matches')
   })
 
   it('does not build purple pricing mistake highlights for different-unit price basis metadata', () => {

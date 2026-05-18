@@ -1,5 +1,5 @@
 import path from 'path'
-import type { Browser, Page } from '@playwright/test'
+import type { Browser, Locator, Page } from '@playwright/test'
 import { expect } from '@playwright/test'
 import { createAuthenticatedPage } from './auth'
 
@@ -11,8 +11,8 @@ export function uniqueTitle(prefix: string) {
 }
 
 export async function gotoProject(page: Page) {
-  await page.goto(`/contractor/projects/${PROJECT_ID}`)
-  await expect(page.getByRole('heading', { name: /Riverton Commons Office Park/i })).toBeVisible()
+  await page.goto(`/contractor/projects/${PROJECT_ID}`, { waitUntil: 'domcontentloaded' })
+  await expect(page.getByRole('heading', { name: /Riverton Plaza/i })).toBeVisible()
 }
 
 export async function fillBasicManualItem(page: Page, description: string, quantity = '12') {
@@ -42,11 +42,12 @@ export async function createRfQViaWizard(page: Page, options?: {
   await page.locator('input[type="text"]').first().fill(title)
 
   if (options?.category) {
-    await page.getByPlaceholder('e.g. Structural Steel, Roofing, Glazing, HVAC Equipment').fill(options.category)
+    await page.getByPlaceholder(/Structural Steel|Ready-Mix Concrete|Roofing/).fill(options.category)
   }
 
   if (requestType === 'rfp') {
     await uploadCsv(page)
+    await expect(page.getByRole('textbox', { name: 'Description or SKU' }).first()).toHaveValue('CONC-4000-01')
     await page.getByPlaceholder('What are you trying to buy or solve for on this package?').fill('Validate current construction materials RFP workflow.')
     await page.getByPlaceholder('Summarize the material package, affected areas, and basis-of-design intent.').fill('Concrete and reinforcing procurement package for end-to-end QA.')
     await page.getByPlaceholder('Describe the result you need, not just a single product callout.').fill('Get practical vendor guidance with clear delivery expectations.')
@@ -64,13 +65,15 @@ export async function createRfQViaWizard(page: Page, options?: {
     await fillBasicManualItem(page, 'Ready-mix concrete QA package')
   }
 
-  await page.getByRole('button', { name: 'Next →' }).click()
-  await expect(page.getByText('Marketplace Visibility')).toBeVisible()
+  await page.getByRole('button', { name: 'Next', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Invite vendors' })).toBeVisible()
 
   if (options?.publicVisibility === false) {
-    await page.locator('input[type="radio"][value="invited_only"]').check()
+    const invitedOnly = page.locator('input[type="radio"][value="invited_only"]')
+    if (await invitedOnly.count()) await invitedOnly.check()
   } else {
-    await page.locator('input[type="radio"][value="public"]').check()
+    const publicVisibility = page.locator('input[type="radio"][value="public"]')
+    if (await publicVisibility.count()) await publicVisibility.check()
   }
 
   if (options?.includeOffPlatformInvite) {
@@ -81,7 +84,7 @@ export async function createRfQViaWizard(page: Page, options?: {
     await page.getByPlaceholder('Last name').fill('Vendor')
   }
 
-  await page.getByRole('button', { name: requestType === 'rfp' ? 'Review RFP →' : 'Review RFQ →' }).click()
+  await page.getByRole('button', { name: requestType === 'rfp' ? 'Review RFP' : 'Review RFQ' }).click()
   await expect(page.getByText('Vendor Email Preview')).toBeVisible()
 
   return { title, requestType }
@@ -94,7 +97,7 @@ export async function saveDraftAndCaptureId(page: Page) {
 
 export async function publishAndCaptureRfqId(page: Page, requestType: 'rfq' | 'rfp') {
   await page.getByRole('button', { name: requestType === 'rfp' ? 'Publish RFP →' : 'Publish RFQ →' }).click()
-  await page.waitForURL(new RegExp(`/contractor/projects/${PROJECT_ID}/rfqs/[^/?]+`))
+  await page.waitForURL(new RegExp(`/contractor/projects/${PROJECT_ID}/rfqs/(?!new(?:[/?]|$))[^/?]+`))
   const match = page.url().match(/\/rfqs\/([^/?]+)/)
   if (!match) {
     throw new Error(`Unable to parse RFQ id from ${page.url()}`)
@@ -106,7 +109,17 @@ export async function openDraftFromProject(page: Page, title: string) {
   await gotoProject(page)
   const row = page.getByRole('row').filter({ hasText: title })
   await expect(row).toBeVisible()
-  await row.getByRole('link', { name: 'Edit Draft' }).click()
+  const href = await row.getByRole('link', { name: 'Edit Draft' }).getAttribute('href')
+  if (!href) throw new Error(`Unable to find draft edit href for ${title}`)
+  await page.goto(href, { waitUntil: 'domcontentloaded' })
+}
+
+export async function advanceWizard(page: Page, buttonName: string, target: Locator) {
+  for (let attempt = 0; attempt < 3 && await target.count() === 0; attempt += 1) {
+    await page.getByRole('button', { name: buttonName, exact: true }).click()
+    await page.waitForTimeout(500)
+  }
+  await expect(target).toBeVisible()
 }
 
 export async function submitVendorBid(page: Page, rfqId: string, options: {

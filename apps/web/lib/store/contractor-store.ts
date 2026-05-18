@@ -39,6 +39,35 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
   }
 }
 
+async function withTransientDbRetry<T>(operation: () => Promise<T>): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await operation()
+    } catch (error) {
+      lastError = error
+      if (!isTransientDbError(error) || attempt === 3) throw error
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt))
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Database operation failed.')
+}
+
+function isTransientDbError(error: unknown): boolean {
+  const text = collectErrorText(error).toLowerCase()
+  return text.includes('fetch failed') ||
+    text.includes('terminated') ||
+    text.includes('econnreset') ||
+    text.includes('network') ||
+    text.includes('timeout')
+}
+
+function collectErrorText(error: unknown): string {
+  if (!(error instanceof Error)) return String(error ?? '')
+  const cause = 'cause' in error ? (error as { cause?: unknown }).cause : undefined
+  return `${error.name} ${error.message} ${collectErrorText(cause)}`
+}
+
 // ---------------------------------------------------------------------------
 // Assemblers - convert flat DB rows to nested domain types
 // ---------------------------------------------------------------------------
@@ -266,13 +295,15 @@ export async function getAllProjects(): Promise<ContractorProject[]> {
 }
 
 export async function getProject(id: string): Promise<ContractorProject | null> {
-  const row = (await db.select().from(projectsTable).where(eq(projectsTable.id, id)))[0]
-  if (!row) return null
-  const [specDocuments, specPackages] = await Promise.all([
-    listProjectSpecDocuments(id),
-    listProjectSpecPackages(id),
-  ])
-  return { ...rowToProject(row), spec_documents: specDocuments, spec_packages: specPackages }
+  return withTransientDbRetry(async () => {
+    const row = (await db.select().from(projectsTable).where(eq(projectsTable.id, id)))[0]
+    if (!row) return null
+    const [specDocuments, specPackages] = await Promise.all([
+      listProjectSpecDocuments(id),
+      listProjectSpecPackages(id),
+    ])
+    return { ...rowToProject(row), spec_documents: specDocuments, spec_packages: specPackages }
+  })
 }
 
 export async function saveProject(project: ContractorProject): Promise<void> {
@@ -568,34 +599,38 @@ export async function deleteRFQ(rfqId: string): Promise<void> {
 }
 
 export async function getProjectRFQs(projectId: string, status?: string): Promise<ContractorRFQ[]> {
-  let rows = await db
-    .select()
-    .from(rfqsTable)
-    .where(eq(rfqsTable.project_id, projectId))
-    .orderBy(desc(rfqsTable.created_at), desc(rfqsTable.id))
+  return withTransientDbRetry(async () => {
+    let rows = await db
+      .select()
+      .from(rfqsTable)
+      .where(eq(rfqsTable.project_id, projectId))
+      .orderBy(desc(rfqsTable.created_at), desc(rfqsTable.id))
 
-  if (status && status !== 'all') {
-    if (status === 'pending') rows = rows.filter((r) => r.status === 'draft')
-    else if (status === 'active') rows = rows.filter((r) => r.status === 'active')
-    else if (status === 'closed') rows = rows.filter((r) => r.status === 'closed')
-    else rows = rows.filter((r) => r.status === status)
-  }
+    if (status && status !== 'all') {
+      if (status === 'pending') rows = rows.filter((r) => r.status === 'draft')
+      else if (status === 'active') rows = rows.filter((r) => r.status === 'active')
+      else if (status === 'closed') rows = rows.filter((r) => r.status === 'closed')
+      else rows = rows.filter((r) => r.status === status)
+    }
 
-  return Promise.all(rows.map(async (row) => {
-    const lineItems = await db.select().from(rfqLineItemsTable).where(eq(rfqLineItemsTable.rfq_id, row.id))
-    const invites = await db.select().from(rfqInvitesTable).where(eq(rfqInvitesTable.rfq_id, row.id))
-    return assembleRFQ(row, lineItems, invites)
-  }))
+    return Promise.all(rows.map(async (row) => {
+      const lineItems = await db.select().from(rfqLineItemsTable).where(eq(rfqLineItemsTable.rfq_id, row.id))
+      const invites = await db.select().from(rfqInvitesTable).where(eq(rfqInvitesTable.rfq_id, row.id))
+      return assembleRFQ(row, lineItems, invites)
+    }))
+  })
 }
 
 export async function getProjectRFQCounts(projectId: string): Promise<ProjectRFQCounts> {
-  const rows = await db.select({ status: rfqsTable.status }).from(rfqsTable).where(eq(rfqsTable.project_id, projectId))
-  return {
-    total: rows.length,
-    pending: rows.filter((r) => r.status === 'draft').length,
-    active: rows.filter((r) => r.status === 'active').length,
-    closed: rows.filter((r) => r.status === 'closed').length,
-  }
+  return withTransientDbRetry(async () => {
+    const rows = await db.select({ status: rfqsTable.status }).from(rfqsTable).where(eq(rfqsTable.project_id, projectId))
+    return {
+      total: rows.length,
+      pending: rows.filter((r) => r.status === 'draft').length,
+      active: rows.filter((r) => r.status === 'active').length,
+      closed: rows.filter((r) => r.status === 'closed').length,
+    }
+  })
 }
 
 export type ProjectRFQCounts = { total: number; pending: number; active: number; closed: number }

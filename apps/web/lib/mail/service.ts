@@ -64,6 +64,7 @@ const MICROSOFT_SCOPES = [
 const RECENT_THREAD_LIMIT = 120
 const MATCH_WINDOW_DAYS = 30
 const MAIL_ROOT = path.join(process.cwd(), '.local', 'uploads', 'mail')
+const GOOGLE_GMAIL_PUBSUB_TOPIC = process.env.GOOGLE_GMAIL_PUBSUB_TOPIC?.trim() ?? ''
 
 type MailboxRow = typeof contractorMailboxes.$inferSelect
 
@@ -325,6 +326,21 @@ function parseLeadTimeDays(value: string) {
   return unit.startsWith('week') ? qty * 7 : qty
 }
 
+function emailReviewAttributes(input: { status: ContractorBid['status']; confidence: number; notes?: string }) {
+  if (input.status !== 'under_review') return []
+  return [{
+    key: 'email_review:line_match',
+    label: 'Email Reply Review',
+    source: 'system' as const,
+    value: JSON.stringify({
+      category: 'line_match',
+      confidence: input.confidence,
+      reason: 'Rialto parsed this vendor email reply with uncertainty. Confirm the matched line item and extracted quote values before relying on this comparison cell.',
+      sourceNotes: input.notes ?? '',
+    }),
+  }]
+}
+
 function getGoogleOAuthSettings(): OAuthSettings {
   return {
     clientId: process.env.GOOGLE_CLIENT_ID?.trim() ?? '',
@@ -432,6 +448,15 @@ async function updateMailbox(userId: string, updates: Partial<typeof contractorM
   await ensureMailboxRow(userId)
   await db.update(contractorMailboxes).set({ ...updates, updated_at: nowIso() }).where(eq(contractorMailboxes.user_id, userId))
   return getMailboxRow(userId)
+}
+
+async function connectedMailboxRows(provider?: MailProvider) {
+  const rows = await db
+    .select()
+    .from(contractorMailboxes)
+    .where(sql`${contractorMailboxes.email_address} != '' and (${contractorMailboxes.refresh_token} != '' or ${contractorMailboxes.access_token} != '')`)
+    .orderBy(desc(contractorMailboxes.last_sync_at), desc(contractorMailboxes.updated_at))
+  return provider ? rows.filter((row) => mailboxProvider(row) === provider) : rows
 }
 
 async function clearMailbox(userId: string) {
@@ -725,6 +750,37 @@ async function fetchGmailAttachment(userId: string, gmailMessageId: string, atta
     `/messages/${gmailMessageId}/attachments/${attachmentId}`,
   )
   return decodeBase64UrlBytes(response.data)
+}
+
+export async function ensureGoogleMailboxWatch(userId: string) {
+  if (!GOOGLE_GMAIL_PUBSUB_TOPIC) {
+    return { configured: false, watched: false }
+  }
+  const response = await googleApiRequest<{ historyId?: string; expiration?: string }>(
+    userId,
+    'POST',
+    '/watch',
+    {
+      body: {
+        topicName: GOOGLE_GMAIL_PUBSUB_TOPIC,
+        labelIds: ['INBOX'],
+        labelFilterBehavior: 'include',
+      },
+    },
+  )
+  const historyId = String(response.historyId ?? '')
+  if (historyId) {
+    await updateMailbox(userId, {
+      gmail_history_id: historyId,
+      provider_sync_cursor: historyId,
+    })
+  }
+  return {
+    configured: true,
+    watched: true,
+    historyId,
+    expiration: response.expiration ? String(response.expiration) : undefined,
+  }
 }
 
 function buildGoogleAuthUrl(stateToken: string, redirectUri: string) {
@@ -1449,6 +1505,11 @@ async function projectQuoteResponseToBid(rfqId: string, vendorRequestId: number,
         units_available: undefined,
         notes: quoteLine.notes || undefined,
         quoted_product_details: quoteLine.notes || undefined,
+        response_attributes: emailReviewAttributes({
+          status,
+          confidence: quoteLine.confidence,
+          notes: quoteLine.notes || undefined,
+        }),
       }
     })
     .filter((row): row is NonNullable<typeof row> => Boolean(row))
@@ -1515,6 +1576,7 @@ async function projectQuoteResponseToBid(rfqId: string, vendorRequestId: number,
       delivery_terms: null,
       notes: response.notes ?? null,
       quoted_product_details: response.quoted_product_details ?? null,
+      response_attributes_json: JSON.stringify(response.response_attributes ?? []),
     })),
   )
   await runBidSpecCompliance(bidId).catch((error) => {
@@ -2278,6 +2340,11 @@ async function attachMailbox(provider: MailProvider, code: string, userId: strin
     auth_state: '',
     gmail_history_id: '',
   })
+  if (provider === 'google') {
+    await ensureGoogleMailboxWatch(userId).catch((error) => {
+      console.error('Failed to register Gmail push watch:', error)
+    })
+  }
 
   return { emailAddress }
 }
@@ -2580,8 +2647,7 @@ export async function sendNegotiationThreadReply(params: {
   await updateMailbox(params.userId, { last_sync_at: nowIso() })
 }
 
-export async function syncRFQReplies(userId: string, rfqId: string, forceFull = false) {
-  await assertContractorOwnsRFQ(userId, rfqId)
+export async function syncMailboxReplies(userId: string, forceFull = false) {
   const mailbox = await assertSendableMailbox(userId)
   const provider = mailboxProvider(mailbox)
   if (provider === 'microsoft_365') {
@@ -2601,9 +2667,11 @@ export async function syncRFQReplies(userId: string, rfqId: string, forceFull = 
     return {
       mode: forceFull ? 'full' : 'incremental',
       syncedThreads,
-      summary: getRFQEmailWorkflowSummary(userId, rfqId),
     }
   }
+  await ensureGoogleMailboxWatch(userId).catch((error) => {
+    console.error('Failed to refresh Gmail push watch:', error)
+  })
   const profile = await fetchGoogleProfile(userId)
   const currentHistoryId = String(profile.historyId ?? '')
   const trackedIds = await trackedThreadIdsForUser(userId)
@@ -2646,10 +2714,87 @@ export async function syncRFQReplies(userId: string, rfqId: string, forceFull = 
   return {
     mode,
     syncedThreads,
+  }
+}
+
+export async function syncRFQReplies(userId: string, rfqId: string, forceFull = false) {
+  await assertContractorOwnsRFQ(userId, rfqId)
+  const result = await syncMailboxReplies(userId, forceFull)
+  return {
+    ...result,
     summary: getRFQEmailWorkflowSummary(userId, rfqId),
   }
 }
 
 export async function syncRFQMailbox(userId: string, rfqId: string, forceFull = false) {
   return syncRFQReplies(userId, rfqId, forceFull)
+}
+
+export async function syncConnectedMailboxes(options: { forceFull?: boolean; provider?: MailProvider } = {}) {
+  const mailboxes = await connectedMailboxRows(options.provider)
+  const results: Array<{ userId: string; emailAddress: string; provider: MailProvider; success: boolean; mode?: string; syncedThreads?: number; error?: string }> = []
+  for (const mailbox of mailboxes) {
+    try {
+      const result = await syncMailboxReplies(mailbox.user_id, Boolean(options.forceFull))
+      results.push({
+        userId: mailbox.user_id,
+        emailAddress: mailbox.email_address,
+        provider: mailboxProvider(mailbox),
+        success: true,
+        mode: result.mode,
+        syncedThreads: result.syncedThreads,
+      })
+    } catch (error) {
+      results.push({
+        userId: mailbox.user_id,
+        emailAddress: mailbox.email_address,
+        provider: mailboxProvider(mailbox),
+        success: false,
+        error: humanizeMailError(error),
+      })
+    }
+  }
+  return {
+    mailboxCount: mailboxes.length,
+    successCount: results.filter((result) => result.success).length,
+    failureCount: results.filter((result) => !result.success).length,
+    syncedThreads: results.reduce((sum, result) => sum + (result.syncedThreads ?? 0), 0),
+    results,
+  }
+}
+
+export async function syncGoogleMailboxPushNotification(input: { emailAddress?: string; historyId?: string }) {
+  const emailAddress = input.emailAddress?.trim().toLowerCase() ?? ''
+  const rows = (await connectedMailboxRows('google')).filter((mailbox) => (
+    !emailAddress || mailbox.email_address.toLowerCase() === emailAddress
+  ))
+  const results = []
+  for (const mailbox of rows) {
+    try {
+      const result = await syncMailboxReplies(mailbox.user_id, false)
+      results.push({
+        userId: mailbox.user_id,
+        emailAddress: mailbox.email_address,
+        success: true,
+        mode: result.mode,
+        syncedThreads: result.syncedThreads,
+      })
+    } catch (error) {
+      results.push({
+        userId: mailbox.user_id,
+        emailAddress: mailbox.email_address,
+        success: false,
+        error: humanizeMailError(error),
+      })
+    }
+  }
+  return {
+    emailAddress,
+    historyId: input.historyId ?? '',
+    mailboxCount: rows.length,
+    successCount: results.filter((result) => result.success).length,
+    failureCount: results.filter((result) => !result.success).length,
+    syncedThreads: results.reduce((sum, result) => sum + (result.syncedThreads ?? 0), 0),
+    results,
+  }
 }

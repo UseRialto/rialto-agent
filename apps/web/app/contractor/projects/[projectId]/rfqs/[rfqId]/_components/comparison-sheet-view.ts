@@ -305,6 +305,20 @@ export function useComparisonSheetView(userKey: string, rfqId: string, options: 
     updateView((prev) => ({ ...prev, highlights: prev.highlights.filter((h) => !ids.includes(h.id)) }))
   }, [updateView])
 
+  const acknowledgeReviewHighlights = useCallback((ids: string[]) => {
+    if (ids.length === 0) return
+    pendingVersionMetadataRef.current = {
+      source: 'estimator-edit',
+      historyMode: 'snapshot',
+      summary: `Acknowledged ${ids.length} review highlight${ids.length === 1 ? '' : 's'}.`,
+    }
+    updateView((prev) => ({
+      ...prev,
+      acknowledgedReviewHighlightIds: Array.from(new Set([...(prev.acknowledgedReviewHighlightIds ?? []), ...ids])),
+      highlights: prev.highlights.filter((h) => !ids.includes(h.id)),
+    }))
+  }, [updateView])
+
   const clearHighlights = useCallback(() => {
     pendingVersionMetadataRef.current = {
       source: 'estimator-edit',
@@ -415,6 +429,7 @@ export function useComparisonSheetView(userKey: string, rfqId: string, options: 
     showLineItems,
     addHighlights,
     removeHighlights,
+    acknowledgeReviewHighlights,
     clearHighlights,
     addDerivedColumns,
     removeDerivedColumns,

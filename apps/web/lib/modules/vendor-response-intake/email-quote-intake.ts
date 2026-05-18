@@ -40,6 +40,7 @@ export interface InlineEmailQuoteModelOutput {
 }
 
 const MAX_EMAIL_BODY_CHARS = 60_000
+const AUTO_COMPARE_CONFIDENCE_THRESHOLD = 0.82
 
 function sourceKindForAttachment(sourceKind: string): ExternalQuoteImportSourceKind {
   return sourceKind === 'pdf' ? 'pdf' : 'spreadsheet'
@@ -177,6 +178,7 @@ function localInlineEmailModelFallback(input: EmailQuoteIntakeInput): InlineEmai
 
 export async function extractEmailQuoteIntake(input: EmailQuoteIntakeInput): Promise<EmailQuoteIntakeResult> {
   const warnings: Array<{ message: string }> = []
+  let parsedAttachmentSourceKind = ''
   const attachmentResponses = input.attachments.flatMap((attachment) => {
     if (!attachment.text.trim()) return []
     const draft = buildVendorQuoteDraft({
@@ -187,6 +189,9 @@ export async function extractEmailQuoteIntake(input: EmailQuoteIntakeInput): Pro
       text: attachment.text,
     })
     warnings.push(...draft.warnings)
+    if (draft.lineItemResponses.length > 0 && !parsedAttachmentSourceKind) {
+      parsedAttachmentSourceKind = attachment.sourceKind
+    }
     return draft.lineItemResponses
   })
   const attachmentLineItemResponses = dedupeByLineItem(attachmentResponses)
@@ -195,9 +200,9 @@ export async function extractEmailQuoteIntake(input: EmailQuoteIntakeInput): Pro
     return {
       lineItemResponses: attachmentLineItemResponses,
       warnings,
-      sourceKind: input.attachments[0]?.sourceKind || 'attachment',
+      sourceKind: parsedAttachmentSourceKind || 'attachment',
       confidence,
-      needsReview: confidence < 0.6 || warnings.some((warning) => /could not match/i.test(warning.message)),
+      needsReview: confidence < AUTO_COMPARE_CONFIDENCE_THRESHOLD || warnings.some((warning) => /could not match/i.test(warning.message)),
     }
   }
 
@@ -248,6 +253,6 @@ export async function extractEmailQuoteIntake(input: EmailQuoteIntakeInput): Pro
     warnings,
     sourceKind: 'email',
     confidence,
-    needsReview: confidence < 0.6 || warnings.some((warning) => /could not match/i.test(warning.message)),
+    needsReview: confidence < AUTO_COMPARE_CONFIDENCE_THRESHOLD || warnings.some((warning) => /could not match/i.test(warning.message)),
   }
 }

@@ -8,20 +8,29 @@ import {
 import { canAccessContractorProject } from '@/lib/auth/project-access'
 import { getSession } from '@/lib/auth/session'
 import { contractorRFQStatusLabel, contractorRFQStatusStyle } from '@/lib/contractor-display'
-import { getMailboxSummary } from '@/lib/mail/service'
+import { getMailboxSummary, getRFQEmailWorkflowSummary } from '@/lib/mail/service'
 import { buildLiveQuoteComparisonSummary } from '@/lib/procurement/quote-comparison'
 import { getNegotiationMessagesForVendor } from '@/lib/store/contractor-store'
+import type { ContractorRFQ } from '@/lib/types/contractor'
 import { formatDate } from '@/lib/utils'
 import { BidDashboard } from './_components/BidDashboard'
 import { EditableRFQTitle } from './_components/EditableRFQTitle'
 import { ImportStatusBubble } from './_components/ImportStatusBubble'
 import { MessageCenter } from './_components/MessageCenter'
 import { InviteAdditionalVendorsButton, RFQActions } from './_components/RFQActions'
+import { RFQMailboxPanel } from './_components/RFQMailboxPanel'
 
 function fmt(n: number): string {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`
   if (n >= 1_000) return `$${(n / 1_000).toFixed(1).replace(/\.0$/, '')}k`
   return `$${n.toLocaleString()}`
+}
+
+function draftEditPath(projectId: string, rfq: ContractorRFQ) {
+  const base = rfq.request_type === 'rfp'
+    ? `/contractor/projects/${projectId}/rfps/new`
+    : `/contractor/projects/${projectId}/rfqs/new`
+  return `${base}?rfqId=${encodeURIComponent(rfq.id)}`
 }
 
 export async function generateMetadata({
@@ -67,6 +76,9 @@ export default async function RFQDetailPage({
   ])
   if (!canAccessContractorProject(session, project)) notFound()
   const mailbox = session ? await getMailboxSummary(session.userId) : null
+  const emailWorkflowSummary = session && rfq.status === 'active'
+    ? await getRFQEmailWorkflowSummary(session.userId, rfq.id)
+    : null
   const messageVendors = (rfq.invites ?? [])
     .filter((invite) => invite.vendor_email)
     .map((invite) => ({
@@ -209,9 +221,9 @@ export default async function RFQDetailPage({
         <div className="flex shrink-0 flex-col items-end gap-2 lg:relative">
           <div className="flex flex-col items-end gap-2 lg:absolute lg:bottom-full lg:right-0 lg:mb-2">
             <div className="flex items-center justify-end gap-2">
-              {rfq.status === 'draft' && rfq.request_type === 'rfq' && (
+              {rfq.status === 'draft' && (
                 <Link
-                  href={`/contractor/projects/${projectId}/rfqs/new?rfqId=${rfq.id}`}
+                  href={draftEditPath(projectId, rfq)}
                   className="inline-flex items-center gap-1.5 rounded border px-3 py-1.5 text-xs font-medium transition-colors"
                   style={{ borderColor: '#e8c4a0', background: '#fdf0e8', color: '#a85c2a' }}
                 >
@@ -307,7 +319,10 @@ export default async function RFQDetailPage({
       )}
 
       {activeSection === 'message-center' && (
-        <section>
+        <section className="space-y-6">
+          {emailWorkflowSummary && (
+            <RFQMailboxPanel rfqId={rfq.id} summary={emailWorkflowSummary} />
+          )}
           <MessageCenter
             rfqId={rfq.id}
             mailboxConnected={Boolean(mailbox?.connected)}

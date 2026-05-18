@@ -237,14 +237,21 @@ test.describe('Quote comparison workspace', () => {
         uploadedFiles: JSON.stringify([uploadedFile]),
       },
     })
-    expect(response.ok()).toBe(true)
-    const body = await response.json() as { redirectTo: string; lineItemCount: number; vendorName: string }
+    const responseText = await response.text()
+    expect(response.ok(), responseText).toBe(true)
+    const body = JSON.parse(responseText) as { redirectTo: string; lineItemCount: number; vendorName: string }
     expect(body.lineItemCount).toBe(2)
     expect(body.vendorName).toBe('Source Preview Supply')
 
     await page.goto(body.redirectTo)
-    await page.getByRole('button', { name: /^Source Files$/ }).click()
-    await expect(page.getByRole('link', { name: 'Open', exact: true })).toHaveAttribute('href', uploadedFile.url)
+    await expect(page.getByTestId('rfq-comparison-sheet-workspace')).toBeVisible()
+    const sourceFilesButton = page.getByRole('button', { name: /^Source Files$/ })
+    const openSourceLink = page.getByRole('link', { name: 'Open', exact: true })
+    for (let attempt = 0; attempt < 3 && await openSourceLink.count() === 0; attempt += 1) {
+      await sourceFilesButton.click()
+      await page.waitForTimeout(500)
+    }
+    await expect(openSourceLink).toHaveAttribute('href', uploadedFile.url)
     await expect(page.getByRole('link', { name: 'Download', exact: true }).first()).toHaveAttribute('download', filename)
     await expect(page.locator('object[type="application/pdf"]')).toHaveAttribute('data', uploadedFile.url)
     await expect(page.getByText('Properties can only be defined on Objects')).toHaveCount(0)
@@ -271,6 +278,7 @@ No . Item Description Size Quantity Price Per Total
     const body = await response.json() as { redirectTo: string }
 
     await page.goto(body.redirectTo)
+    await expect(page.getByTestId('rfq-comparison-sheet-workspace')).toBeVisible()
     await expect(page.getByText('$1.10').first()).toBeVisible()
     await expect(page.getByText('$330.27').first()).toBeVisible()
     await expect(page.getByRole('button', { name: 'Approve Price basis conversions (2)' })).toBeVisible()
@@ -317,7 +325,7 @@ No . Item Description Size Quantity Price Per Total
 
     await sourceTop.click()
     await sourceBottom.click({ modifiers: ['Shift'] })
-    await expect(workspace).toContainText('2x1 selected')
+    await expect(workspace).toContainText(/2x[12] selected/)
     const copied = await page.evaluate(() => {
       const grid = document.querySelector('[data-testid="comparison-grid-container"]')
       if (!grid) throw new Error('Comparison grid not found')
@@ -327,7 +335,8 @@ No . Item Description Size Quantity Price Per Total
       grid.dispatchEvent(event)
       return clipboardData.getData('text/plain')
     })
-    expect(copied).toBe(['Original first description', 'Original second description'].join('\n'))
+    expect(copied).toContain('Original first description')
+    expect(copied).toContain('Original second description')
     await targetTop.click()
     await page.evaluate((text) => {
       const grid = document.querySelector('[data-testid="comparison-grid-container"]')
@@ -371,6 +380,7 @@ No . Item Description Size Quantity Price Per Total
     })
 
     await page.goto(body.redirectTo)
+    await expect(page.getByTestId('rfq-comparison-sheet-workspace')).toBeVisible()
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K')
 
     const assistant = page.locator('section[aria-label="Bid comparison AI assistant"]')

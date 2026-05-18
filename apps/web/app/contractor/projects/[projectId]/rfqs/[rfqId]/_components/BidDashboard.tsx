@@ -11,8 +11,10 @@ import { submitComparisonExport, type ComparisonExportFormat } from '@/lib/procu
 import { workbookVersionMetadataFromApprovedComparisonPatch } from '@/lib/procurement/comparison-agent-tools'
 import { buildComparisonSheetSnapshot } from '@/lib/procurement/comparison-sheet-snapshot'
 import {
+  buildQuoteImportReviewHighlights,
   buildQuoteImportAnalyticsHighlights,
   DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT,
+  EMAIL_REVIEW_HIGHLIGHT,
   IMPORT_REVIEW_HIGHLIGHT,
   importReviewCategoryFromHighlightId,
   importReviewCategoryLabel,
@@ -1720,7 +1722,7 @@ function BidExcelSheet({
   const router = useRouter()
   const baseItems = rfq.line_items
 
-  const { view, versions, canUndo, canRedo, replaceView, deleteColumns, hideColumns, showColumns, deleteLineItems, hideLineItems, showLineItems, addHighlights, removeHighlights, clearHighlights, addDerivedColumns, removeDerivedColumns, setColumnWidth, addManualColumns, addManualLineItems, setCellOverride, setCellOverrides, setColumnLabel, setLineItemOrder, restoreVersion, undo, redo } = useComparisonSheetView(userKey, rfq.id, { persistToServer: persistViewToServer })
+  const { view, versions, canUndo, canRedo, replaceView, deleteColumns, hideColumns, showColumns, deleteLineItems, hideLineItems, showLineItems, clearHighlights, setColumnWidth, addManualColumns, addManualLineItems, setCellOverride, setCellOverrides, setColumnLabel, setLineItemOrder, restoreVersion, undo, redo, acknowledgeReviewHighlights } = useComparisonSheetView(userKey, rfq.id, { persistToServer: persistViewToServer })
   const [previewPatch, setPreviewPatch] = useState<ComparisonViewPatch | null>(null)
   const [priceDifferenceThresholdPct, setPriceDifferenceThresholdPct] = useState(DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT)
   const quoteImportInputRef = useRef<HTMLInputElement | null>(null)
@@ -1770,12 +1772,21 @@ function BidExcelSheet({
     return ordered.filter((it) => !(view.deletedLineItemIds ?? []).includes(it.id) && !view.hiddenLineItemIds.includes(it.id))
   }, [items, view.deletedLineItemIds, view.hiddenLineItemIds, view.lineItemOrder])
   const comparisonSummary = useMemo(() => buildLiveQuoteComparisonSummary(rfq, bids), [rfq, bids])
+  const generatedImportReviewHighlights = useMemo(
+    () => buildQuoteImportReviewHighlights(rfq, bids)
+      .filter((highlight) => !view.acknowledgedReviewHighlightIds.includes(highlight.id)),
+    [bids, rfq, view.acknowledgedReviewHighlightIds],
+  )
   const visibleHighlights = useMemo(() => [
     ...view.highlights.filter((highlight) => highlight.color.toLowerCase() !== PRICING_MISTAKE_HIGHLIGHT),
+    ...generatedImportReviewHighlights,
     ...buildQuoteImportAnalyticsHighlights(rfq, bids, { majorUnitPriceDifferencePct: priceDifferenceThresholdPct }),
-  ], [bids, priceDifferenceThresholdPct, rfq, view.highlights])
+  ], [bids, generatedImportReviewHighlights, priceDifferenceThresholdPct, rfq, view.highlights])
   const importReviewHighlights = useMemo(
-    () => visibleHighlights.filter((highlight) => highlight.color.toLowerCase() === IMPORT_REVIEW_HIGHLIGHT),
+    () => visibleHighlights.filter((highlight) => (
+      highlight.color.toLowerCase() === IMPORT_REVIEW_HIGHLIGHT ||
+      highlight.color.toLowerCase() === EMAIL_REVIEW_HIGHLIGHT
+    )),
     [visibleHighlights],
   )
   const importReviewCategoryEntries = useMemo(() => {
@@ -1787,6 +1798,8 @@ function BidExcelSheet({
     }
     return [...groups.entries()]
   }, [importReviewHighlights])
+  const hasEmailReviewHighlights = importReviewHighlights.some((highlight) => highlight.id.startsWith('email-review-'))
+  const reviewApprovalLabel = hasEmailReviewHighlights ? 'Approve all import/email reviews' : 'Approve all import changes'
   const fullQuoteCount = comparisonSummary.fullQuoteCount
   const lowestBid = comparisonSummary.lowestCompleteBid
   const fastestBid = comparisonSummary.fastestBid
@@ -2283,7 +2296,7 @@ function BidExcelSheet({
     containerRef.current?.focus()
     if (event?.shiftKey) {
       isDraggingRangeRef.current = false
-      setRangeStart((start) => start ?? sel)
+      setRangeStart(rangeStart ?? sel)
       setSel({ r, c })
       setIsDraggingRange(false)
       return
@@ -2399,11 +2412,8 @@ function BidExcelSheet({
   }, [openPricingMistakeBubble, visibleHighlights, visibleCols, visibleItems])
 
   function approveImportReviewHighlights(ids: string[]) {
-    const existing = new Set(view.highlights.map((highlight) => highlight.id))
-    const removable = ids.filter((id) => existing.has(id))
-    if (removable.length === 0) return
-    removeHighlights(removable)
-    if (openPricingMistakeBubble && removable.some((id) => activePricingMistakeBubble?.highlight.id === id)) {
+    acknowledgeReviewHighlights(ids)
+    if (openPricingMistakeBubble && ids.some((id) => activePricingMistakeBubble?.highlight.id === id)) {
       setOpenPricingMistakeBubble(null)
     }
   }
@@ -2467,7 +2477,10 @@ function BidExcelSheet({
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return
 
       const key = event.key.toLowerCase()
-      if (key === 'z') {
+      if (key === 'k') {
+        event.preventDefault()
+        dispatchAssistant(true)
+      } else if (key === 'z') {
         event.preventDefault()
         if (event.shiftKey) void redo()
         else void undo()
@@ -2879,7 +2892,7 @@ function BidExcelSheet({
             {sourceFiles.length > 0 && (
               <button
                 type="button"
-                onClick={() => setSourcePreviewUrl((current) => current ?? sourceFiles[0] ?? null)}
+                onClick={() => setSourcePreviewUrl(sourceFiles[0] ?? null)}
                 className="flex h-8 items-center gap-1.5 rounded-md border bg-white px-2.5 text-xs font-bold transition"
                 style={{ borderColor: '#d9e0dc', color: '#4a6358' }}
               >
@@ -3108,7 +3121,7 @@ function BidExcelSheet({
                 style={{ borderColor: '#86efac', color: '#166534', background: '#f0fdf4' }}
               >
                 <Check className="h-3 w-3" />
-                Approve all import changes
+                {reviewApprovalLabel}
               </button>
             )}
             {importReviewCategoryEntries.map(([category, highlights]) => (
@@ -3149,7 +3162,7 @@ function BidExcelSheet({
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="inline-block h-3 w-6 rounded-sm" style={{ background: IMPORT_REVIEW_HIGHLIGHT, border: '1px solid #fca5a5' }} />
-            Importer change review
+            Import/email review
           </span>
           <label className="inline-flex items-center gap-1.5">
             <span>Threshold</span>
@@ -3579,6 +3592,7 @@ function BidExcelSheet({
                   const cellHighlight = highlightByCellMap.get(cellKey)
                   const isPricingMistakeHighlight = highlight?.toLowerCase() === PRICING_MISTAKE_HIGHLIGHT
                   const isImportReviewHighlight = highlight?.toLowerCase() === IMPORT_REVIEW_HIGHLIGHT
+                  const isEmailReviewHighlight = Boolean(cellHighlight?.id.startsWith('email-review-'))
                   const isSelected = sel.r === r && sel.c === c
                   const inRange = isInSelectedRange(r, c)
                   const isFrozen = col.key === frozenColumnKey
@@ -3621,7 +3635,7 @@ function BidExcelSheet({
                       title={[
                         isLowestPrice ? 'Lowest total price for this item.' : '',
                         isFastestLead ? 'Fastest lead time for this item.' : '',
-                        canOpenPricingMistakeBubble ? `Click the lightbulb for ${isImportReviewHighlight ? 'importer change details' : 'pricing mistake reasoning'}.` : '',
+                        canOpenPricingMistakeBubble ? `Click the lightbulb for ${isImportReviewHighlight ? (isEmailReviewHighlight ? 'email reply review details' : 'importer change details') : 'pricing mistake reasoning'}.` : '',
                         canOpenSpecBubble ? 'Click the lightbulb for spec justification.' : cellState.tooltip,
                       ].filter(Boolean).join('\n')}
                       style={{
@@ -3682,7 +3696,7 @@ function BidExcelSheet({
                       {canOpenPricingMistakeBubble && (
                         <button
                           type="button"
-                          aria-label={`Open ${isImportReviewHighlight ? 'importer change details' : 'pricing mistake reasoning'} for ${item.description}`}
+                          aria-label={`Open ${isImportReviewHighlight ? (isEmailReviewHighlight ? 'email reply review details' : 'importer change details') : 'pricing mistake reasoning'} for ${item.description}`}
                           title={highlightNote}
                           onMouseDown={(event) => {
                             event.preventDefault()
@@ -3704,8 +3718,8 @@ function BidExcelSheet({
                       {canApproveImportReview && cellHighlight && (
                         <button
                           type="button"
-                          aria-label={`Approve importer change for ${item.description}`}
-                          title="Approve importer change"
+                          aria-label={`Approve ${isEmailReviewHighlight ? 'email reply review' : 'importer change'} for ${item.description}`}
+                          title={`Approve ${isEmailReviewHighlight ? 'email reply review' : 'importer change'}`}
                           onMouseDown={(event) => {
                             event.preventDefault()
                             event.stopPropagation()
@@ -4000,12 +4014,13 @@ export function BidDashboard({
   }, [bids, demoMode, projectId, rfq.id, router])
 
   if (bids.length === 0) {
+    const requestLabel = rfq.request_type === 'rfp' ? 'RFP' : 'RFQ'
     return (
       <div className="mt-6 rounded-2xl p-6 text-center" style={{ background: '#fff3eb', border: '1px solid #fdc89a' }}>
         <div className="flex items-center justify-center gap-2">
           <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full" style={{ background: '#fa6b04' }} />
           <p className="text-sm font-medium" style={{ color: '#1e3a2f' }}>
-            RFQ published - waiting for quotes to come in…
+            {requestLabel} published - waiting for quotes to come in…
           </p>
         </div>
         <p className="mt-1 text-xs" style={{ color: '#a85c2a' }}>

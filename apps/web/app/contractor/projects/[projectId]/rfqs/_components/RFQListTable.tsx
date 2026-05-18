@@ -14,6 +14,15 @@ interface Props {
   projectId: string
 }
 
+function draftEditPath(projectId: string, rfq: ContractorRFQ, step?: 'review') {
+  const base = rfq.request_type === 'rfp'
+    ? `/contractor/projects/${projectId}/rfps/new`
+    : `/contractor/projects/${projectId}/rfqs/new`
+  const params = new URLSearchParams({ rfqId: rfq.id })
+  if (step) params.set('step', step)
+  return `${base}?${params.toString()}`
+}
+
 export function RFQListTable({ rfqs, projectId }: Props) {
   const router = useRouter()
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -127,9 +136,7 @@ export function RFQListTable({ rfqs, projectId }: Props) {
               <td className="px-4 py-4 font-semibold" style={{ color: '#1e3a2f' }}>
                 <Link
                   href={rfq.status === 'draft'
-                    ? (rfq.request_type === 'rfq'
-                        ? `/contractor/projects/${projectId}/rfqs/new?rfqId=${rfq.id}&step=review`
-                        : `/contractor/projects/${projectId}/rfqs/${rfq.id}`)
+                    ? draftEditPath(projectId, rfq, 'review')
                     : `/contractor/projects/${projectId}/rfqs/${rfq.id}`}
                   className="hover:underline"
                   style={{ color: '#1e3a2f' }}
@@ -150,18 +157,18 @@ export function RFQListTable({ rfqs, projectId }: Props) {
               <td className="px-4 py-4" style={{ color: '#8a9e96' }}>{formatDate(rfq.created_at)}</td>
               <td className="px-4 py-4 text-right">
                 <div className="flex items-center justify-end gap-3">
-                  {rfq.status === 'draft' && rfq.request_type === 'rfq' && (
+                  {rfq.status === 'draft' && (
                     <Link
-                      href={`/contractor/projects/${projectId}/rfqs/new?rfqId=${rfq.id}`}
+                      href={draftEditPath(projectId, rfq)}
                       className="text-xs font-semibold hover:underline"
                       style={{ color: '#a85c2a' }}
                     >
                       Edit Draft
                     </Link>
                   )}
-                  {rfq.status === 'draft' && rfq.request_type === 'rfq' ? (
+                  {rfq.status === 'draft' ? (
                     <Link
-                      href={`/contractor/projects/${projectId}/rfqs/new?rfqId=${rfq.id}&step=review`}
+                      href={draftEditPath(projectId, rfq, 'review')}
                       className="inline-flex items-center gap-1 text-xs font-semibold hover:underline"
                       style={{ color: '#2d6a4f' }}
                     >

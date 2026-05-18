@@ -44,7 +44,7 @@ export function RFQMailboxPanel({ rfqId, summary }: Props) {
         setError(result.error ?? 'Failed to sync mailbox.')
         return
       }
-      setMessage(`Mailbox sync complete (${result.mode ?? 'incremental'}, ${result.syncedThreads ?? 0} threads).`)
+      setMessage(`Mailbox check complete (${result.mode ?? 'incremental'}, ${result.syncedThreads ?? 0} threads).`)
       router.refresh()
     })
   }
@@ -64,12 +64,12 @@ export function RFQMailboxPanel({ rfqId, summary }: Props) {
             <div>
               <h2 className="text-lg font-semibold" style={{ color: '#1e3a2f' }}>Mailbox & Quote Sync</h2>
               <p className="text-xs font-medium" style={{ color: '#8a9e96' }}>
-                {summary.mailbox.connected ? `${providerLabel} connected as ${summary.mailbox.emailAddress}` : 'Connect a mailbox to send and sync off-platform quotes.'}
+                {summary.mailbox.connected ? `${providerLabel} connected as ${summary.mailbox.emailAddress}` : 'Connect a mailbox to send and auto-ingest off-platform quotes.'}
               </p>
             </div>
           </div>
           <p className="mt-3 max-w-3xl text-sm" style={{ color: '#4a6358' }}>
-            Secure quote links, inbound vendor replies, attachments, and review tasks stay tied to this RFQ.
+            Secure quote links, inbound vendor replies, attachments, and review tasks stay tied to this RFQ. Connected mailbox replies are ingested automatically.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -91,7 +91,7 @@ export function RFQMailboxPanel({ rfqId, summary }: Props) {
             style={{ borderColor: '#e2d9cf', color: '#4a6358' }}
           >
             <RefreshCw className="h-4 w-4" aria-hidden="true" />
-            Sync Replies
+            Check Mailbox Now
           </button>
           <button
             type="button"

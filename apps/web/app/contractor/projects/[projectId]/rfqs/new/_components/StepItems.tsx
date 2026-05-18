@@ -224,7 +224,7 @@ export function StepItems({
   const [uploadingFiles, setUploadingFiles] = useState(false)
   const [isDraggingImport, setIsDraggingImport] = useState(false)
   const [isHydrated, setIsHydrated] = useState(false)
-  const [materialEntryMode, setMaterialEntryMode] = useState<'import' | 'manual'>('import')
+  const [materialEntryMode, setMaterialEntryMode] = useState<'import' | 'manual'>(() => items.length > 0 ? 'manual' : 'import')
   const [deliveryRequiredByShown, setDeliveryRequiredByShown] = useState(() => Boolean(deliveryRequiredBy))
   useEffect(() => {
     if (deliveryRequiredBy) setDeliveryRequiredByShown(true)

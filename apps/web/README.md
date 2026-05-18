@@ -132,15 +132,15 @@ What it does:
 
 - Contractors connect Google Workspace/Gmail or Microsoft 365 in Settings and use that exact mailbox for RFQ sends.
 - Publishing an RFQ sends PDFs and unique magic-form links to off-platform invite emails.
-- Replies are synced manually from the RFQ detail page.
+- Connected mailboxes are ingested server-side through `/api/mail/ingest`, which is scheduled by `vercel.json`, so vendor replies can populate quote comparison without a contractor opening the RFQ page or clicking sync.
+- Google Workspace/Gmail can also register a Gmail push watch when `GOOGLE_GMAIL_PUBSUB_TOPIC` is configured; Pub/Sub push notifications should target `/api/mail/google/push` to trigger near-real-time ingestion.
 - Email bodies, PDFs, and CSV attachments are parsed into quote artifacts.
 - Parsed off-platform quotes are projected into stored quote response rows with `source = 'email'`.
-- Low-confidence matches create inline review tasks and keep the projected bid in `under_review`.
+- Low-confidence matches create inline review tasks, keep the projected bid in `under_review`, and add red Email Reply Review highlights in Quote Comparison until the contractor confirms or corrects the extracted values.
 - Email-origin quotes are compare-only in v1 and do not create downstream award or PO workflows.
 
 What it does not do in v1:
 
-- No background worker, webhook, or scheduled sync.
 - No generic SMTP/IMAP provider support.
 - No standalone global review queue.
 - No off-platform award, PO acceptance, fulfillment, or order tracking flow.
@@ -158,12 +158,18 @@ MICROSOFT_CLIENT_ID=...
 MICROSOFT_CLIENT_SECRET=...
 MICROSOFT_REDIRECT_URI=http://localhost:3000/api/auth/microsoft/callback
 MICROSOFT_TENANT_ID=common
+
+MAIL_INGEST_SECRET=...
+CRON_SECRET=...
+GOOGLE_GMAIL_PUBSUB_TOPIC=projects/<gcp-project>/topics/<topic-name>
 ```
 
 Notes:
 
 - `GOOGLE_REDIRECT_URI` and `MICROSOFT_REDIRECT_URI` are optional if you use the default local callback routes above.
 - The Google OAuth app and Microsoft app registration must allow the exact redirect URI you use locally.
+- `/api/mail/ingest` accepts `Authorization: Bearer $MAIL_INGEST_SECRET` or `Authorization: Bearer $CRON_SECRET`; local development without either secret remains open for smoke testing.
+- `GOOGLE_GMAIL_PUBSUB_TOPIC` is optional. When set, Rialto calls Gmail `watch` after a Google mailbox connects and refreshes the watch during mailbox ingestion.
 - Missing or invalid env vars do not crash the app. Contractor settings will show the mailbox as not configured.
 
 Required mailbox scopes are requested by the app for sending RFQ emails and reading synced inbox/thread content.
@@ -194,7 +200,7 @@ Use this sequence for a manual end-to-end check:
 8. Submit or update a quote from the magic link.
 9. Confirm the contractor quote comparison page shows coverage, sourceable quantity, lead time, and lowest complete comparable quote state.
 10. Reply from the vendor mailbox on the same thread with plain text, PDF, or CSV quote content.
-11. Run `Sync Replies` and confirm the reply appears in the RFQ detail page and updates the bid dashboard.
+11. Wait for `/api/mail/ingest` cron or Gmail push notification delivery, then confirm the reply appears in the RFQ detail page and updates the bid dashboard without a contractor-initiated sync.
 
 ## Seeded Email Demo Data
 

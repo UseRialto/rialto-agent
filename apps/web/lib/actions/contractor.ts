@@ -450,38 +450,23 @@ export async function publishRFQAction(
       offPlatformSendSummary = await sendRFQInvites(session.userId, rfqId, baseUrl)
     } catch (error) {
       console.error('[publishRFQAction] Failed to send off-platform RFQ invites', error)
-      const rollbackRFQ = buildRFQFromPayload(
-        projectId,
-        rfqId,
-        { ...rfqData, invites: normalizedInvites },
-        existing?.status ?? 'draft',
-        createdAt,
-        existing?.published_at,
-      )
-      await saveRFQ(rollbackRFQ)
       revalidatePath(`/contractor/projects/${projectId}`)
       revalidatePath(`/contractor/projects/${projectId}/rfqs/${rfqId}`)
       return {
-        success: false,
-        error: `${humanizeMailError(error)} The RFQ was kept in draft state.`,
+        success: true,
+        redirectTo: `/contractor/projects/${projectId}`,
+        error: `${humanizeMailError(error)} The RFQ was published, but off-platform invite delivery needs attention.`,
       }
     }
     if (offPlatformSendSummary.failedCount > 0) {
-      const rollbackRFQ = buildRFQFromPayload(
-        projectId,
-        rfqId,
-        { ...rfqData, invites: normalizedInvites },
-        existing?.status ?? 'draft',
-        createdAt,
-        existing?.published_at,
-      )
-      await saveRFQ(rollbackRFQ)
+      console.warn('[publishRFQAction] Some off-platform RFQ invites failed to send', offPlatformSendSummary)
       revalidatePath(`/contractor/projects/${projectId}`)
       revalidatePath(`/contractor/projects/${projectId}/rfqs/${rfqId}`)
       return {
-        success: false,
+        success: true,
+        redirectTo: `/contractor/projects/${projectId}`,
         offPlatformSendSummary,
-        error: `Failed to send ${offPlatformSendSummary.failedCount} off-platform invite${offPlatformSendSummary.failedCount === 1 ? '' : 's'}.${summarizeOffPlatformSendErrors(offPlatformSendSummary)} The RFQ was kept in draft state.`,
+        error: `Failed to send ${offPlatformSendSummary.failedCount} off-platform invite${offPlatformSendSummary.failedCount === 1 ? '' : 's'}.${summarizeOffPlatformSendErrors(offPlatformSendSummary)} The RFQ was published, but invite delivery needs attention.`,
       }
     }
   }
@@ -719,7 +704,7 @@ export async function syncRFQMailboxAction(
     revalidatePath(`/contractor/projects/${rfq?.project_id ?? ''}/rfqs/${rfqId}`)
     return { success: true, syncedThreads: result.syncedThreads, mode: result.mode }
   } catch (error) {
-    return { success: false, error: error instanceof Error ? error.message : 'Failed to sync mailbox.' }
+    return { success: false, error: humanizeMailError(error) || 'Failed to sync mailbox.' }
   }
 }
 

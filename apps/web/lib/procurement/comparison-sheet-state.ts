@@ -46,6 +46,7 @@ export interface ComparisonSheetView {
   hiddenLineItemIds: string[]
   deletedLineItemIds: string[]
   highlights: ComparisonHighlight[]
+  acknowledgedReviewHighlightIds: string[]
   derivedColumns: DerivedColumn[]
   manualColumns: ManualColumn[]
   manualLineItems: ManualLineItem[]
@@ -125,6 +126,7 @@ export const DEFAULT_COMPARISON_SHEET_VIEW: ComparisonSheetView = {
   hiddenLineItemIds: [],
   deletedLineItemIds: [],
   highlights: [],
+  acknowledgedReviewHighlightIds: [],
   derivedColumns: [],
   manualColumns: [],
   manualLineItems: [],
@@ -194,6 +196,7 @@ export function normalizeComparisonSheetView(value: unknown): ComparisonSheetVie
     hiddenLineItemIds: Array.isArray(partial.hiddenLineItemIds) ? partial.hiddenLineItemIds.filter((item): item is string => typeof item === 'string') : [],
     deletedLineItemIds: Array.isArray(partial.deletedLineItemIds) ? partial.deletedLineItemIds.filter((item): item is string => typeof item === 'string') : [],
     highlights: Array.isArray(partial.highlights) ? partial.highlights : [],
+    acknowledgedReviewHighlightIds: Array.isArray(partial.acknowledgedReviewHighlightIds) ? partial.acknowledgedReviewHighlightIds.filter((item): item is string => typeof item === 'string') : [],
     derivedColumns: Array.isArray(partial.derivedColumns) ? partial.derivedColumns : [],
     manualColumns: Array.isArray(partial.manualColumns) ? partial.manualColumns : [],
     manualLineItems: Array.isArray(partial.manualLineItems) ? partial.manualLineItems : [],

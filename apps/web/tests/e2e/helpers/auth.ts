@@ -1,7 +1,7 @@
 import type { Browser, BrowserContext, Page } from '@playwright/test'
 import { encrypt } from '../../../lib/auth/session'
 
-export const PLAYWRIGHT_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:3000'
+export const PLAYWRIGHT_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3000'
 
 type SessionKey = 'contractor' | 'vendorPacific' | 'vendorConsolidated'
 

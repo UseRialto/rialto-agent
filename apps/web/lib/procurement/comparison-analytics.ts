@@ -4,6 +4,7 @@ import type { ComparisonSheetSnapshot } from './comparison-sheet-snapshot'
 
 export const PRICING_MISTAKE_HIGHLIGHT = '#e9d5ff'
 export const IMPORT_REVIEW_HIGHLIGHT = '#fee2e2'
+export const EMAIL_REVIEW_HIGHLIGHT = '#fee2e2'
 export const DEFAULT_MAJOR_UNIT_PRICE_DIFFERENCE_PCT = 30
 
 interface PricePoint {
@@ -45,9 +46,18 @@ export interface ImportReviewMetadata {
   reason: string
 }
 
-export function importReviewCategoryLabel(category: ImportReviewMetadata['category']) {
+interface EmailReviewMetadata {
+  category: 'line_match'
+  confidence: number
+  reason: string
+}
+
+export type ReviewHighlightCategory = ImportReviewMetadata['category'] | 'email_line_match'
+
+export function importReviewCategoryLabel(category: ReviewHighlightCategory) {
   if (category === 'price_basis_conversion') return 'Price basis conversions'
   if (category === 'negative_price') return 'Negative price corrections'
+  if (category === 'email_line_match') return 'Email reply line matches'
   return category
 }
 
@@ -74,9 +84,27 @@ function importReviewHighlightId(input: { lineItemId: string; bidId: string; met
   return `import-review-${input.category}-${input.lineItemId}-${input.bidId}-${input.metric}`
 }
 
-export function importReviewCategoryFromHighlightId(id: string): ImportReviewMetadata['category'] | undefined {
+export function importReviewCategoryFromHighlightId(id: string): ReviewHighlightCategory | undefined {
   if (id.startsWith('import-review-price_basis_conversion-')) return 'price_basis_conversion'
   if (id.startsWith('import-review-negative_price-')) return 'negative_price'
+  if (id.startsWith('email-review-line_match-')) return 'email_line_match'
+  return undefined
+}
+
+function parseEmailReviewMetadata(value: string | undefined): EmailReviewMetadata | undefined {
+  if (!value) return undefined
+  try {
+    const parsed = JSON.parse(value) as Partial<EmailReviewMetadata>
+    if (
+      parsed.category === 'line_match' &&
+      typeof parsed.confidence === 'number' &&
+      typeof parsed.reason === 'string'
+    ) {
+      return parsed as EmailReviewMetadata
+    }
+  } catch {
+    return undefined
+  }
   return undefined
 }
 
@@ -85,24 +113,37 @@ export function buildQuoteImportReviewHighlights(_rfq: ContractorRFQ, bids: Cont
   for (const bid of bids) {
     for (const response of bid.line_item_responses) {
       for (const attribute of response.response_attributes ?? []) {
-        if (!attribute.key.startsWith('import_review:')) continue
-        const metadata = parseImportReviewMetadata(attribute.value)
-        if (!metadata) continue
-        highlights.push({
-          id: importReviewHighlightId({
-            lineItemId: response.line_item_id,
-            bidId: bid.id,
-            metric: metadata.metric,
-            category: metadata.category,
-          }),
-          selector: { kind: 'cell', rowKey: response.line_item_id, colKey: `vendor:${bid.id}:${metadata.metric}` },
-          color: IMPORT_REVIEW_HIGHLIGHT,
-          note: [
-            `${importReviewCategoryLabel(metadata.category)}: ${metadata.reason}`,
-            `Original: ${metadata.originalValue}.`,
-            `Imported comparison value: ${metadata.normalizedValue}.`,
-          ].join(' '),
-        })
+        if (attribute.key.startsWith('import_review:')) {
+          const metadata = parseImportReviewMetadata(attribute.value)
+          if (!metadata) continue
+          highlights.push({
+            id: importReviewHighlightId({
+              lineItemId: response.line_item_id,
+              bidId: bid.id,
+              metric: metadata.metric,
+              category: metadata.category,
+            }),
+            selector: { kind: 'cell', rowKey: response.line_item_id, colKey: `vendor:${bid.id}:${metadata.metric}` },
+            color: IMPORT_REVIEW_HIGHLIGHT,
+            note: [
+              `${importReviewCategoryLabel(metadata.category)}: ${metadata.reason}`,
+              `Original: ${metadata.originalValue}.`,
+              `Imported comparison value: ${metadata.normalizedValue}.`,
+            ].join(' '),
+          })
+        }
+        if (attribute.key.startsWith('email_review:')) {
+          const metadata = parseEmailReviewMetadata(attribute.value)
+          if (!metadata) continue
+          for (const metric of ['unit_price', 'total'] as const) {
+            highlights.push({
+              id: `email-review-${metadata.category}-${response.line_item_id}-${bid.id}-${metric}`,
+              selector: { kind: 'cell', rowKey: response.line_item_id, colKey: `vendor:${bid.id}:${metric}` },
+              color: EMAIL_REVIEW_HIGHLIGHT,
+              note: `Email reply review: ${metadata.reason} Confidence ${(metadata.confidence * 100).toFixed(0)}%.`,
+            })
+          }
+        }
       }
     }
   }

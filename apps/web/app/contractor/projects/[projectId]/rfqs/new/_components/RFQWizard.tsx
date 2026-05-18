@@ -433,7 +433,6 @@ export function RFQWizard({
       setDefaultFieldVisibility(sanitizeFieldVisibility(result.customization?.rfqCreationFieldVisibility as Partial<RFQCreationFieldVisibility> | undefined ?? fieldVisibility))
       setCustomizationDirty(false)
       setSaveDefaultState('saved')
-      router.refresh()
     } else {
       setSaveDefaultState('error')
     }

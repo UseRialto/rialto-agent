@@ -89,6 +89,7 @@ interface GenericParsedBidLine {
   unitPrice: number
   totalPrice: number
   leadTimeDays: number
+  availability: 'can_source' | 'unavailable'
   sourceRow: number
   notes?: string
 }
@@ -148,6 +149,31 @@ function optionalNumberFromText(value: unknown) {
   const text = String(value ?? '').trim()
   if (!text || /^(?:n\/a|na|tbd|no bid|no-bid)$/i.test(text)) return undefined
   return signedNumberFromText(text)
+}
+
+function valueLooksLikeNoBid(value: unknown) {
+  return /^(?:n\/a|na|tbd|no bid|no-bid|no quote|declined|cannot supply)$/i.test(String(value ?? '').trim())
+}
+
+function quoteCellsIndicateNoBid(input: {
+  unitPriceCell?: string
+  totalPriceCell?: string
+  leadCell?: string
+  notesCell?: string
+  unitPrice?: number
+  totalPrice?: number
+}) {
+  const explicitMarker = [
+    input.unitPriceCell,
+    input.totalPriceCell,
+    input.leadCell,
+    input.notesCell,
+  ].some(valueLooksLikeNoBid)
+  if (explicitMarker) return true
+
+  const missingUnitPrice = !String(input.unitPriceCell ?? '').trim() || input.unitPrice == null
+  const zeroTotalCell = String(input.totalPriceCell ?? '').trim() !== '' && input.totalPrice === 0
+  return missingUnitPrice && zeroTotalCell && valueLooksLikeNoBid(input.notesCell)
 }
 
 function optionalTableQuantityFromText(value: unknown) {
@@ -1140,13 +1166,13 @@ function parseCompactPdfMatrixLine(rawLine: string, sourceRow: number, vendorNam
   }
   if (!lineItem.description || !lineItem.quantity || !lineItem.unit) return null
 
-  const groups: Array<{ unitPrice?: number; totalPrice?: number; lead?: string; notes?: string }> = []
+  const groups: Array<{ unitPrice?: number; totalPrice?: number; lead?: string; notes?: string; noBid?: boolean }> = []
   const pricePattern = /(?:^|\s)(no\s+bid|[0-9][0-9,.]*\s+[0-9][0-9,.]*\s+[0-9]+(?:-[0-9]+)?\s+(?:days?|weeks?))(.*?)(?=\s+(?:no\s+bid|[0-9][0-9,.]*\s+[0-9][0-9,.]*\s+[0-9]+(?:-[0-9]+)?\s+(?:days?|weeks?))|$)/gi
   for (const match of boundary.priceRest.matchAll(pricePattern)) {
     const value = compact(match[1] ?? '')
     const notes = compact(match[2] ?? '')
     if (/^no\s+bid$/i.test(value)) {
-      groups.push({ notes: compact(['No bid.', notes].filter(Boolean).join(' ')) })
+      groups.push({ notes, noBid: true })
       continue
     }
     const price = value.match(/^([0-9][0-9,.]*)\s+([0-9][0-9,.]*)\s+([0-9]+(?:-[0-9]+)?\s+(?:days?|weeks?))$/i)
@@ -1158,7 +1184,7 @@ function parseCompactPdfMatrixLine(rawLine: string, sourceRow: number, vendorNam
       notes,
     })
   }
-  if (groups.filter((group) => group.unitPrice != null || group.totalPrice != null).length < 2) return null
+  if (groups.filter((group) => group.noBid || group.unitPrice != null || group.totalPrice != null).length < 2) return null
 
   return {
     lineItem,
@@ -1194,6 +1220,7 @@ function parseCompactPdfMatrix(text: string): GenericParsedImport | null {
         unitPrice: bidLine.unitPrice,
         totalPrice: bidLine.totalPrice,
         leadTimeDays: bidLine.leadTimeDays,
+        availability: bidLine.availability,
         sourceRow: bidLine.sourceRow,
         notes: bidLine.notes,
       }
@@ -1294,8 +1321,23 @@ function genericLineItemFromCells(cells: string[], indexes: { item: number; sku:
 function genericBidLine(
   lineItem: GenericParsedLineItem,
   sourceRow: number,
-  price: { unitPrice?: number; totalPrice?: number; lead?: string; notes?: string },
+  price: { unitPrice?: number; totalPrice?: number; lead?: string; notes?: string; noBid?: boolean },
 ): GenericParsedBidLine | null {
+  if (price.noBid) {
+    return {
+      lineItemKey: lineItem.itemNumber,
+      sku: lineItem.sku,
+      description: lineItem.description,
+      quantity: lineItem.quantity,
+      unit: lineItem.unit,
+      unitPrice: 0,
+      totalPrice: 0,
+      leadTimeDays: 0,
+      availability: 'unavailable',
+      sourceRow,
+      notes: compact(['No bid.', price.notes].filter(Boolean).join(' ')),
+    }
+  }
   if (price.unitPrice == null && price.totalPrice == null) return null
   const totalPrice = price.totalPrice ?? Number(((price.unitPrice ?? 0) * lineItem.quantity).toFixed(2))
   const unitPrice = price.unitPrice ?? (lineItem.quantity ? Number((totalPrice / lineItem.quantity).toFixed(4)) : 0)
@@ -1308,6 +1350,7 @@ function genericBidLine(
     unitPrice,
     totalPrice,
     leadTimeDays: leadTimeDays(price.lead ?? ''),
+    availability: 'can_source',
     sourceRow,
     notes: compact([price.notes, price.lead ? `Lead time: ${price.lead}` : ''].filter(Boolean).join(' ')) || undefined,
   }
@@ -1336,11 +1379,18 @@ function parseRowPerVendorTable(rows: ReturnType<typeof delimitedRows>, headerIn
     const vendorName = rowValue(row.cells, indexes.supplier)
     if (!lineItem || !vendorName) continue
     lineItemByKey.set(lineItem.itemNumber, lineItem)
+    const unitPriceCell = rowValue(row.cells, indexes.unitPrice)
+    const totalPriceCell = rowValue(row.cells, indexes.totalPrice)
+    const leadCell = rowValue(row.cells, indexes.lead)
+    const notesCell = rowValue(row.cells, indexes.notes)
+    const unitPrice = optionalNumberFromText(unitPriceCell)
+    const totalPrice = optionalNumberFromText(totalPriceCell)
     const bidLine = genericBidLine(lineItem, row.sourceRow, {
-      unitPrice: optionalNumberFromText(rowValue(row.cells, indexes.unitPrice)),
-      totalPrice: optionalNumberFromText(rowValue(row.cells, indexes.totalPrice)),
-      lead: rowValue(row.cells, indexes.lead),
-      notes: rowValue(row.cells, indexes.notes),
+      unitPrice,
+      totalPrice,
+      lead: leadCell,
+      notes: notesCell,
+      noBid: quoteCellsIndicateNoBid({ unitPriceCell, totalPriceCell, leadCell, notesCell, unitPrice, totalPrice }),
     })
     if (!bidLine) continue
     bidLinesByVendor.set(vendorName, [...(bidLinesByVendor.get(vendorName) ?? []), bidLine])
@@ -1375,11 +1425,18 @@ function parseSingleVendorTable(rows: ReturnType<typeof delimitedRows>, headerIn
     const lineItem = genericLineItemFromCells(row.cells, indexes)
     if (!lineItem) continue
     lineItems.push(lineItem)
+    const unitPriceCell = rowValue(row.cells, indexes.unitPrice)
+    const totalPriceCell = rowValue(row.cells, indexes.totalPrice)
+    const leadCell = rowValue(row.cells, indexes.lead)
+    const notesCell = rowValue(row.cells, indexes.notes)
+    const unitPrice = optionalNumberFromText(unitPriceCell)
+    const totalPrice = optionalNumberFromText(totalPriceCell)
     const bidLine = genericBidLine(lineItem, row.sourceRow, {
-      unitPrice: optionalNumberFromText(rowValue(row.cells, indexes.unitPrice)),
-      totalPrice: optionalNumberFromText(rowValue(row.cells, indexes.totalPrice)),
-      lead: rowValue(row.cells, indexes.lead),
-      notes: rowValue(row.cells, indexes.notes),
+      unitPrice,
+      totalPrice,
+      lead: leadCell,
+      notes: notesCell,
+      noBid: quoteCellsIndicateNoBid({ unitPriceCell, totalPriceCell, leadCell, notesCell, unitPrice, totalPrice }),
     })
     if (bidLine) lines.push(bidLine)
   }
@@ -1429,11 +1486,18 @@ function parseWideVendorTable(rows: ReturnType<typeof delimitedRows>, headerInde
     if (!lineItem) continue
     lineItems.push(lineItem)
     for (const group of groups) {
+      const unitPriceCell = rowValue(row.cells, group.unitPrice ?? -1)
+      const totalPriceCell = rowValue(row.cells, group.totalPrice ?? -1)
+      const leadCell = rowValue(row.cells, group.lead ?? -1)
+      const notesCell = rowValue(row.cells, group.notes ?? -1)
+      const unitPrice = optionalNumberFromText(unitPriceCell)
+      const totalPrice = optionalNumberFromText(totalPriceCell)
       const bidLine = genericBidLine(lineItem, row.sourceRow, {
-        unitPrice: optionalNumberFromText(rowValue(row.cells, group.unitPrice ?? -1)),
-        totalPrice: optionalNumberFromText(rowValue(row.cells, group.totalPrice ?? -1)),
-        lead: rowValue(row.cells, group.lead ?? -1),
-        notes: rowValue(row.cells, group.notes ?? -1),
+        unitPrice,
+        totalPrice,
+        lead: leadCell,
+        notes: notesCell,
+        noBid: quoteCellsIndicateNoBid({ unitPriceCell, totalPriceCell, leadCell, notesCell, unitPrice, totalPrice }),
       })
       if (bidLine) bidLinesByVendor.get(group.vendorName)?.push(bidLine)
     }
@@ -1494,14 +1558,17 @@ function parseRepeatedSupplierBlockTable(rows: ReturnType<typeof delimitedRows>,
         rowValue(row.cells, group.notes ?? -1),
         rowValue(row.cells, group.variation ?? -1) ? `Variation: ${rowValue(row.cells, group.variation ?? -1)}` : '',
       ].filter(Boolean).join(' '))
-      const unitPrice = optionalNumberFromText(rowValue(row.cells, group.unitPrice ?? -1))
-      const totalPrice = optionalNumberFromText(rowValue(row.cells, group.totalPrice ?? -1))
-      const shouldTreatAsNoBid = unitPrice == null && totalPrice === 0
+      const unitPriceCell = rowValue(row.cells, group.unitPrice ?? -1)
+      const totalPriceCell = rowValue(row.cells, group.totalPrice ?? -1)
+      const leadCell = rowValue(row.cells, group.lead ?? -1)
+      const unitPrice = optionalNumberFromText(unitPriceCell)
+      const totalPrice = optionalNumberFromText(totalPriceCell)
       const bidLine = genericBidLine(lineItem, row.sourceRow, {
         unitPrice,
-        totalPrice: shouldTreatAsNoBid ? undefined : totalPrice,
-        lead: rowValue(row.cells, group.lead ?? -1),
+        totalPrice,
+        lead: leadCell,
         notes,
+        noBid: (unitPrice == null && totalPrice === 0) || quoteCellsIndicateNoBid({ unitPriceCell, totalPriceCell, leadCell, notesCell: notes, unitPrice, totalPrice }),
       })
       if (!bidLine) continue
       bidLinesByVendor.set(vendorName, [...(bidLinesByVendor.get(vendorName) ?? []), bidLine])
@@ -1832,7 +1899,7 @@ export function createExternalQuoteImport(input: ExternalQuoteImportInput): Exte
           unit_price: normalized.unitPrice,
           total_price: normalized.totalPrice,
           lead_time_days: line.leadTimeDays,
-          availability: 'can_source' as const,
+          availability: line.availability,
           is_alternate: false,
           notes: compact([`Imported from ${input.filename}, source row ${line.sourceRow}.`, line.notes].filter(Boolean).join(' ')),
           response_attributes: [

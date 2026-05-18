@@ -734,11 +734,21 @@ P00101 PRE-001-01 5/8 in Type X gypsum board 4x12 sheets 15 EA $1.20 $18.00 3 da
       'BuildCo Materials',
       'Metro Door Hardware',
     ])
-    expect(result.bids[0].line_item_responses).toHaveLength(11)
+    expect(result.bids[0].line_item_responses).toHaveLength(12)
     expect(result.bids[3].line_item_responses).toHaveLength(4)
     expect(result.bid.vendor_name).toBe('L n W Supply - San Diego')
     expect(result.rfq.invites?.map((invite) => invite.vendor_name)).toContain('BuildCo Materials')
     expect(result.bids.flatMap((bid) => bid.line_item_responses).some((line) => line.is_alternate)).toBe(false)
+    expect(result.bids.find((bid) => bid.vendor_name === 'L n W Supply - San Diego')?.line_item_responses.find((line) => line.sku === 'GWB-12MR')).toMatchObject({
+      availability: 'unavailable',
+      unit_price: 0,
+      total_price: 0,
+      notes: expect.stringContaining('No bid.'),
+    })
+    expect(result.bids.find((bid) => bid.vendor_name === 'Acme Drywall Supply')?.line_item_responses.find((line) => line.sku === 'HM-FRAME')).toMatchObject({
+      availability: 'unavailable',
+      total_price: 0,
+    })
     expect(result.bids.find((bid) => bid.vendor_name === 'BuildCo Materials')?.line_item_responses.find((line) => line.sku === '250JR-33')?.notes).toContain('alternate manufacturer')
     expect(result.bids.find((bid) => bid.vendor_name === 'Acme Drywall Supply')?.line_item_responses.find((line) => line.sku === 'LOCK-SET')?.notes).toContain('substitution')
     expect(result.warnings).toContainEqual(expect.objectContaining({
@@ -802,6 +812,43 @@ P00101 PRE-001-01 5/8 in Type X gypsum board 4x12 sheets 15 EA $1.20 $18.00 3 da
       'LOCK-SET',
     ]))
     expect(metro?.line_item_responses).not.toContainEqual(expect.objectContaining({ sku: '250CH-33' }))
+  })
+
+  it('preserves explicit no-bid cells as unavailable responses without creating false zero-price offers', () => {
+    const result = createExternalQuoteImport({
+      projectId: 'project-1',
+      projectName: 'Cell Fidelity Lab',
+      filename: 'adversarial-no-bid-cells.csv',
+      sourceKind: 'spreadsheet',
+      text: [
+        'Line #,Part No,Material Name,Required Qty,UOM,Vendor,Quoted Unit Cost,Extended Cost,ETA,Clarifications',
+        'N001,GRID-15/16,15/16 tee grid,960,SF,Acoustic Pros,1.44,1382.40,9 days,',
+        'N001,GRID-15/16,15/16 tee grid,960,SF,Ceiling Depot,,0,,no bid',
+        'N002,ACT-24X24,24x24 ceiling tile,960,SF,Acoustic Pros,2.18,2092.80,9 days,',
+        'N002,ACT-24X24,24x24 ceiling tile,960,SF,Ceiling Depot,no bid,,,cannot supply',
+      ].join('\n'),
+      now: '2026-05-17T18:35:00.000Z',
+    })
+
+    const ceilingDepot = result.bids.find((bid) => bid.vendor_name === 'Ceiling Depot')
+    expect(ceilingDepot?.total_price).toBe(0)
+    expect(ceilingDepot?.line_item_responses).toHaveLength(2)
+    for (const response of ceilingDepot?.line_item_responses ?? []) {
+      expect(response).toMatchObject({
+        availability: 'unavailable',
+        unit_price: 0,
+        total_price: 0,
+        is_alternate: false,
+      })
+      expect(response.notes).toContain('No bid.')
+      expect(response.response_attributes).toEqual(expect.arrayContaining([
+        expect.objectContaining({ key: 'source_file', value: 'adversarial-no-bid-cells.csv' }),
+        expect.objectContaining({ key: 'source_row' }),
+      ]))
+    }
+    expect(result.warnings).not.toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('$0 unit or total price'),
+    }))
   })
 
   it('creates one RFQ comparison from multiple separate vendor quote files', () => {
@@ -1151,7 +1198,13 @@ P00101 PRE-001-01 5/8 in Type X gypsum board 4x12 sheets 15 EA $1.20 $18.00 3 da
       'Action Gypsum Supply',
       'J n B Materials - Perris',
     ])
-    expect(result.bids.find((bid) => bid.vendor_name === 'Action Gypsum Supply')?.line_item_responses).toHaveLength(2)
+    expect(result.bids.find((bid) => bid.vendor_name === 'Action Gypsum Supply')?.line_item_responses).toHaveLength(3)
+    expect(result.bids.find((bid) => bid.vendor_name === 'Action Gypsum Supply')?.line_item_responses.find((line) => line.sku === '250JR-33')).toMatchObject({
+      availability: 'unavailable',
+      unit_price: 0,
+      total_price: 0,
+      notes: expect.stringContaining('No bid.'),
+    })
     expect(result.bids.find((bid) => bid.vendor_name === 'L n W Supply - San Diego')?.line_item_responses[0]).toMatchObject({
       sku: '250CH-33',
       unit_price: 350,

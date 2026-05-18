@@ -18,11 +18,13 @@ describe('normalizeComparisonSheetView', () => {
       hiddenLineItemIds: ['line-1'],
       cellOverrides: { 'line-1|notes': 'Field verify' },
       columnLabelOverrides: { notes: 'Scope Notes' },
-    })).toMatchObject({
+      acknowledgedReviewHighlightIds: ['email-review-line-1-vendor-a-unit_price', 42],
+    } as unknown)).toMatchObject({
       hiddenColumnKeys: ['vendor-total'],
       hiddenLineItemIds: ['line-1'],
       cellOverrides: { 'line-1|notes': 'Field verify' },
       columnLabelOverrides: { notes: 'Scope Notes' },
+      acknowledgedReviewHighlightIds: ['email-review-line-1-vendor-a-unit_price'],
       manualColumns: [],
       manualLineItems: [],
     })

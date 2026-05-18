@@ -128,7 +128,7 @@ export default async function ContractorSettingsPage({
         <div className="mt-4 rounded-md border px-4 py-3" style={{ borderColor: '#e2d9cf', background: '#ede8e2' }}>
           <p className="text-sm font-medium" style={{ color: '#1e3a2f' }}>Mailbox status</p>
           <p className="mt-1 text-sm" style={{ color: '#4a6358' }}>
-            Publishing an RFQ with off-platform recipients will immediately send invite emails from this exact mailbox address. Use this page to connect or reconnect the sender account, then use the RFQ detail page to resend invites or sync replies.
+            Publishing an RFQ with off-platform recipients will immediately send invite emails from this exact mailbox address. Use this page to connect or reconnect the sender account; inbound replies are ingested automatically by the server.
           </p>
         </div>
 

@@ -66,11 +66,11 @@ describe('email quote intake', () => {
     expect(result.needsReview).toBe(false)
   })
 
-  it('prefers a readable quote attachment over inline email prose', async () => {
+  it('uses a readable quote attachment for an attachment-only reply without asking the inline email model to guess', async () => {
     const result = await extractEmailQuoteIntake({
       rfq,
       vendorName: 'Ceiling Supply',
-      emailBody: 'See attached, thanks.',
+      emailBody: 'Attached.',
       attachments: [{
         filename: 'ceiling-supply.csv',
         sourceKind: 'csv',
@@ -79,6 +79,9 @@ describe('email quote intake', () => {
           'Ceiling Supply,1,CT-4-15/16-FW,USG Donn DXL 4 ft 15/16 in fire-rated cross tee,500,ea,1.25,625,5 days,Exact product',
         ].join('\n'),
       }],
+      runInlineEmailModel: async () => {
+        throw new Error('Attachment replies should use readable attachments before inline prose normalization.')
+      },
     })
 
     expect(result.lineItemResponses).toHaveLength(1)
@@ -87,6 +90,54 @@ describe('email quote intake', () => {
       unit_price: 1.25,
       total_price: 625,
     })
+    expect(result.sourceKind).toBe('csv')
+    expect(result.needsReview).toBe(true)
+  })
+
+  it('allows a full high-confidence attachment match to flow through without review', async () => {
+    const result = await extractEmailQuoteIntake({
+      rfq,
+      vendorName: 'Ceiling Supply',
+      emailBody: 'Attached.',
+      attachments: [{
+        filename: 'ceiling-supply.csv',
+        sourceKind: 'csv',
+        text: [
+          'Supplier,Item,SKU,Description,Qty,Unit,Unit Price,Total Price,Lead Time,Notes',
+          'Ceiling Supply,1,CT-4-15/16-FW,USG Donn DXL 4 ft 15/16 in fire-rated cross tee,500,ea,1.25,625,5 days,Exact product',
+          'Ceiling Supply,2,MR-12-HD,USG Donn DXL 12 ft heavy-duty main runner,80,ea,6.10,488,5 days,Exact product',
+        ].join('\n'),
+      }],
+    })
+
+    expect(result.lineItemResponses).toHaveLength(2)
+    expect(result.confidence).toBeGreaterThanOrEqual(0.82)
+    expect(result.needsReview).toBe(false)
+  })
+
+  it('uses the source kind from the attachment that actually produced quote rows', async () => {
+    const result = await extractEmailQuoteIntake({
+      rfq,
+      vendorName: 'Ceiling Supply',
+      emailBody: 'Attached.',
+      attachments: [
+        {
+          filename: 'logo.txt',
+          sourceKind: 'text',
+          text: 'Ceiling Supply logo and footer',
+        },
+        {
+          filename: 'ceiling-supply.csv',
+          sourceKind: 'csv',
+          text: [
+            'Supplier,Item,SKU,Description,Qty,Unit,Unit Price,Total Price,Lead Time,Notes',
+            'Ceiling Supply,1,CT-4-15/16-FW,USG Donn DXL 4 ft 15/16 in fire-rated cross tee,500,ea,1.25,625,5 days,Exact product',
+          ].join('\n'),
+        },
+      ],
+    })
+
+    expect(result.lineItemResponses).toHaveLength(1)
     expect(result.sourceKind).toBe('csv')
   })
 })
