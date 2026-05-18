@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransit
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { Check, Clock3, Columns3, Eraser, FileSpreadsheet, Lightbulb, Loader2, Plus, Redo2, RefreshCw, Rows3, Trash2, Undo2, UploadCloud } from 'lucide-react'
-import type { ContractorBid, ContractorRFQ } from '@/lib/types/contractor'
+import type { ContractorBid, ContractorRFQ, RFQEmailWorkflowSummary } from '@/lib/types/contractor'
 import type { BidSpecComplianceEvidence, BidSpecComplianceItem, ProjectSpecDocumentSummary } from '@/lib/types/procurement'
 import { buildLiveQuoteComparisonSummary } from '@/lib/procurement/quote-comparison'
 import { submitComparisonExport, type ComparisonExportFormat } from '@/lib/procurement/comparison-export-client'
@@ -3943,6 +3943,7 @@ export function BidDashboard({
   projectName = projectId,
   rfq,
   bids,
+  emailWorkflowSummary,
   specDocuments = [],
   demoMode = false,
   section = 'all',
@@ -3952,6 +3953,7 @@ export function BidDashboard({
   projectName?: string
   rfq: ContractorRFQ
   bids: ContractorBid[]
+  emailWorkflowSummary?: RFQEmailWorkflowSummary | null
   specDocuments?: ProjectSpecDocumentSummary[]
   demoMode?: boolean
   section?: 'all' | 'comparison' | 'decision'
@@ -4015,17 +4017,57 @@ export function BidDashboard({
 
   if (bids.length === 0) {
     const requestLabel = rfq.request_type === 'rfp' ? 'RFP' : 'RFQ'
+    const hasVendorRequests = Boolean(emailWorkflowSummary?.vendorRequests.length)
+    const inboundMessages = emailWorkflowSummary?.recentMessages.filter((messageRow) => messageRow.direction === 'inbound') ?? []
+    const outboundMessages = emailWorkflowSummary?.recentMessages.filter((messageRow) => messageRow.direction === 'outbound') ?? []
+    const openedRequests = emailWorkflowSummary?.vendorRequests.filter((request) => request.status === 'opened') ?? []
+    const hasOpenReviewTasks = Boolean(emailWorkflowSummary?.reviewTasks.length)
+    const mailboxStatus = !emailWorkflowSummary
+      ? 'Mailbox sync status is not loaded for this request.'
+      : !emailWorkflowSummary.mailbox.oauthAvailable
+      ? 'Mailbox OAuth is not configured for this environment.'
+      : !emailWorkflowSummary.mailbox.connected
+      ? 'Mailbox is disconnected, so inbound replies and attachments cannot be checked.'
+      : emailWorkflowSummary.mailbox.lastSyncAt
+      ? `Last mailbox check: ${new Date(emailWorkflowSummary.mailbox.lastSyncAt).toLocaleString()}.`
+      : 'Mailbox is connected, but it has never completed a sync.'
+    const emailActivityStatus = inboundMessages.length > 0
+      ? `${inboundMessages.length} inbound message${inboundMessages.length === 1 ? '' : 's'} synced for this request.`
+      : outboundMessages.length > 0
+      ? 'Invite email is tracked, but no inbound vendor reply has synced for this request yet.'
+      : hasVendorRequests
+      ? 'Vendor invite records exist, but no mailbox messages have synced for this request yet.'
+      : 'No off-platform vendor request records exist yet.'
+
     return (
-      <div className="mt-6 rounded-2xl p-6 text-center" style={{ background: '#fff3eb', border: '1px solid #fdc89a' }}>
+      <div className="mt-6 rounded-2xl p-6" style={{ background: '#fff3eb', border: '1px solid #fdc89a' }}>
         <div className="flex items-center justify-center gap-2">
           <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full" style={{ background: '#fa6b04' }} />
           <p className="text-sm font-medium" style={{ color: '#1e3a2f' }}>
             {requestLabel} published - waiting for quotes to come in…
           </p>
         </div>
-        <p className="mt-1 text-xs" style={{ color: '#a85c2a' }}>
+        <p className="mt-1 text-center text-xs" style={{ color: '#a85c2a' }}>
           This page will update automatically as quotes arrive.
         </p>
+        {emailWorkflowSummary && (
+          <div className="mx-auto mt-4 max-w-3xl rounded-lg border bg-white px-4 py-3 text-left" style={{ borderColor: '#fdc89a' }}>
+            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#a85c2a' }}>Email Intake Status</p>
+            <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2" style={{ color: '#4a6358' }}>
+              <p>{mailboxStatus}</p>
+              <p>{emailActivityStatus}</p>
+              <p>{openedRequests.length > 0 ? `${openedRequests.length} vendor form${openedRequests.length === 1 ? '' : 's'} opened but not submitted.` : 'No vendor form opens are waiting on quote submission.'}</p>
+              <p>{hasOpenReviewTasks ? `${emailWorkflowSummary.reviewTasks.length} email/review task${emailWorkflowSummary.reviewTasks.length === 1 ? '' : 's'} need attention.` : 'No email match or quote parse review tasks are open.'}</p>
+            </div>
+            <a
+              href="?section=message-center"
+              className="mt-3 inline-flex rounded-md px-3 py-2 text-xs font-semibold text-white"
+              style={{ background: '#1e3a2f' }}
+            >
+              Open mailbox diagnostics
+            </a>
+          </div>
+        )}
       </div>
     )
   }
