@@ -1332,8 +1332,8 @@ async function upsertReviewTask(params: {
       and(
         eq(rfqReviewTasks.status, 'open'),
         eq(rfqReviewTasks.task_type, params.taskType),
-        sql`ifnull(${rfqReviewTasks.email_message_id}, 0) = ifnull(${params.emailMessageId ?? null}, 0)`,
-        sql`ifnull(${rfqReviewTasks.quote_response_id}, 0) = ifnull(${params.quoteResponseId ?? null}, 0)`,
+        sql`coalesce(${rfqReviewTasks.email_message_id}, 0) = coalesce(${params.emailMessageId ?? null}, 0)`,
+        sql`coalesce(${rfqReviewTasks.quote_response_id}, 0) = coalesce(${params.quoteResponseId ?? null}, 0)`,
       ),
     ))[0]
   const stamp = nowIso()

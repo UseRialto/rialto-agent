@@ -25,6 +25,7 @@ import {
   addNegotiationMessageAction,
   createRemainderRFQAction,
   rerunBidSpecComplianceAction,
+  syncRFQMailboxAction,
   updateBidDecisionAction,
 } from '@/lib/actions/contractor'
 import { applyPatch, useComparisonSheetView, type ComparisonViewPatch, type ManualColumn, type ManualLineItem } from './comparison-sheet-view'
@@ -3965,6 +3966,8 @@ export function BidDashboard({
   const [decisionStatuses, setDecisionStatuses] = useState<Record<string, ContractorBid['buyer_decision_status']>>({})
   const [negotiationDrafts, setNegotiationDrafts] = useState<Record<string, string>>({})
   const [selectedBidId, setSelectedBidId] = useState<string | null>(null)
+  const [mailSyncMessage, setMailSyncMessage] = useState('')
+  const [mailSyncError, setMailSyncError] = useState('')
   const [actionError, setActionError] = useState('')
   const [dashboardSettings, setDashboardSettings] = useState(DEFAULT_DASHBOARD_SETTINGS)
   const [dashboardSettingsLoaded, setDashboardSettingsLoaded] = useState(false)
@@ -4038,6 +4041,19 @@ export function BidDashboard({
       : hasVendorRequests
       ? 'Vendor invite records exist, but no mailbox messages have synced for this request yet.'
       : 'No off-platform vendor request records exist yet.'
+    function handleFullMailboxResync() {
+      setMailSyncMessage('')
+      setMailSyncError('')
+      startTransition(async () => {
+        const result = await syncRFQMailboxAction(rfq.id, true)
+        if (!result.success) {
+          setMailSyncError(result.error ?? 'Failed to sync mailbox.')
+          return
+        }
+        setMailSyncMessage(`Full resync complete (${result.syncedThreads ?? 0} threads).`)
+        router.refresh()
+      })
+    }
 
     return (
       <div className="mt-6 rounded-2xl p-6" style={{ background: '#fff3eb', border: '1px solid #fdc89a' }}>
@@ -4066,6 +4082,17 @@ export function BidDashboard({
             >
               Open mailbox diagnostics
             </a>
+            <button
+              type="button"
+              disabled={isPending || !emailWorkflowSummary.mailbox.connected}
+              onClick={handleFullMailboxResync}
+              className="ml-2 mt-3 inline-flex rounded-md border bg-white px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ borderColor: '#e2d9cf', color: '#1e3a2f' }}
+            >
+              Full resync
+            </button>
+            {mailSyncMessage && <p className="mt-2 text-xs" style={{ color: '#2d6a4f' }}>{mailSyncMessage}</p>}
+            {mailSyncError && <p className="mt-2 text-xs" style={{ color: '#c0392b' }}>{mailSyncError}</p>}
           </div>
         )}
       </div>
