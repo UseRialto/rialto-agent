@@ -561,6 +561,11 @@ function mailboxProvider(mailbox: MailboxRow): MailProvider {
   return (mailbox.provider as MailProvider) || 'google'
 }
 
+function isGmailInvalidIdError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.toLowerCase().includes('invalid id value')
+}
+
 async function ensureProviderAccessToken(userId: string) {
   const mailbox = await getMailboxRow(userId)
   if (!mailbox.refresh_token && !mailbox.access_token) {
@@ -2704,10 +2709,17 @@ export async function syncMailboxReplies(userId: string, forceFull = false) {
   }
 
   let syncedThreads = 0
+  let skippedThreads = 0
   for (const threadId of changedThreadIds) {
-    const payload = await fetchGmailThread(userId, threadId)
-    await processGmailThread(userId, payload)
-    syncedThreads += 1
+    try {
+      const payload = await fetchGmailThread(userId, threadId)
+      await processGmailThread(userId, payload)
+      syncedThreads += 1
+    } catch (error) {
+      if (!isGmailInvalidIdError(error)) throw error
+      skippedThreads += 1
+      console.warn(`Skipped Gmail thread with invalid id during mailbox sync: ${threadId}`)
+    }
   }
 
   await updateMailbox(userId, {
@@ -2719,6 +2731,7 @@ export async function syncMailboxReplies(userId: string, forceFull = false) {
   return {
     mode,
     syncedThreads,
+    skippedThreads,
   }
 }
 
