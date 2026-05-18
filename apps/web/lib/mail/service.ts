@@ -63,7 +63,11 @@ const MICROSOFT_SCOPES = [
 ]
 const RECENT_THREAD_LIMIT = 120
 const MATCH_WINDOW_DAYS = 30
-const MAIL_ROOT = path.join(process.cwd(), '.local', 'uploads', 'mail')
+const LOCAL_UPLOADS_ROOT = path.join(process.cwd(), '.local', 'uploads')
+const RUNTIME_UPLOADS_ROOT = process.env.VERCEL
+  ? path.join('/tmp', 'rialto', 'uploads')
+  : LOCAL_UPLOADS_ROOT
+const MAIL_ROOT = path.join(RUNTIME_UPLOADS_ROOT, 'mail')
 const GOOGLE_GMAIL_PUBSUB_TOPIC = process.env.GOOGLE_GMAIL_PUBSUB_TOPIC?.trim() ?? ''
 
 type MailboxRow = typeof contractorMailboxes.$inferSelect
@@ -2106,12 +2110,13 @@ async function attachmentSummaryForMessage(emailMessageId: number): Promise<RFQE
     .from(rfqEmailAttachments)
     .where(eq(rfqEmailAttachments.email_message_id, emailMessageId))
   return rows.map((row) => {
-    const relativePath = path.relative(path.join(process.cwd(), '.local', 'uploads'), row.file_path).split(path.sep).join('/')
+    const uploadsRoot = row.file_path.startsWith(RUNTIME_UPLOADS_ROOT) ? RUNTIME_UPLOADS_ROOT : LOCAL_UPLOADS_ROOT
+    const relativePath = path.relative(uploadsRoot, row.file_path).split(path.sep).join('/')
     return {
       id: row.id,
       filename: row.filename,
       mimeType: row.mime_type,
-      url: `/api/files/${relativePath}`,
+      url: relativePath.startsWith('..') ? '' : `/api/files/${relativePath}`,
       sourceKind: row.source_kind,
     }
   })

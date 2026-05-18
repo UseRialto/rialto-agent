@@ -2,7 +2,10 @@ import { NextRequest } from 'next/server'
 import fs from 'fs'
 import path from 'path'
 
-const UPLOADS_ROOT = path.join(process.cwd(), '.local', 'uploads')
+const LOCAL_UPLOADS_ROOT = path.join(process.cwd(), '.local', 'uploads')
+const RUNTIME_UPLOADS_ROOT = process.env.VERCEL
+  ? path.join('/tmp', 'rialto', 'uploads')
+  : LOCAL_UPLOADS_ROOT
 
 const CONTENT_TYPES: Record<string, string> = {
   jpg: 'image/jpeg',
@@ -24,23 +27,24 @@ export async function GET(
   { params }: { params: Promise<{ path: string[] }> },
 ) {
   const { path: segments } = await params
-  const filePath = path.join(UPLOADS_ROOT, ...segments)
+  const roots = [RUNTIME_UPLOADS_ROOT, LOCAL_UPLOADS_ROOT]
 
-  // Path traversal guard
-  const resolved = path.resolve(filePath)
-  if (!resolved.startsWith(path.resolve(UPLOADS_ROOT))) {
-    return new Response('Forbidden', { status: 403 })
+  for (const root of roots) {
+    const filePath = path.join(root, ...segments)
+    const resolved = path.resolve(filePath)
+    if (!resolved.startsWith(path.resolve(root))) {
+      return new Response('Forbidden', { status: 403 })
+    }
+    if (!fs.existsSync(resolved)) continue
+
+    const buffer = fs.readFileSync(resolved)
+    const ext = path.extname(resolved).slice(1).toLowerCase()
+    const contentType = CONTENT_TYPES[ext] ?? 'application/octet-stream'
+
+    return new Response(buffer, {
+      headers: { 'Content-Type': contentType },
+    })
   }
 
-  if (!fs.existsSync(resolved)) {
-    return new Response('Not Found', { status: 404 })
-  }
-
-  const buffer = fs.readFileSync(resolved)
-  const ext = path.extname(resolved).slice(1).toLowerCase()
-  const contentType = CONTENT_TYPES[ext] ?? 'application/octet-stream'
-
-  return new Response(buffer, {
-    headers: { 'Content-Type': contentType },
-  })
+  return new Response('Not Found', { status: 404 })
 }
